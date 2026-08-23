@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dualtrade-desktop"
+version = "0.0.1"
+description = "DualTrade Desktop resilient local trading core"
+requires-python = ">=3.13"
+dependencies = [
+    "cryptography==46.0.5",
+    "PySide6==6.11.2",
+    "websockets==15.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy==1.17.1",
+    "pytest==8.4.1",
+    "ruff==0.15.22",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "external_deriv_public: opt-in smoke tests against Deriv public read-only API",
+    "external_deriv_demo: opt-in smoke tests against a Deriv demo read-only session",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["apps", "packages"]
