@@ -1,4 +1,14 @@
 from packages.strategies.checkpoint import RuntimePhase, StrategyStateV1, WarmupCheckpoint
+from packages.strategies.deriv_digits import (
+    DerivDigitShadowEngine,
+    DerivDigitStrategyId,
+    DigitStrategyDecision,
+    DigitStrategyProjection,
+    ParityRegimeEdgeStrategy,
+    SelectiveDiffersEdgeStrategy,
+    ShadowSignalState,
+    TailProbabilityEdgeStrategy,
+)
 from packages.strategies.models import (
     RuntimeContext,
     StrategyEvaluation,
@@ -9,6 +19,11 @@ from packages.strategies.models import (
 from packages.strategies.runtime import StrategyRuntimeManager
 
 __all__ = [
+    "DerivDigitShadowEngine",
+    "DerivDigitStrategyId",
+    "DigitStrategyDecision",
+    "DigitStrategyProjection",
+    "ParityRegimeEdgeStrategy",
     "RuntimeContext",
     "RuntimePhase",
     "StrategyEvaluation",
@@ -17,5 +32,8 @@ __all__ = [
     "StrategyRuntimeManager",
     "StrategySignal",
     "StrategyStateV1",
+    "ShadowSignalState",
+    "SelectiveDiffersEdgeStrategy",
+    "TailProbabilityEdgeStrategy",
     "WarmupCheckpoint",
 ]

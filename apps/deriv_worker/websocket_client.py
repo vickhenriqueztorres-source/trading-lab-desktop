@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol
 
 from websockets.exceptions import WebSocketException
@@ -21,6 +22,35 @@ from apps.deriv_worker.schema import (
     parse_deriv_json,
 )
 from apps.deriv_worker.validators import PUBLIC_WS_URL, validate_deriv_ws_url
+
+
+def encode_deriv_json(value: object) -> str:
+    """Encode outbound payloads while preserving Decimal values as JSON numbers."""
+
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Deriv JSON decimal must be finite")
+        return format(value, "f")
+    if isinstance(value, float):
+        raise TypeError("Deriv JSON payloads must not use binary floating-point numbers")
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, Mapping):
+        items: list[str] = []
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("Deriv JSON object keys must be strings")
+            items.append(f"{json.dumps(key, ensure_ascii=False)}:{encode_deriv_json(item)}")
+        return "{" + ",".join(items) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(encode_deriv_json(item) for item in value) + "]"
+    raise TypeError(f"unsupported Deriv JSON value: {type(value).__name__}")
 
 
 class DerivReadTransport(Protocol):
@@ -68,9 +98,14 @@ class DerivWebSocketClient:
         url: str = PUBLIC_WS_URL,
         *,
         demo_authenticated: bool = False,
+        account_type: str | None = None,
         open_timeout: float = 5.0,
     ) -> None:
-        self._url = validate_deriv_ws_url(url, expected_demo=demo_authenticated)
+        self._url = validate_deriv_ws_url(
+            url,
+            expected_account_type=account_type,
+            expected_demo=None if account_type is not None else demo_authenticated,
+        )
         self._demo_authenticated = demo_authenticated
         self._open_timeout = open_timeout
         self._connection: ClientConnection | None = None
@@ -149,7 +184,7 @@ class DerivWebSocketClient:
         request = {**payload, "req_id": request_id}
         try:
             with self._send_lock:
-                connection.send(json.dumps(request, separators=(",", ":")))
+                connection.send(encode_deriv_json(request))
             item = response_queue.get(timeout=timeout)
         except queue.Empty as exc:
             raise DerivWorkerError(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -82,6 +83,25 @@ def test_missing_required_active_symbol_field_is_schema_incompatible() -> None:
     with pytest.raises(DerivWorkerError) as captured:
         map_active_symbols(payload, NOW)
     assert captured.value.category is DerivErrorCategory.SCHEMA_INCOMPATIBLE
+
+
+def test_active_symbol_type_uses_official_subgroup_fallback() -> None:
+    payload = {
+        "msg_type": "active_symbols",
+        "active_symbols": [
+            {
+                "underlying_symbol": "R_100",
+                "underlying_symbol_name": "Volatility 100 Index",
+                "market": "synthetic_index",
+                "subgroup": "continuous_indices",
+                "pip_size": "0.01",
+                "exchange_is_open": 1,
+                "is_trading_suspended": 0,
+            }
+        ],
+    }
+
+    assert map_active_symbols(payload, NOW)[0].symbol_type == "continuous_indices"
 
 
 def test_contract_tick_and_candle_mapping_are_normalized() -> None:
@@ -174,6 +194,34 @@ class _TokenProvider:
         return SecretValue("offline-placeholder")
 
 
+class _RecordingHistoryTransport(FakeDerivTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_history_payload: dict[str, object] | None = None
+
+    def request(
+        self,
+        operation: DerivOperation,
+        payload: Mapping[str, object],
+        *,
+        timeout: float,
+    ) -> dict[str, object]:
+        if operation is DerivOperation.TICKS_HISTORY:
+            self.last_history_payload = dict(payload)
+        return super().request(operation, payload, timeout=timeout)
+
+
+def test_one_time_tick_history_omits_zero_subscription_for_current_api() -> None:
+    transport = _RecordingHistoryTransport()
+    session = PublicDerivSession(transport)
+
+    ticks = session.tick_history("R_100", count=500)
+
+    assert ticks
+    assert transport.last_history_payload is not None
+    assert "subscribe" not in transport.last_history_payload
+
+
 class _RestFake:
     def __init__(self, *, selected_type: str = "demo", ws_path: str = "demo") -> None:
         self.selected_type = selected_type
@@ -231,9 +279,9 @@ def test_demo_auth_rejects_real_account_before_otp() -> None:
 
     with pytest.raises(DerivWorkerError) as captured:
         session.open("selected")
-    assert captured.value.reason_code == "DERIV_REAL_ACCOUNT_FORBIDDEN"
+    assert captured.value.reason_code == "DERIV_ACCOUNT_TYPE_MISMATCH"
     assert rest.otp_requests == 0
-    assert blocked == ["DERIV_REAL_ACCOUNT_FORBIDDEN"]
+    assert blocked == ["DERIV_ACCOUNT_TYPE_MISMATCH"]
 
 
 def test_demo_auth_rejects_real_ready_url_before_connect() -> None:
@@ -250,6 +298,22 @@ def test_demo_auth_rejects_real_ready_url_before_connect() -> None:
         session.open("selected")
     assert captured.value.reason_code == "DERIV_REAL_WS_FORBIDDEN"
     assert blocked == ["DERIV_REAL_WS_FORBIDDEN"]
+
+
+def test_real_auth_requires_matching_real_account_and_endpoint() -> None:
+    rest = _RestFake(selected_type="real", ws_path="real")
+    transport = FakeDerivTransport(demo_authenticated=True)
+    session = DemoDerivSession(
+        _TokenProvider(),
+        rest,
+        "offline-app-id",
+        expected_account_type="real",
+        transport_factory=lambda _url: transport,
+    )
+
+    assert session.open("selected") is transport
+    assert rest.otp_requests == 1
+    session.close()
 
 
 def test_rate_limit_uses_bounded_injected_backoff_without_busy_loop() -> None:

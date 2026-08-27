@@ -8,6 +8,11 @@ from packages.market_data.store import (
     InMemoryCandleStore,
     SeriesKey,
 )
+from packages.market_data.tick_ring_buffer import (
+    DigitFrequencySnapshot,
+    DigitTick,
+    TickRingBuffer,
+)
 from packages.market_data.time import datetime_from_epoch_ms
 
 __all__ = [
@@ -20,8 +25,11 @@ __all__ = [
     "CandleStoreFullError",
     "CandleStoreOutcome",
     "ClosedCandle",
+    "DigitFrequencySnapshot",
+    "DigitTick",
     "FakeCandleSource",
     "InMemoryCandleStore",
     "SeriesKey",
+    "TickRingBuffer",
     "datetime_from_epoch_ms",
 ]

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import threading
 from enum import StrEnum
 from pathlib import Path
 
-from apps.auth_agent.core_gate import CoreLeaseEntryAuthorizer
+from apps.auth_agent.core_gate import CoreLeaseEntryAuthorizer, DerivTokenEntryAuthorizer
 from apps.core.auth_supervisor import AuthAgentSupervisor
+from apps.core.deriv_auto_trader import DerivDigitAutoTrader
 from apps.core.deriv_telemetry import (
     DerivTelemetryMonitor,
     DerivTelemetrySource,
@@ -14,6 +16,8 @@ from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSpec, ReadOnlyWo
 from apps.core.runtime import CoreRuntime
 from apps.core.ui_service import CoreUiProjectionBuilder, CoreUiProjectionService
 from apps.core.worker_supervisor import WorkerHealthState
+from packages.brokers.deriv.credentials import DerivCredentialVault
+from packages.domain.models import Broker
 from packages.protocol import EndpointRole, LifecycleProcessStatus
 from packages.security import SecretValue
 
@@ -53,6 +57,7 @@ class CoreLifecycleService:
             "fake-demo",
             "live-public",
             "live-demo",
+            "live-real",
         }:
             raise ValueError("Deriv transport selection is invalid")
         self._profile_dir = Path(profile_dir)
@@ -60,17 +65,24 @@ class CoreLifecycleService:
         self._auth = AuthAgentSupervisor(
             self._profile_dir / "auth",
             force_simulation=force_auth_simulation,
+            allow_real_mode=True,
         )
         self._runtime: CoreRuntime | None = None
         self._deriv: ReadOnlyWorkerSupervisor | None = None
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
+        self._deriv_auto_trader: DerivDigitAutoTrader | None = None
         self._ui_session_token = ui_session_token
         self._ui_service: CoreUiProjectionService | None = None
         self._ui_shutdown_requested = False
         self._state = CoreServiceState.STARTING
         self._safe_stop = False
         self._restart_counts = {"AUTH_AGENT": 0, "DERIV_WORKER": 0}
+        self._deriv_switch_lock = threading.RLock()
+        self._deriv_recovery_stop = threading.Event()
+        self._deriv_recovery_thread: threading.Thread | None = None
+        self._deriv_generation = 0
+        self._pending_deriv_recovery_reason: str | None = None
         self._workers_stopped = False
         self._auth_stopped = False
         self._startup_sequence: list[str] = []
@@ -101,25 +113,53 @@ class CoreLifecycleService:
         if self._state is CoreServiceState.READY:
             return
         self._state = CoreServiceState.STARTING
+        self._deriv_recovery_stop.clear()
         try:
             self._auth.start()
             self._startup_sequence.append("AUTH_AGENT")
             runtime = CoreRuntime(
                 self._profile_dir / "core",
-                entry_authorizer_factory=lambda gate: CoreLeaseEntryAuthorizer(self._auth, gate),
+                deferred_reconciliation_brokers=frozenset({Broker.DERIV}),
+                entry_authorizer_factory=lambda gate: DerivTokenEntryAuthorizer(
+                    CoreLeaseEntryAuthorizer(
+                        self._auth,
+                        gate,
+                        real_mode_resolver=lambda broker, _strategy: (
+                            broker.value == "DERIV" and self._deriv_transport == "live-real"
+                        ),
+                    ),
+                    gate,
+                    deriv_session_ready=lambda: (
+                        self._deriv_transport in {"live-demo", "live-real"}
+                        and self._deriv is not None
+                    ),
+                ),
             )
             self._startup_sequence.append("CORE")
             runtime.start()
             self._runtime = runtime
+            # Automated entries always start disarmed. The user must press Ligar Bot.
+            runtime.stop_new_entries()
+            self._safe_stop = True
             self._startup_sequence.append("SIMULATED_WORKER")
             if "deriv_read_only" in self._workers:
                 deriv = ReadOnlyWorkerSupervisor(
                     runtime.health_gate,
                     self._deriv_spec(),
+                    handshake_timeout=(
+                        45.0 if self._deriv_transport in {"live-demo", "live-real"} else 5.0
+                    ),
+                    response_timeout=(
+                        12.0 if self._deriv_transport in {"live-demo", "live-real"} else 2.0
+                    ),
+                    heartbeat_timeout=(
+                        10.0 if self._deriv_transport in {"live-demo", "live-real"} else 1.0
+                    ),
                 )
                 deriv.start()
                 self._deriv = deriv
                 self._start_deriv_telemetry(runtime, deriv)
+                self._activate_deriv_financial_runtime(runtime, deriv)
                 self._startup_sequence.append("DERIV_WORKER")
             if self._ui_session_token is not None:
                 projection = CoreUiProjectionBuilder(
@@ -128,6 +168,11 @@ class CoreLifecycleService:
                     deriv_telemetry=lambda: (
                         None if self._deriv_telemetry is None else self._deriv_telemetry.snapshot
                     ),
+                    deriv_bot_reason=lambda: (
+                        "BOT_WAITING_FOR_LIVE_DERIV"
+                        if self._deriv_auto_trader is None
+                        else self._deriv_auto_trader.last_reason
+                    ),
                 )
                 ui_service = CoreUiProjectionService(
                     self._ui_session_token,
@@ -135,6 +180,8 @@ class CoreLifecycleService:
                     self.safe_stop,
                     self.resume,
                     self._request_ui_shutdown,
+                    deriv_demo_connect=self.connect_deriv_selected_account,
+                    digit_risk_config_update=runtime.update_digit_risk_config,
                 )
                 ui_service.start()
                 self._ui_service = ui_service
@@ -143,22 +190,285 @@ class CoreLifecycleService:
             self.emergency_shutdown()
             raise
         self._state = CoreServiceState.READY
+        pending_recovery = self._pending_deriv_recovery_reason
+        self._pending_deriv_recovery_reason = None
+        if pending_recovery is not None:
+            self._request_deriv_recovery(pending_recovery)
+        # Recovery of a durable nonterminal order must not depend on opening the UI
+        # and pressing Connect. It runs in the background while entries stay disarmed.
+        runtime = self._require_runtime()
+        has_deriv_recovery = any(
+            str(item.get("broker")) == Broker.DERIV.value
+            for item in runtime.reader.list_reconciliation_candidates()
+        )
+        if has_deriv_recovery and self._deriv_transport not in {"live-demo", "live-real"}:
+            try:
+                saved = DerivCredentialVault(self._profile_dir / "broker_credentials").load()
+            except (OSError, RuntimeError, ValueError):
+                saved = None
+            if saved is not None and saved.account_type in {"demo", "real"}:
+                self._deriv_transport = "live-real" if saved.account_type == "real" else "live-demo"
+                self._request_deriv_recovery("DERIV_STARTUP_RECONCILIATION_REQUIRED")
 
     def safe_stop(self) -> None:
         runtime = self._require_runtime()
-        runtime.stop_new_entries()
+        stop_entries = getattr(runtime, "stop_new_entries", None)
+        if callable(stop_entries):
+            stop_entries()
         self._safe_stop = True
-        self._state = CoreServiceState.SAFE_STOP
+        # Lifecycle READY means the Core/UI control plane is available. Trading
+        # authority is represented independently by _safe_stop/HealthGate.
+        self._state = CoreServiceState.READY
 
     def resume(self) -> bool:
         runtime = self._require_runtime()
+        trader = self._deriv_auto_trader
+        if trader is not None:
+            trader.begin_new_run()
         accepted = runtime.resume_new_entries()
-        self._safe_stop = False
-        self._state = CoreServiceState.READY if accepted else CoreServiceState.DEGRADED
+        self._safe_stop = not accepted
+        self._state = CoreServiceState.READY
         return accepted
 
     def _request_ui_shutdown(self) -> None:
         self._ui_shutdown_requested = True
+
+    def connect_deriv_selected_account(self) -> tuple[bool, str]:
+        with self._deriv_switch_lock:
+            return self._connect_deriv_selected_account_locked()
+
+    def _connect_deriv_selected_account_locked(self) -> tuple[bool, str]:
+        """Replace the public worker with the explicitly selected authenticated account."""
+        if self._state in {CoreServiceState.STOPPING, CoreServiceState.STOPPED}:
+            return False, "LIFECYCLE_STOPPING"
+        if "deriv_read_only" not in self._workers:
+            return False, "DERIV_WORKER_DISABLED"
+        try:
+            credentials = DerivCredentialVault(self._profile_dir / "broker_credentials").load()
+        except (OSError, RuntimeError, ValueError):
+            return False, "DERIV_CREDENTIALS_INVALID"
+        selected_type = None if credentials is None else credentials.account_type
+        if selected_type not in {"demo", "real"}:
+            return False, "DERIV_CREDENTIALS_REQUIRED"
+        selected_transport = "live-real" if selected_type == "real" else "live-demo"
+        if (
+            self._deriv_transport == selected_transport
+            and self._deriv is not None
+            and self._deriv.health_state is WorkerHealthState.READY
+            and (selected_type == "real" or self._deriv_auto_trader is not None)
+        ):
+            return True, "DERIV_ACCOUNT_ALREADY_CONNECTED"
+        runtime = self._require_runtime()
+        if self._deriv_transport in {"live-demo", "live-real"} and self._has_open_deriv_orders():
+            return False, "DERIV_ACCOUNT_SWITCH_BLOCKED_OPEN_ORDERS"
+        stop_entries = getattr(runtime, "stop_new_entries", None)
+        if callable(stop_entries):
+            stop_entries()
+        self._safe_stop = True
+        self._state = CoreServiceState.READY
+        self._stop_deriv_telemetry()
+        self._stop_deriv_financial_runtime(runtime)
+        current = self._deriv
+        self._deriv = None
+        if current is not None:
+            current.shutdown(3.0)
+        previous_transport = self._deriv_transport
+        self._deriv_transport = selected_transport
+        last_error: Exception | None = None
+        for retry_delay in (0.0, 1.0, 2.0):
+            if retry_delay and self._deriv_recovery_stop.wait(retry_delay):
+                last_error = RuntimeError("LIFECYCLE_STOPPING")
+                break
+            replacement = ReadOnlyWorkerSupervisor(
+                runtime.health_gate,
+                self._deriv_spec(),
+                handshake_timeout=25.0,
+                response_timeout=12.0,
+                heartbeat_timeout=10.0,
+            )
+            try:
+                self._deriv = replacement
+                replacement.start()
+                self._start_deriv_telemetry(runtime, replacement)
+                self._activate_deriv_financial_runtime(runtime, replacement)
+                if hasattr(replacement, "health_state") and not self._deriv_activation_ready():
+                    raise RuntimeError("DERIV_ACTIVATION_NOT_READY")
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                self._stop_deriv_financial_runtime(runtime)
+                self._stop_deriv_telemetry()
+                self._deriv = None
+                replacement.shutdown(1.0)
+        if last_error is not None:
+            failure_reason = self._deriv_connect_failure_reason(last_error)
+            self._deriv_transport = previous_transport
+            try:
+                fallback = ReadOnlyWorkerSupervisor(
+                    runtime.health_gate,
+                    self._deriv_spec(),
+                    heartbeat_timeout=(
+                        10.0 if self._deriv_transport in {"live-demo", "live-real"} else 1.0
+                    ),
+                )
+                fallback.start()
+                self._deriv = fallback
+                self._start_deriv_telemetry(runtime, fallback)
+                self._activate_deriv_financial_runtime(runtime, fallback)
+            except Exception:
+                self._state = CoreServiceState.READY
+            return False, failure_reason
+        self._restart_counts["DERIV_WORKER"] += 1
+        return True, "DERIV_REAL_CONNECTED" if selected_type == "real" else "DERIV_DEMO_CONNECTED"
+
+    @staticmethod
+    def _deriv_connect_failure_reason(error: Exception) -> str:
+        explicit = str(getattr(error, "reason_code", ""))
+        if explicit in {
+            "DERIV_AUTH_FAILED",
+            "DERIV_NETWORK_ERROR",
+            "DERIV_DEMO_ACCOUNT_NOT_FOUND",
+            "DERIV_ACCOUNT_TYPE_MISMATCH",
+            "DERIV_SCHEMA_INCOMPATIBLE",
+        }:
+            return explicit
+        error_text = str(error)
+        if "TIMEOUT" in error_text.upper() or "did not connect" in error_text:
+            return "DERIV_CONNECTION_TIMEOUT"
+        if error_text == "LIFECYCLE_STOPPING":
+            return error_text
+        return "DERIV_ACCOUNT_CONNECT_FAILED"
+
+    def _request_deriv_recovery(self, _reason_code: str) -> None:
+        if (
+            self._deriv_transport not in {"live-demo", "live-real"}
+            or self._state in {CoreServiceState.STOPPING, CoreServiceState.STOPPED}
+            or self._deriv_recovery_stop.is_set()
+        ):
+            return
+        if self._state is CoreServiceState.STARTING:
+            self._pending_deriv_recovery_reason = _reason_code
+            self._safe_stop = True
+            return
+        runtime = self._runtime
+        if runtime is not None:
+            sink = getattr(runtime, "event_sink", None)
+            if sink is not None:
+                sink.emit(
+                    "deriv_recovery_requested",
+                    reason_code=_reason_code,
+                    transport=self._deriv_transport,
+                    generation=self._deriv_generation,
+                )
+            stop_entries = getattr(runtime, "stop_new_entries", None)
+            if callable(stop_entries):
+                stop_entries()
+        self._safe_stop = True
+        self._state = CoreServiceState.READY
+        with self._deriv_switch_lock:
+            current = self._deriv_recovery_thread
+            if current is not None and current.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._deriv_recovery_loop,
+                name="deriv-authenticated-recovery",
+                daemon=True,
+            )
+            self._deriv_recovery_thread = thread
+            thread.start()
+
+    def _deriv_recovery_loop(self) -> None:
+        delays = (0.0, 1.0, 2.0, 5.0, 10.0, 30.0)
+        attempt = 0
+        while not self._deriv_recovery_stop.is_set():
+            delay = delays[min(attempt, len(delays) - 1)]
+            if self._deriv_recovery_stop.wait(delay):
+                return
+            runtime = self._runtime
+            if runtime is not None:
+                sink = getattr(runtime, "event_sink", None)
+                if sink is not None:
+                    sink.emit(
+                        "deriv_recovery_attempt",
+                        attempt=attempt + 1,
+                        delay_ms=int(delay * 1000),
+                        transport=self._deriv_transport,
+                        generation=self._deriv_generation,
+                    )
+            if self._recover_deriv_connection_once():
+                return
+            attempt += 1
+
+    def _recover_deriv_connection_once(self) -> bool:
+        with self._deriv_switch_lock:
+            if self._deriv_transport not in {"live-demo", "live-real"} or self._state in {
+                CoreServiceState.STOPPING,
+                CoreServiceState.STOPPED,
+            }:
+                return False
+            runtime = self._runtime
+            if runtime is None:
+                return False
+            self._stop_deriv_telemetry()
+            self._stop_deriv_financial_runtime(runtime)
+            current = self._deriv
+            self._deriv = None
+            if current is not None:
+                current.shutdown(3.0)
+            replacement: ReadOnlyWorkerSupervisor | None = None
+            try:
+                replacement = ReadOnlyWorkerSupervisor(
+                    runtime.health_gate,
+                    self._deriv_spec(),
+                    handshake_timeout=45.0,
+                    response_timeout=12.0,
+                    heartbeat_timeout=10.0,
+                )
+                self._deriv = replacement
+                replacement.start()
+                self._start_deriv_telemetry(runtime, replacement)
+                self._activate_deriv_financial_runtime(runtime, replacement)
+                if hasattr(replacement, "health_state") and not self._deriv_activation_ready():
+                    raise RuntimeError("DERIV_ACTIVATION_NOT_READY")
+            except Exception:
+                if replacement is not None:
+                    replacement.shutdown(1.0)
+                self._deriv = None
+                self._state = CoreServiceState.READY
+                sink = getattr(runtime, "event_sink", None)
+                if sink is not None:
+                    sink.emit(
+                        "deriv_recovery_failed",
+                        reason_code="DERIV_RECOVERY_ATTEMPT_FAILED",
+                        transport=self._deriv_transport,
+                        generation=self._deriv_generation,
+                    )
+                return False
+            self._restart_counts["DERIV_WORKER"] += 1
+            # Transport recovery never grants trading authority. A fresh explicit
+            # operator action is required and will invalidate all pre-drop signals.
+            self._safe_stop = True
+            self._state = CoreServiceState.READY
+            sink = getattr(runtime, "event_sink", None)
+            if sink is not None:
+                sink.emit(
+                    "deriv_recovery_succeeded",
+                    reason_code="OPERATOR_REARM_REQUIRED",
+                    transport=self._deriv_transport,
+                    generation=self._deriv_generation,
+                )
+            return True
+
+    def connect_deriv_demo(self) -> tuple[bool, str]:
+        return self.connect_deriv_selected_account()
+
+    def _has_open_deriv_orders(self) -> bool:
+        runtime = self._require_runtime()
+        return any(
+            str(row.get("broker")) == Broker.DERIV.value
+            for row in runtime.reader.list_nonterminal_orders()
+        )
 
     def drain(self, timeout: float) -> tuple[bool, int]:
         runtime = self._require_runtime()
@@ -168,15 +478,18 @@ class CoreLifecycleService:
     def shutdown_workers(self, grace_seconds: float) -> bool:
         if self._workers_stopped:
             return True
+        self._deriv_recovery_stop.set()
         self._state = CoreServiceState.STOPPING
-        telemetry = self._deriv_telemetry
-        self._deriv_telemetry = None
-        if telemetry is not None:
-            telemetry.stop()
+        self._stop_deriv_telemetry()
+        runtime = self._require_runtime()
+        self._stop_deriv_financial_runtime(runtime)
         if self._deriv is not None:
             self._deriv.shutdown(grace_seconds)
             self._deriv = None
-        runtime = self._require_runtime()
+        recovery = self._deriv_recovery_thread
+        self._deriv_recovery_thread = None
+        if recovery is not None and recovery is not threading.current_thread():
+            recovery.join(timeout=grace_seconds)
         drained = runtime.shutdown_workers(grace_seconds)
         self._workers_stopped = True
         return drained
@@ -222,19 +535,30 @@ class CoreLifecycleService:
             return True, "RESTART_COMPLETED"
         if role == "DERIV_WORKER" and "deriv_read_only" in self._workers:
             runtime = self._require_runtime()
-            telemetry = self._deriv_telemetry
-            self._deriv_telemetry = None
-            if telemetry is not None:
-                telemetry.stop()
+            runtime.stop_new_entries()
+            self._safe_stop = True
+            self._state = CoreServiceState.READY
+            self._stop_deriv_telemetry()
+            self._stop_deriv_financial_runtime(runtime)
             if self._deriv is None:
                 self._deriv = ReadOnlyWorkerSupervisor(
                     runtime.health_gate,
                     self._deriv_spec(),
+                    handshake_timeout=(
+                        45.0 if self._deriv_transport in {"live-demo", "live-real"} else 5.0
+                    ),
+                    response_timeout=(
+                        12.0 if self._deriv_transport in {"live-demo", "live-real"} else 2.0
+                    ),
+                    heartbeat_timeout=(
+                        10.0 if self._deriv_transport in {"live-demo", "live-real"} else 1.0
+                    ),
                 )
                 self._deriv.start()
             else:
                 self._deriv.restart()
             self._start_deriv_telemetry(runtime, self._deriv)
+            self._activate_deriv_financial_runtime(runtime, self._deriv)
             self._restart_counts[role] += 1
             return True, "RESTART_COMPLETED"
         return False, "RESTART_NOT_PERMITTED"
@@ -315,11 +639,20 @@ class CoreLifecycleService:
         return self._runtime
 
     def _deriv_spec(self) -> ReadOnlyWorkerSpec:
+        extra_arguments: tuple[str, ...] = ("--deriv-transport", self._deriv_transport)
+        if self._deriv_transport in {"live-demo", "live-real"}:
+            extra_arguments = (
+                *extra_arguments,
+                "--credential-vault-dir",
+                str(self._profile_dir / "broker_credentials"),
+            )
         return ReadOnlyWorkerSpec(
             module="apps.deriv_worker",
             role=EndpointRole.DERIV_WORKER,
             broker="DERIV",
-            extra_arguments=("--deriv-transport", self._deriv_transport),
+            extra_arguments=extra_arguments,
+            allow_demo_financial_submission=self._deriv_transport == "live-demo",
+            allow_real_financial_submission=False,
         )
 
     def _start_deriv_telemetry(
@@ -327,12 +660,83 @@ class CoreLifecycleService:
         runtime: CoreRuntime,
         supervisor: ReadOnlyWorkerSupervisor,
     ) -> None:
+        self._deriv_generation += 1
+        generation = self._deriv_generation
         source = {
             "fake-public": DerivTelemetrySource.FAKE_SIMULATED,
             "fake-demo": DerivTelemetrySource.FAKE_SIMULATED,
             "live-public": DerivTelemetrySource.PUBLIC_LIVE,
             "live-demo": DerivTelemetrySource.DEMO_LIVE,
+            "live-real": DerivTelemetrySource.REAL_LIVE,
         }[self._deriv_transport]
-        monitor = DerivTelemetryMonitor(supervisor, runtime.health_gate, source)
-        monitor.start()
+        monitor = DerivTelemetryMonitor(
+            supervisor,
+            runtime.health_gate,
+            source,
+            symbol_provider=lambda: runtime.risk_ledger.digit_config.selected_symbol,
+            disconnect_notifier=self._request_deriv_recovery,
+            generation_is_current=lambda: generation == self._deriv_generation,
+        )
         self._deriv_telemetry = monitor
+        monitor.start()
+
+    def _activate_deriv_financial_runtime(
+        self,
+        runtime: CoreRuntime,
+        supervisor: ReadOnlyWorkerSupervisor,
+    ) -> None:
+        if self._deriv_transport == "live-real":
+            runtime.reconcile_deriv_worker(supervisor.client)
+            return
+        if self._deriv_transport != "live-demo":
+            return
+        credentials = DerivCredentialVault(self._profile_dir / "broker_credentials").load()
+        if credentials is None or credentials.account_type != "demo":
+            raise RuntimeError("DERIV_DEMO_CREDENTIALS_REQUIRED")
+        telemetry = self._deriv_telemetry
+        if telemetry is None:
+            raise RuntimeError("DERIV_TELEMETRY_UNAVAILABLE")
+        trader = DerivDigitAutoTrader(
+            runtime,
+            credentials.account_id,
+            lambda: None if self._deriv_telemetry is None else self._deriv_telemetry.snapshot,
+            operator_armed=lambda: not self._safe_stop,
+        )
+        runtime.attach_deriv_worker(
+            supervisor.client,
+            on_order_event=trader.notify_order_event,
+        )
+        telemetry.set_tick_notifier(trader.notify_tick)
+        trader.start()
+        self._deriv_auto_trader = trader
+
+    def _stop_deriv_financial_runtime(self, runtime: CoreRuntime) -> None:
+        trader = self._deriv_auto_trader
+        self._deriv_auto_trader = None
+        if trader is not None:
+            trader.stop()
+        telemetry = self._deriv_telemetry
+        if telemetry is not None:
+            telemetry.set_tick_notifier(None)
+        runtime.detach_deriv_worker()
+
+    def _stop_deriv_telemetry(self) -> None:
+        """Invalidate an old generation before waiting for its thread to stop."""
+
+        self._deriv_generation += 1
+        telemetry = self._deriv_telemetry
+        self._deriv_telemetry = None
+        if telemetry is not None:
+            telemetry.stop()
+
+    def _deriv_activation_ready(self) -> bool:
+        supervisor = self._deriv
+        telemetry = self._deriv_telemetry
+        if (
+            supervisor is None
+            or supervisor.health_state is not WorkerHealthState.READY
+            or telemetry is None
+            or not telemetry.snapshot.connected
+        ):
+            return False
+        return self._deriv_transport != "live-demo" or self._deriv_auto_trader is not None

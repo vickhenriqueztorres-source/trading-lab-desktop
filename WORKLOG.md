@@ -83,6 +83,7 @@ Regras:
 | DEC-048 | Launcher possui apenas lock, Job Object e lifecycle; Core continua dono do banco e dos supervisores IPC dos workers | impedir autoridade financeira duplicada e preservar recovery/reconciliação no único processo correto |
 | DEC-049 | Shutdown segue safe stop → drain bounded → workers → Auth → Core, com ACK → terminate → kill | persistir eventos já aceitos, não esperar settlement futuro e eliminar órfãos sem inferir estado financeiro |
 | DEC-050 | Restart do Launcher é permitido somente para Auth Agent e Deriv read-only; kill do Simulated Worker exige novo Core/recovery | impedir troca de uma porta financeira ativa sem reconstruir coordenadores e reconciliar a geração anterior |
+| DEC-051 | Suporte a Bounded Martingale sob guardrails estritos | permitir gestão de stake progressiva delimitada por teto de steps/stake e stop loss, mantendo martingale ilimitado proibido |
 
 ## 4. Artefatos existentes
 
@@ -2006,6 +2007,191 @@ OAuth/vault worker-only, ainda sem habilitar ordens.
 **Riscos/limitações:** opções de broker, risco e estratégia permanecem somente leitura porque ainda não há comandos IPC de configuração confirmável. O plugin Qt offscreen deste host renderiza glifos quadrados até em `QLabel` sem tema; estrutura, contraste, foco, conteúdo e filtros foram validados, mas QA visual final de tipografia deve ocorrer no executável Windows nativo. Português do Brasil ainda não integra o catálogo i18n atual ES/EN.
 **Próximo passo:** validar a navegação no executável Windows com escala 100/125/150%, teclado e leitor de tela; depois desenhar contratos IPC versionados para a primeira configuração realmente editável, sem ampliar para múltiplas fases.
 
+### WL-2026-08-23-02 — Deriv Live Demo: execução, streaming e reconciliação
+
+**Objetivo:** habilitar a Fatia 2 de execução automatizada de opções Deriv exclusivamente em conta
+Demo, com acompanhamento de contratos, liquidação atômica e recuperação de envio ambíguo sem retry.
+**Requisitos relacionados:** AG-INV-001, AG-INV-002, AG-INV-006; R-ORD-001, R-ORD-004,
+R-ORD-006; R-RISK-009; R-UI-004; BR-014.
+**Processo dono do estado e risco:** mudança financeira de risco alto. O Core permanece único dono
+de `state.db`, reservas, estado da ordem e P&L; o Deriv Worker somente traduz o protocolo e emite
+evidência normalizada; a UI continua descartável. O escopo executável termina em Demo `VRTC...`.
+**Arquivos alterados:** `apps/deriv_worker/__init__.py`, `apps/deriv_worker/__main__.py`,
+`apps/deriv_worker/fake_transport.py`, `apps/deriv_worker/order_session.py`,
+`apps/deriv_worker/reconciliation.py`, `apps/core/coordinator.py`, `apps/core/ui_service.py`,
+`apps/ui/components/order_table.py`, `packages/domain/models.py`, `packages/persistence/reader.py`,
+`packages/protocol/ui_messages.py`, `tests/contract/test_deriv_live_order_contract.py`,
+`tests/integration/test_deriv_live_trade_lifecycle.py`,
+`tests/chaos/test_deriv_live_timeout_recovery.py`, `docs/DERIV_WORKER.md`,
+`PRD_Trading_Desktop_Deriv_IQOption.md`, `WORKLOG.md`.
+**Implementação:** wiring executável de `live-demo` para `DerivLiveOrderSession`; payload `buy` com
+stake `Decimal`, CALL/PUT, duração `m`/`s` e passthrough imutável; rejeição local de deadline;
+subscrição imediata e `forget` terminal; normalização `OPEN`/`SETTLED` com P&L em minor units e
+SHA-256 canônico; timeout pós-envio como `UNKNOWN`; reconciliação por contrato, `statement` e
+`profit_table` com matching de símbolo, direção, stake e moeda; UI com contrato Deriv e resultado
+WON/LOST; simulador determinístico de settlement após queda.
+**Decisões:** zero retry de `buy`; reserva permanece ativa enquanto a exposição for ambígua ou
+aberta; conta real e account ID fora de `VRTC` falham antes do socket; Safe Stop não interrompe o
+pump de eventos nem a liquidação; aliases antigos foram preservados para compatibilidade IPC.
+**Validação executada:** 19 testes focais Deriv aprovados; suíte completa com **501 passed,
+4 skipped, 0 failed**; `ruff check .` e `ruff format --check .` aprovados em 299 arquivos; `mypy apps
+packages build_scripts` aprovado em 193 arquivos; `compileall apps packages build_scripts`
+aprovado. Os quatro skips são gates de plataforma ou integrações externas explicitamente opt-in.
+**Resultado:** o modo Demo opt-in possui ciclo local completo de persistência prévia, compra,
+streaming, settlement e reconciliação idempotente; modo real permanece proibido.
+**Riscos/limitações:** nenhuma chamada externa com token Demo foi executada nesta alteração; a
+validação de integração é determinística/local. O contrato externo Deriv pode exigir evolução
+versionada se o formato de `statement`/`profit_table` variar.
+**Próximo passo:** executar soak externo Demo controlado com stake mínima e credencial fornecida
+pelo operador, mantendo os testes externos explicitamente opt-in.
+
+### WL-2026-08-23-03 — Login Deriv Demo protegido no executável Windows
+
+**Objetivo:** tornar a conexão Deriv utilizável no `TradingLab.exe` por uma janela de login
+Demo, sem token em arquivo texto, argv, IPC, UI principal ou serviço de identidade.
+**Requisitos relacionados:** AG-INV-006; R-RISK-009; R-AUTH-011; R-AUTH-012; FR-010; FR-014;
+NFR-030.
+**Processo dono do estado e risco:** autenticação de broker de risco alto. O Deriv Worker continua
+único dono do transporte e da abertura do token; Launcher e Core conhecem somente o caminho do
+cofre. O Core permanece único dono do estado financeiro.
+**Arquivos alterados:** `apps/launcher/cli.py`, `apps/launcher/deriv_login.py`,
+`apps/launcher/supervisor.py`, `apps/core/lifecycle_service.py`,
+`apps/core/read_only_worker_supervisor.py`, `apps/deriv_worker/__main__.py`,
+`apps/deriv_worker/order_session.py`, `packages/brokers/deriv/credentials.py`,
+`packages/brokers/deriv/__init__.py`, `tests/contract/test_deriv_demo_login.py`, `README.md`,
+`docs/DERIV_WORKER.md`, `PRD_Trading_Desktop_Deriv_IQOption.md`, `WORKLOG.md`.
+**Implementação:** diálogo pré-startup com App ID, conta Options Demo, token mascarado e confirmação
+inequívoca; persistência DPAPI CurrentUser; auto-seleção `live-demo` após configuração; worker lê o
+cofre diretamente; timeout de bootstrap externo ampliado; supervisor aceita capabilities
+financeiras somente quando completas e explicitamente Demo; falha de login limpa o cofre e mostra
+erro visível; conta `CR...` é bloqueada precocemente e a prova autoritativa usa
+`account_type = demo` mais endpoint OTP Demo.
+**Decisões:** o prefixo `VRTC` deixou de ser requisito porque a API Options atual pode fornecer IDs
+de outro formato; nenhum formato textual libera execução sem prova REST/OTP Demo. Cancelar o login
+mantém o aplicativo em modo público read-only. O bootstrap legado por ambiente fica restrito a
+desenvolvimento controlado.
+**Validação executada:** testes focais de launcher/Core/Deriv e quatro novos testes de contrato para
+cofre, diálogo, account ID moderno e capability gate aprovados; suíte completa com **505 passed,
+4 skipped, 0 failed**; `ruff check .` e `ruff format --check .` aprovados em 302 arquivos; `mypy apps
+packages build_scripts` aprovado em 195 arquivos; `compileall` aprovado. Os skips são gates de
+plataforma ou integrações Deriv externas explicitamente opt-in.
+**Resultado:** o executável oferece onboarding Deriv Demo protegido e falha fechado antes do socket
+quando a corretora não comprova conta Demo.
+**Riscos/limitações:** OAuth PKCE com navegador ainda não está embutido; o fluxo atual aceita PAT ou
+token OAuth já emitido com escopo `trade`. Nenhum teste externo foi executado sem credencial do
+usuário.
+**Próximo passo:** adicionar OAuth PKCE nativo para eliminar a colagem manual de token e executar
+smoke externo Demo com stake mínima sob opt-in explícito.
+
+### WL-2026-08-23-04 — Conexão Deriv movida para dentro do aplicativo
+
+**Objetivo:** preservar a inicialização normal do `TradingLab.exe` e disponibilizar App ID, conta
+Demo e conexão somente dentro da aba Deriv.
+**Arquivos alterados:** `apps/launcher/cli.py`, `apps/launcher/deriv_login.py`,
+`apps/deriv_login_helper/`, `apps/launcher/process_controller.py`, `apps/ui/runner.py`,
+`apps/ui/app.py`, `apps/ui/components/workspaces.py`, `apps/ui/i18n.py`,
+`apps/ui/ipc_client.py`, `apps/ui/controller.py`, `apps/core/ui_service.py`,
+`apps/core/lifecycle_service.py`, `apps/core/deriv_telemetry.py`,
+`packages/protocol/envelope.py`, `build_scripts/TradingLab.spec`, testes e documentação.
+**Implementação:** o launcher volta a iniciar em `fake-public`, sem janela pré-startup. A área
+`Deriv > Configuração` ganhou o botão `Conectar Deriv Demo`; ele abre um helper separado que grava
+o token diretamente no cofre DPAPI. A UI principal envia somente um comando IPC sem segredo. O
+Core encerra o worker público, inicia `live-demo` a partir do cofre e restaura o worker anterior em
+caso de falha. Credenciais salvas podem ser reutilizadas pelo botão sem nova digitação.
+**Decisões:** conta real continua bloqueada no diálogo e pela prova oficial
+`account_type = demo`; cancelamento ou falha não fecha a ferramenta; o token não entra no processo
+principal da UI, no Core, no argv do worker nem no IPC.
+**Resultado:** a ferramenta abre como antes e a conexão Deriv ocorre somente depois que o usuário
+entra na área interna da corretora.
+**Riscos/limitações:** o primeiro cadastro ainda exige que o usuário obtenha um PAT/OAuth com
+permissão `trade`; OAuth PKCE embutido permanece futuro.
+
+### WL-2026-08-23-05 — Deriv API Token interno, seleção Demo/Real e release 1.1.0
+
+**Objetivo:** substituir o cadastro manual de App ID/conta por um fluxo interno token-only, listar
+as contas Options confirmadas pela Deriv, permitir escolha explícita Demo ou Real e entregar um
+executável Windows atualizado sem alterar o startup público read-only.
+**Requisitos relacionados:** AG-INV-001, AG-INV-002, AG-INV-004, AG-INV-005, AG-INV-006,
+AG-INV-008, AG-INV-010, AG-INV-011 e AG-INV-012; R-ORD-001 a R-ORD-008; R-RISK-001 a
+R-RISK-009; R-SEC-001, R-SEC-002 e R-SEC-006; R-UI-001 a R-UI-006; FR-015, FR-074, FR-098.
+**Processo dono do estado e risco:** mudança financeira e de autenticação de risco alto. O Core
+permanece a única autoridade financeira; o Deriv Worker mantém o transporte e o token; o helper
+isolado grava o cofre; a UI mantém somente confirmação/projeção. A autorização explícita de produto
+para Deriv Real foi registrada no PRD; IQ Option Real não foi autorizada.
+**Arquivos alterados:** configuração/credenciais Deriv, helper de login, worker, validadores,
+mapper, sessão de ordem/reconciliação, supervisor/lifecycle/Core, Auth Agent/lease, protocolo/UI,
+testes, build/versionamento e documentação normativa.
+**Implementação:** App ID público do produto incorporado internamente; diálogo recebe somente PAT,
+consulta contas ativas e não pré-seleciona conta; Demo ordenada antes de Real; Real exige checkbox e
+digitação de `REAL`; DPAPI persiste somente conta/tipo/token; worker comprova conta e endpoint OTP do
+mesmo tipo; troca bloqueada com ordem aberta; capabilities e telemetria distinguem Demo/Real; UI
+marca `REAL — DINHEIRO REAL`; lease Real Ed25519 limitada a 24 horas; Health Gate, persistência,
+risco e ausência de retry permanecem obrigatórios. O fluxo de compra foi atualizado para a API
+atual: `proposal` com `underlying_symbol`, seguido de `buy` pelo ID da proposta e acompanhamento do
+contrato.
+**Decisões:** startup continua em `fake-public`; conta Real nunca é automática; testes externos
+começam e terminam em Demo; nenhum trade Real é permitido em desenvolvimento/aceitação; token não
+entra em fonte, argv, IPC financeiro, log, fixture, relatório ou pacote; App ID não é segredo; o
+serviço de identidade recebe somente uma decisão reduzida de autorização.
+**Validação executada:** token fornecido pelo operador validado sem impressão e guardado apenas em
+cofre DPAPI temporário de teste; a API retornou uma conta Options Demo ativa e nenhuma conta Real.
+Leitura externa aprovada com moeda USD, relógio sincronizado e 89 símbolos. Smoke financeiro externo
+Demo aprovado com proposta, compra mínima de USD 1,00, liquidação comprovada e nova leitura de saldo;
+nenhuma ordem Real foi enviada. Adaptação de schema adicionada para `active_symbols` sem
+`underlying_symbol_type`. Suíte completa final: **511 passed, 4 skipped, 0 failed**; 69 testes focais
+aprovados; `ruff check` e `ruff format --check` aprovados em 305 arquivos; `mypy` aprovado em 198
+arquivos; `compileall` aprovado. PyInstaller 1.1.0 gerou `TradingLab.exe`; scanner do pacote e do ZIP
+extraído encontrou zero segredos; manifesto interno com 284 entradas e SHA-256
+`c0a9ab989d43d593b256834bc45c33e75b294f1203de0af47253ccdd2bc6972a`; ZIP extraído passou
+verificação do manifesto e smoke completo da árvore com exit code zero e nenhum processo órfão.
+**Resultado:** release onedir/ZIP 1.1.0 pronta para o cliente, com conexão interna exclusivamente por
+API Token e seleção controlada Demo/Real.
+**Riscos/limitações:** o token usado no teste não possui conta Real associada, portanto a rota Real
+foi comprovada somente por testes locais/fakes e lease assinada; não houve e não deve haver teste com
+dinheiro real. O Auth Agent/issuer continua simulado localmente e a distribuição ainda não possui
+assinatura Authenticode. Como o token foi compartilhado em conversa, deve ser rotacionado pelo
+proprietário depois da validação.
+**Próximo passo:** validar a conta Real apenas por descoberta/leitura quando o proprietário fornecer
+um token que a contenha; antes de distribuição comercial, substituir o issuer simulado, executar QA
+em VM Windows limpa e assinar o pacote com Authenticode.
+
+### WL-2026-08-23-06 — Correção da confirmação Deriv após troca de worker
+
+**Objetivo:** corrigir o erro visível `UI_IPC_UNAVAILABLE` ocorrido depois que o Core já havia
+conectado com sucesso o worker Deriv autenticado.
+**Requisitos relacionados:** R-ARCH-004, R-ARCH-008, R-ORD-004, R-STATE-003, R-UI-003;
+AG-INV-002, AG-INV-004 e AG-INV-008.
+**Processo dono do estado e risco:** correção de IPC de risco operacional médio. O Core continua dono
+do comando e de seu cache de replay; a UI não recebe autoridade financeira. Nenhuma mudança foi
+feita em stake, risco, token, ordem, liquidação ou seleção de conta.
+**Arquivos alterados:** `apps/ui/ipc_client.py`, `apps/ui/app.py`,
+`tests/contract/test_ui_ipc_contract.py`, metadados/pipeline de versão, documentação de release e
+`WORKLOG.md`.
+**Implementação:** timeout do comando de troca Deriv ampliado para 120 segundos; o cliente UI agora
+mantém somente a capability efêmera necessária para restabelecer o canal loopback autenticado;
+falha de transporte aciona uma única reconexão e reenvia o mesmo envelope, com o mesmo
+`message_id`. O cache bounded do Core devolve a resposta anterior quando o efeito já ocorreu, de
+modo que uma confirmação perdida não repete a ação. A janela diferencia falha interna de IPC de
+falha de token e informa que a credencial DPAPI foi preservada.
+**Decisões:** não usar retry financeiro; a repetição existe somente no plano de controle local e
+preserva identidade idempotente. Se o Core não responder após a tentativa bounded, a UI continua
+falhando fechado. O token não participa da reconexão UI/Core.
+**Validação executada:** reprodução comprovou que, mesmo com o alerta, o Core havia iniciado o
+worker `live-demo`. Foram adicionados testes de resposta perdida durante callback lento e conexão
+encerrada por ociosidade; ambos reconectam e comprovam exatamente um efeito. Testes focais de UI,
+IPC, launcher e lifecycle: 18 aprovados. Suíte completa: **513 passed, 4 skipped, 0 failed**; Ruff,
+format, mypy em 198 arquivos e compileall aprovados. Build Windows 1.1.1 aprovado; manifesto com 284
+entradas e SHA-256 `4cf9b3c6d38eed6b3e8d53551185e513be779834be83ff474aa9f2a4f0a798d6`;
+ZIP extraído com manifesto válido, zero segredos, smoke da árvore com exit code zero e zero órfãos.
+O executável empacotado também passou smoke externo autenticado Demo, somente conexão/leitura, com
+exit code zero e sem enviar nova ordem.
+**Resultado:** a troca para Deriv autenticada não apresenta falha de token quando apenas a resposta
+IPC se perde; a confirmação é recuperada de forma idempotente e bounded.
+**Riscos/limitações:** o teste visual final exige abrir a nova versão depois de encerrar as instâncias
+antigas que ainda mantêm o perfil padrão bloqueado. Nenhum teste Real foi executado.
+**Próximo passo:** substituir a versão 1.1.0 pela 1.1.1 no ambiente do usuário e confirmar a projeção
+`DEMO LIVE` após reutilizar a credencial salva.
+
 ## 8. Modelo para novas entradas
 
 ```markdown
@@ -2022,3 +2208,652 @@ OAuth/vault worker-only, ainda sem habilitar ordens.
 **Próximo passo:**
 ```
 
+### WL-2026-08-24-01 — Risco especializado e painel DIGITDIFF
+
+**Objetivo:** implementar configuração imutável, travas financeiras e painel PySide6 ES/EN para
+operações Deriv `DIGITDIFF`.
+**Requisitos relacionados:** AG-INV-010, R-DB-002, R-RISK-001, R-RISK-005, BR-002, BR-010 e
+R-ARCH-004.
+**Arquivos alterados:** `apps/core/digit_risk_config.py`, `apps/core/risk.py`,
+`apps/core/health.py`, `apps/core/broker_events.py`, `apps/core/ui_service.py`, protocolo UI,
+cliente/controlador/UI PySide6, testes e documentação.
+**Implementação:** `DigitRiskConfig` frozen com dinheiro em minor units, confiança em `Decimal`,
+allowlist de índices sintéticos e validação por reason code; Risk Ledger aplica Stop Loss, Take
+Profit e cooldown por relógio monotônico; evento `SETTLED` aplica P&L uma única vez; IPC autenticado
+atualiza e projeta a configuração; painel Obsidian Dark fornece validação visual, conversão exata
+USD/minor units, seletor de ativo/cooldown, slider e i18n ES/EN.
+**Decisões:** configuração permanece em memória do Core nesta fatia; UI nunca escreve no banco;
+travas de Stop/Take não são removidas pela edição de limites no mesmo dia; contratos abertos seguem
+até liquidação. “Confiança quântica” é somente um limiar configurável, sem afirmação de probabilidade
+calibrada, lucro ou vantagem estatística.
+**Validação executada:** testes de modelo, gates, cooldown monotônico, roundtrip IPC, paridade i18n e
+renderização Qt offscreen adicionados. Suíte completa: **518 passed, 4 skipped, 0 failed**; Ruff,
+format, mypy em 200 arquivos e compileall aprovados. Build Windows 1.2.0 gerou manifesto com 286
+arquivos e SHA-256 `afb31e400d1a8de98a3ab5de25f07fb73670cfc54e4f757fd37d129a924f2952`;
+ZIP extraído passou a verificação do manifesto e o smoke visual confirmou seis processos, janela
+`Trading Lab Desktop — MODO PRÁCTICA` responsiva e encerramento limpo.
+**Resultado:** infraestrutura especializada de risco e painel configurável integrados ao fluxo
+Core/UI para contas Deriv Demo ou Real selecionadas pelo cliente; release 1.2.0 pronta para entrega.
+**Riscos/limitações:** a configuração ainda não é persistida entre reinicializações e esta fatia não
+implementa nem valida uma estratégia lucrativa. Nenhuma ordem Real é usada em testes.
+**Próximo passo:** persistir versões de configuração em armazenamento Core dedicado e integrar o
+limiar a uma estratégia `DIGITDIFF` somente após validação estatística independente.
+
+### WL-2026-08-24-02 — Motor O(1) de ticks e contrato DIGITDIFF de 1 tick
+
+**Objetivo:** implementar janela circular fixa de ticks, telemetria de frequência 0–9 e execução
+Deriv `DIGITDIFF` de um tick sem violar commit prévio, risco ou reconciliação.
+**Requisitos relacionados:** AG-INV-001, AG-INV-010, R-DB-002, R-ORD-001, R-DATA-002 e
+R-TEST-001.
+**Arquivos alterados:** `packages/market_data/tick_ring_buffer.py`, contratos Deriv, domínio/outbox,
+`apps/deriv_worker/tick_stream.py`, sessão/servidor/transport fake, cliente e telemetria Core,
+protocolo UI, `DigitFrequencyWidget`, testes, documentação e metadados de release.
+**Implementação:** `DigitTick` frozen/slots e `TickRingBuffer` com array estático, contadores de dez
+dígitos e matriz 10x10 atualizados em O(1), inclusive na ejeção; stream `ticks` oficial, deduplicação
+e latência monotônica; um buffer isolado por símbolo e remoção no unsubscribe; `prediction_digit`
+persiste no payload da outbox; compra direta oficial `DIGITDIFF` com stake, barreira e duração `1 t`;
+`proposal_open_contract` confere `exit_tick`/`exit_spot` e usa `profit` oficial; UI mostra dez barras
+verticais no tema Obsidian, maior frequência em âmbar e menor em ciano.
+**Decisões:** contratos não-DIGITDIFF conservam proposta seguida de compra por ID; conflito entre
+resultado oficial e dígito de saída falha fechado; frequência histórica é apenas telemetria, nunca
+previsão, sinal ou promessa de lucro; eventos de mercado e de ordem usam filas IPC bounded separadas.
+**Validação executada:** benchmark local de 10.000 inserções mediu **10,057 µs/tick** em média
+(limite 100 µs), janela final 500/500; testes de escala decimal, ejeção, frequências, transições,
+payload direto, vitória, derrota, fluxo IPC multi-símbolo e renderização Qt. Suíte completa:
+**529 passed, 4 skipped, 0 failed**; Ruff check e format aprovados em 315 arquivos; mypy estrito
+aprovado em 203 arquivos; compileall aprovado. Build PyInstaller v1.3.0 aprovado, scanner encontrou
+zero segredos, manifesto verificou 289 entradas com SHA-256
+`12de82a522ccde61ab8864c293c6f95330f972eba003c15d1ee7b1f2e5dd812b`; executável SHA-256
+`6342336676ab97362415d2506bd2066c6d6ea5d51c5dbab15ad889eb68caa4e9` e health check retornou
+zero. O ZIP final tem SHA-256
+`aedd414f68996764f66179ff5e7d09cc97d123f3435dc35893171992af0e7707`; a extração isolada
+revalidou o manifesto sem issues e o executável extraído repetiu o health check com sucesso.
+**Resultado:** release Windows v1.3.0 pronta com motor bounded de ticks, painel de frequências ao
+vivo e suporte controlado a `DIGITDIFF` de um tick para a conta Demo ou Real escolhida pelo cliente.
+**Riscos/limitações:** nenhuma estratégia comercial ou vantagem estatística foi introduzida; testes
+financeiros permanecem locais/fake nesta fatia e nenhuma ordem Real foi enviada. O pacote não possui
+assinatura Authenticode.
+**Próximo passo:** executar soak externo somente de ticks em Demo, sem compra, e validar a ergonomia
+visual em VM Windows limpa antes de distribuição comercial.
+
+### WL-2026-08-24-03 — Três estratégias sintéticas Deriv em observação
+
+**Objetivo:** substituir a experiência centrada em frequência de dígitos por três estratégias
+especializadas para mercados sintéticos Deriv e entregar novo executável Windows.
+**Requisitos relacionados:** AG-INV-001, AG-INV-010, R-DATA-002, R-ORD-001, R-RISK-001,
+R-TEST-001 e diretrizes de validação do `STRATEGY_PLATFORM.md`.
+**Arquivos alterados:** `packages/strategies/deriv_synthetic.py`, telemetria Core,
+protocolo UI, painel Deriv PySide6, lifecycle financeiro, testes, README, documentação de estratégia
+e metadados de release.
+**Implementação:** foram adicionadas as estratégias `Range Boundary Reversion`,
+`Post-Spike Drift Recovery` e `Five-Tick Run Reversal` para RB100/RB200, BOOM500/CRASH500 e Step 500.
+O Core agora assina os mercados necessários, aquece histórico limitado, atualiza candles/ticks em
+tempo real, publica estado de aquecimento, bloqueio de dados e sinal em observação para a UI, sem
+despachar ordens financeiras automáticas. A aba Deriv ganhou seletor profissional de estratégias,
+cards de status e painel de execução em modo pesquisa.
+**Decisões:** a antiga estratégia de frequência de dígitos foi retirada da navegação principal; as
+novas estratégias entram como `RESEARCH_SHADOW` até existir validação estatística e aprovação de
+promoção para execução. A conexão Demo/Real por token permanece disponível, mas a composição do Core
+não inicia auto-trader para essas estratégias nesta versão.
+**Validação executada:** suíte completa com **549 passed, 4 skipped, 0 failed**; suíte direcionada de
+telemetria/estratégias/UI/contratos com **15 passed**; Ruff aprovado; mypy aprovado em 207 arquivos;
+smoke de inicialização em código-fonte e no pacote PyInstaller aprovados; build v1.6.0 com scanner de
+segredos limpo, health check do launcher aprovado, manifesto com 295 arquivos e SHA-256
+`a43bcd573f2fe823dbd7ad6c7d56dfd5ac64c03fb83c709904fb6d1a379049cf`.
+**Resultado:** EXE `TradingLab-Desktop-v1.6.0-3-ESTRATEGIAS-DERIV.exe` entregue na pasta `outputs`
+com SHA-256 `6F57147C10DAF1CF968573F44D9D8A716138C924A4E69564BC97651C50E892FF`.
+**Riscos/limitações:** as estratégias ainda não prometem lucro e não enviam operações reais ou demo
+automaticamente; elas servem para observar sinais, qualidade dos dados e latência antes de liberar
+execução financeira.
+**Próximo passo:** rodar sessão monitorada em Demo, coletar evidência por estratégia e só então
+decidir qual delas será promovida para execução com travas financeiras completas.
+
+### WL-2026-08-24-04 — Portfólio Deriv Digit Edge e bloqueio financeiro Real
+
+**Objetivo:** substituir as três estratégias sintéticas anteriores por hipóteses especializadas em
+contratos de dígitos e entregar um executável Windows verificado.
+**Requisitos relacionados:** AG-INV-001, AG-INV-010, R-DATA-002, R-ORD-001, R-RISK-001,
+R-RISK-005, R-TEST-001 e critérios de promoção do `STRATEGY_PLATFORM.md`.
+**Arquivos alterados:** `packages/strategies/deriv_digits.py`, exportações de estratégias,
+telemetria e lifecycle Core, sessão pública e sessão financeira Deriv, protocolo UI, workspace e
+painel de estratégias PySide6, testes, documentação e metadados de release.
+**Implementação:** `Tail Probability Edge` compara Over/Under em três janelas condicionais;
+`Selective Differs Edge` escolhe o dígito de menor probabilidade condicional; `Parity Regime Edge`
+procura concordância Even/Odd. As três usam aquecimento de 500 ticks, janelas 200/350/500, limites
+conservadores de Wilson a 99%, buffer bounded e uma única análise compartilhada por tick. A carga
+de `ticks_history` foi alinhada ao formato atual da API, sem enviar `subscribe: 0`. A UI mostra
+contrato, barreira, probabilidade conservadora, piso exigido e latência local em microssegundos.
+**Decisões:** as estratégias permanecem em `RESEARCH_SHADOW` e não possuem método de compra. O modo
+Real foi fechado para submissão financeira e não recebe sessão/capability de ordens; somente Demo
+pode possuir infraestrutura financeira, ainda desacoplada destes sinais. Martingale, Soros e
+progressão após perda permanecem proibidos por `R-RISK-005`; stake fixa, stop diário e cooldown não
+foram enfraquecidos.
+**Validação executada:** suíte completa com **550 passed, 4 skipped, 0 failed**; teste externo
+público Deriv aprovado, com carregamento real de 500 ticks de R_100 e avaliação das três
+estratégias; benchmark local de 1.000 avaliações mediu mediana **2.162 µs**, p95 **6.973 µs**, p99
+**9.732 µs** e máximo **13.573 µs**. Uma amostra externa completa foi analisada em **6.268 µs**.
+Ruff check/format, mypy estrito em 207 arquivos e compileall foram aprovados. Build v1.7.0 passou
+scanner de segredos, verificação do launcher e manifesto de 295 arquivos, SHA-256
+`ee4bd044bd75249a89b08f6d022c181a9df5709260fa702197076ade315c89b6`. O binário compilado abriu e
+encerrou em smoke controlado com código 0. O SFX final foi extraído novamente, confirmou 507 entradas
+e os arquivos obrigatórios; SHA-256 do EXE:
+`270EF8CD6F1119416A2FE2736F3F40A7DCAD7FA4B8A331E43723C827F928E8A5`.
+**Resultado:** release `TradingLab-v1.7.0.exe` entregue como arquivo único portátil com as três
+estratégias de dígitos funcionando em observação e telemetria de latência disponível na interface.
+**Riscos/limitações:** não existe “delay zero”; o tempo local ficou abaixo de 10 ms no p99 medido,
+mas rede, cotação e resposta da Deriv continuam externos. Sinal estatístico não implica lucro e
+nenhuma ordem Demo ou Real foi enviada pelos testes. O pacote não possui assinatura Authenticode.
+**Próximo passo:** coletar amostra walk-forward em Demo, registrar propostas/payout disponíveis e
+somente promover uma estratégia depois de evidência fora da amostra e aprovação explícita das
+travas financeiras.
+
+### WL-2026-08-24-05 — Identificação inequívoca da release v1.7.1
+
+**Objetivo:** corrigir a percepção de versão antiga no executável portátil e tornar a release
+identificável tanto nas propriedades do Windows quanto dentro da interface.
+**Requisitos relacionados:** R-TEST-001 e processo de release documentado.
+**Arquivos alterados:** `apps/ui/app.py`, `pyproject.toml`, metadados/scripts de build,
+`build_scripts/PortableLauncher.cs`, testes de UI/distribuição e este worklog.
+**Implementação:** a interface e o título da janela agora exibem `v1.7.1`, com badge permanente
+`DIGIT EDGE`. O autoextrator IExpress, que herdava `FileVersion` do Windows, foi substituído por um
+launcher portátil versionado que incorpora o payload verificado, repassa argumentos ao launcher
+interno, espera seu encerramento e remove a extração temporária.
+**Decisões:** o nome da entrega mudou para `TradingLab-Desktop-v1.7.1-DIGIT-EDGE.exe` para não ser
+confundido com releases anteriores. Nenhuma regra de estratégia, ordem ou risco foi modificada.
+**Validação executada:** seis testes direcionados de UI/build aprovados; Ruff aprovado e mypy
+estrito aprovado em 207 arquivos. Build interno v1.7.1 passou scanner de segredos, health check e
+manifesto com 295 arquivos, SHA-256
+`a1cf952a4c7479a316a73e75a105ab44a69bc8f5b63993095a65855f77abe342`. O EXE portátil confirmou
+`FileVersion 1.7.1.0`, `ProductVersion 1.7.1`, health check com código 0 e SHA-256
+`5CD73C950478ED1745034CFA478EB6358BA4F137CF7B985D26B2954C6AB2A896`. Smoke com encerramento
+automático deixou zero processos e zero pastas temporárias da v1.7.1.
+**Resultado:** novo arquivo único portátil com versão externa e interna coerentes, interface
+claramente identificada e conteúdo Digit Edge atualizado.
+**Riscos/limitações:** o executável ainda não possui assinatura Authenticode; o primeiro startup
+precisa extrair o payload em diretório temporário e pode levar alguns segundos.
+**Próximo passo:** distribuir somente o nome v1.7.1 e arquivar releases antigas depois de confirmação
+do usuário.
+
+### WL-2026-08-24-06 — Processo de exceção e especificação de Bounded Martingale na documentação
+
+**Objetivo:** atualizar os documentos normativos, arquiteturais e de produto do repositório para permitir a introdução e o suporte a estratégias com Bounded Martingale (Martingale Estritamente Delimitado) sob rigorosos guardrails de risco.
+**Requisitos relacionados:** R-RISK-005, R-RISK-001, R-RISK-002, R-RISK-003, R-RISK-004, AG-INV-001, AG-INV-004, BR-012, A-07, DEC-051.
+**Arquivos alterados:** `RULES.md`, `AIGUARD.md`, `PRD_Trading_Desktop_Deriv_IQOption.md`, `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`, `STRATEGY_PLATFORM.md`, `WORKLOG.md`.
+**Implementação:** aplicada a Seção 13 de `RULES.md` (Processo de Exceção). A regra `R-RISK-005` e o guardrail `AIGUARD` foram reformulados para proibir expressamente o martingale ilimitado ou sem controle prévio de risco, permitindo o Bounded Martingale como modelo de gestão de stake do Portfolio Allocator subordinado ao Risk Ledger, com travas obrigatórias:
+1. Teto mandatório de etapas (`max_steps`);
+2. Teto financeiro absoluto de stake (`max_stake_cap`);
+3. Validação e reserva atômica de risco no Risk Ledger antes do envio ao worker;
+4. Parada imediata com falha fechada (`HG_DAILY_STOP_REACHED` / `RISK_LOCKED`) ao atingir o Stop Loss diário ou esgotar o saldo livre;
+5. Desacoplamento total: estratégias permanecem puras geradoras de sinais; o cálculo da progressão é restrito ao Core.
+**Decisões:** DEC-051; o modelo padrão continua sendo stake fixa com opt-in explícito do usuário para progressão delimitada e visualização da perda máxima projetada da sequência.
+**Validação executada:** varredura de consistência em todos os documentos markdown do projeto (`RULES.md`, `AIGUARD.md`, `PRD`, `Arquitetura`, `STRATEGY_PLATFORM.md`, `WORKLOG.md`); verificação de ausência de conflitos de normas e garantia de integridade estrutural.
+**Resultado:** documentação normativa, funcional e arquitetural 100% atualizada e alinhada para permitir o desenvolvimento da funcionalidade de Bounded Martingale.
+**Riscos/limitações:** a documentação autoriza e especifica os limites do modelo Bounded Martingale; a implementação de código da máquina de estados no Portfolio Allocator/UI permanece sujeita aos testes de integridade financeira e unitários correspondentes.
+**Próximo passo:** implementar a máquina de estados de Bounded Martingale no módulo de gestão de stake / Portfolio Allocator com cobertura de testes para todos os limites de etapas e stop loss.
+
+### WL-2026-08-24-07 — Bounded Martingale compartilhado pelas três estratégias Digit Edge
+
+**Objetivo:** implementar o Bounded Martingale autorizado pela DEC-051 para Tail Probability Edge,
+Selective Differs Edge e Parity Regime Edge, preservando a separação estratégia → alocação → risco.
+**Requisitos relacionados:** AG-INV-001, AG-INV-004, AG-INV-009, AG-INV-010, R-RISK-001,
+R-RISK-002, R-RISK-003, R-RISK-005, R-RISK-006, R-RISK-008, R-TEST-001, BR-012 e DEC-051.
+**Arquivos alterados:** `packages/portfolio_allocation/martingale.py`, configuração e Risk Ledger
+do Core, processamento de liquidações, protocolo/projeção UI, configuração e resumo das estratégias,
+testes, README, plano de testes e metadados/pacote da release v1.8.0.
+**Implementação:** o Portfolio Allocator recebeu matemática determinística em `Decimal` para stake
+base, multiplicador, etapas e teto absoluto; o Risk Ledger mantém a etapa sequencial, calcula a
+próxima stake, exige correspondência exata na reserva e atualiza a progressão somente após
+liquidação confirmada. Ganho, empate ou perda na última etapa reiniciam a stake base. Over/Under,
+Digit Differs e Even/Odd usam a mesma autoridade bounded do Core. A validação rejeita multiplicador
+fora de 1,10–3,00, mais de quatro etapas, teto inferior à stake base, sequência maior que o Stop
+Loss, limite de perdas insuficiente e mudança durante sequência ativa. Se a próxima perda possível
+ultrapassar o orçamento diário restante, `HG_DAILY_STOP_REACHED` fecha novas entradas antes do
+envio. A UI oferece opt-in desativado por padrão, multiplicador, etapas, teto de stake e projeção
+completa da sequência/perda máxima; o resumo mostra etapa e próxima stake.
+**Decisões:** Bounded Martingale é uma gestão compartilhada do Core, não parte da lógica estatística
+das estratégias. A configuração padrão continua stake fixa. Desativar a progressão durante uma
+sequência é permitido como ação segura e reinicia a etapa; aumentar ou alterar a progressão durante
+a sequência falha fechado. Modo Real permanece read-only e nenhum teste usa dinheiro real.
+**Validação executada:** suíte completa com **565 passed, 4 skipped, 0 failed**; testes específicos
+cobrem projeção 100→200→400, teto, reset por ganho/empate/última etapa, Stop Loss projetado, mudança
+durante sequência, stake divergente e as cinco famílias de contrato usadas pelas três estratégias.
+Ruff check/format aprovado em 329 arquivos, mypy estrito aprovado em 208 arquivos e compileall
+aprovado. Build v1.8.0 passou scanner de segredos, health check e manifesto com 296 arquivos,
+SHA-256 `965c3590fb0b095e382d64869b80fa13df17bd5df2e97398f2ee103d4d2cde1a`. O EXE portátil confirmou
+`FileVersion 1.8.0.0`, health check e smoke de abertura com código 0, zero processos/pastas
+temporárias remanescentes e SHA-256
+`3E27CD9028B816891A242B4B1D867724238FA6D674A6AF0A78EF8402D7AD4987`.
+**Resultado:** `TradingLab-Desktop-v1.8.0-BOUNDED-MARTINGALE.exe` entregue com opt-in delimitado e
+gestão central de progressão disponível na configuração das três estratégias.
+**Riscos/limitações:** Bounded Martingale aumenta exposição e risco de perda mesmo com limites; não
+cria vantagem estatística nem promessa de recuperação. As três estratégias continuam
+`RESEARCH_SHADOW`, portanto a progressão está pronta no caminho de risco, mas não promove nem ativa
+despacho financeiro automático por si só. O estado de etapa Digit ainda é mantido em memória e
+reinicia de forma conservadora para stake base após reinício do Core.
+**Próximo passo:** persistir a etapa/versionamento da configuração no writer único, executar
+walk-forward e sessão Demo supervisionada antes de considerar promoção de qualquer estratégia.
+
+### WL-2026-08-24-08 — Execução Demo Digit Edge e recuperação supervisionada Deriv
+
+**Objetivo:** corrigir a ausência de operações Demo, a perda de conexão autenticada e a falha de
+abertura do aplicativo, mantendo o modo Real sem submissão financeira nesta release.
+**Requisitos relacionados:** AG-INV-001, AG-INV-004, AG-INV-009, AG-INV-010, R-ORD-001,
+R-RISK-001, R-RISK-005, R-DATA-002, R-TEST-001 e DEC-051.
+**Arquivos alterados:** lifecycle, telemetria e auto-trader do Core; sessão, reconciliação e
+transporte fake do worker Deriv; modelos de ordem; projeção/UI; cofre DPAPI; testes, documentação,
+metadados e pacote da release v1.9.0.
+**Implementação:** as três estratégias Digit Edge podem despachar em conta Demo as cinco famílias
+de contrato de um tick (`DIGITOVER`, `DIGITUNDER`, `DIGITDIFF`, `DIGITEVEN`, `DIGITODD`) pelo mesmo
+caminho persistente do Core. O bot inicia desligado, exige 500 ticks, aceita cada época de sinal no
+máximo uma vez e mantém somente uma ordem em voo. A conta Real permanece explicitamente somente
+leitura. Falhas de relógio, assinatura ou ticks bloqueiam novas entradas e solicitam recuperação
+supervisionada: a sessão financeira e o worker são substituídos, um OTP novo é obtido, a telemetria
+é reassinada e ordens não terminais são reconciliadas, sem reenvio cego da compra anterior. O
+backoff é limitado a 0, 1, 2, 5, 10 e 30 segundos. A abertura também foi corrigida para perfis com
+caminho longo no Windows: o arquivo temporário atômico do cofre não repete mais o digest de 64
+caracteres, evitando exceder o limite legado de caminho antes de a UI iniciar.
+**Decisões:** execução automática fica restrita à Demo para validação; selecionar Real não habilita
+compras. Nenhuma ordem é repetida automaticamente após uma queda, pois um sinal de um tick já pode
+estar obsoleto. Não existe promessa de conexão sem falhas; a prevenção adotada é falhar fechado,
+recuperar a sessão e exigir estado saudável antes de novas entradas.
+**Validação executada:** suíte completa com **577 passed, 4 skipped, 0 failed**; o teste de regressão
+do cofre confirmou escrita DPAPI em perfil longo; Ruff check/format aprovado em 330 arquivos, mypy
+estrito aprovado em 210 arquivos e compileall aprovado. O processo completo em código-fonte e o
+binário PyInstaller iniciaram Auth Agent, Core, worker simulado, worker Deriv e UI em estado
+`READY`, com encerramento limpo. O build passou scanner de segredos (0 achados), manifesto de 296
+arquivos e SHA-256 do manifesto
+`5916099985ab5dc76f0c61b4b74038c740d8004e9dc6db0db8e9ec87f5154fbc`. O portátil passou smoke
+completo e health check com código 0 e deixou zero pastas temporárias.
+**Resultado:** `TradingLab-Desktop-v1.9.0-DERIV-FIXED.exe`, `FileVersion 1.9.0.0`, SHA-256
+`04516DFF46E139D89D484CA112AFA4B0F9D2FD20C5ED734743B6557E189276E0`.
+**Riscos/limitações:** nenhum teste enviou ordem para conta Real; os testes financeiros externos de
+Demo continuam opt-in e não reutilizaram token fornecido em conversa. Bounded Martingale continua
+opt-in e aumenta o risco mesmo limitado. O executável ainda não possui assinatura Authenticode.
+**Próximo passo:** conectar uma conta Demo pela interface, manter o bot desligado até a telemetria
+mostrar 500 ticks e então executar uma sessão supervisionada antes de qualquer distribuição ampla.
+
+### WL-2026-08-25-09 — Inicialização estável, paginação de ticks e depuração das três estratégias
+
+**Objetivo:** corrigir a aplicação que aparentava não abrir, eliminar a queda da conexão Demo após
+o aquecimento e validar Tail Probability Edge, Selective Differs Edge e Parity Regime Edge dentro
+do mesmo caminho executável usado pela aplicação.
+**Requisitos relacionados:** AG-INV-001, AG-INV-004, AG-INV-009, AG-INV-010, R-DATA-002,
+R-ORD-001, R-RISK-001, R-TEST-001 e invariantes do IPC v1.
+**Arquivos alterados:** servidor e sessão pública do worker Deriv, telemetria e auto-trader do Core,
+supervisor do Launcher, textos/projeções da UI, testes de contrato/unidade/integração, documentação
+do worker, metadados e pacote da release v1.9.1.
+**Implementação:** a investigação encontrou duas causas independentes. Instâncias antigas sem janela
+mantinham `profile.lock`; a perda da UI agora encerra com segurança toda a árvore supervisionada e
+libera o perfil. Além disso, a resposta única de 500 ticks ultrapassava o limite IPC de 64 KiB e
+derrubava o worker. O worker agora limita cada página a 100 ticks e o Core compõe a janela de 500
+por paginação regressiva com deduplicação. O único fluxo de recepção WebSocket autenticado foi
+serializado entre comandos IPC e o pump de mercado, evitando consumidores concorrentes. Foram
+adicionados testes completos para cada estratégia, cobrindo sinal do motor, auto-trader, Risk
+Ledger, coordinator, compra Demo simulada e liquidação persistente: `DIGITOVER` para Tail,
+`DIGITDIFF` para Selective Differs e `DIGITODD` para Parity.
+**Decisões:** o limite de framing não foi afrouxado; payloads grandes continuam rejeitados e o
+worker permanece utilizável. Nenhuma ordem Real é permitida. A validação externa autenticada usou
+Demo com o bot pausado; o ciclo financeiro foi provado deterministicamente no caminho completo da
+aplicação sem forçar uma operação externa quando o mercado não apresentou vantagem conservadora.
+**Validação executada:** suíte completa com **583 passed, 4 skipped, 0 failed**; Ruff check e format
+aprovados em 330 arquivos; mypy estrito aprovado em 210 arquivos; compileall aprovado. Em dados
+públicos reais R_100, as três estratégias processaram 500 ticks e a análise ficou na faixa de
+milissegundos. Na sessão autenticada Demo, a UI carregou saldo, relógio sincronizado, aquecimento
+500/500 e permaneceu conectada por observação repetida sem eventos de desconexão. Tail e Parity
+ficaram corretamente em monitoramento; Selective Differs encontrou sinal Demo elegível na amostra.
+O portátil passou smoke isolado com código 0 e sem processo remanescente, depois abriu visivelmente
+como `Trading Lab Desktop v1.9.1`, respondeu à automação e manteve o worker `live-demo` ativo.
+Scanner de segredos: zero achados; manifesto com 296 arquivos e SHA-256
+`e3e55777a37295157032e2584ca89f61b313d70f79d203eea66da3c2293d6dd9`.
+**Resultado:** `TradingLab-Desktop-v1.9.1-DERIV-STABLE.exe`, `FileVersion 1.9.1.0`, tamanho
+44.746.240 bytes e SHA-256
+`2A22D1325CF2FB8BD8EA3A9CC32427D94E2FBF68C30576904AC77028F11DBC89`.
+**Riscos/limitações:** conexão e latência de rede externas nunca são zero; uma estratégia pode
+permanecer monitorando por longos períodos quando os critérios estatísticos não são satisfeitos.
+Isso é comportamento de segurança, não travamento. Nenhuma compra externa Real foi feita e o EXE
+ainda não possui assinatura Authenticode.
+**Próximo passo:** manter o bot pausado até o usuário decidir iniciar uma sessão Demo supervisionada
+e arquivar as versões 1.9.0 e anteriores para evitar abrir um binário antigo por engano.
+
+### WL-2026-08-25-10 — Dashboard de liquidações em tempo real
+
+**Objetivo:** corrigir resultados que só eram atualizados depois que o operador pausava o bot e
+entregar uma nova versão portátil com atualização contínua recuperável.
+**Requisitos relacionados:** AG-INV-001, AG-INV-009, R-ORD-001, R-TEST-001 e arquitetura de UI
+descartável baseada exclusivamente na projeção autoritativa do Core.
+**Arquivos alterados:** controller da UI, teste de regressão do polling, documentação da arquitetura
+de informação, metadados/scripts de build e pacote da release v1.9.2.
+**Causa raiz:** a thread `ui-projection-poll` terminava definitivamente após qualquer `UiIpcError`
+transitório. A dashboard continuava mostrando seu último snapshot; o botão de pausa parecia
+“corrigir” os números porque esse comando executava uma consulta manual logo após o Safe Stop.
+**Implementação:** o polling bounded de 500 ms agora marca temporariamente a conexão como
+indisponível, preserva o último snapshot e continua ativo. O cliente serializado tenta reconectar no
+ciclo seguinte; quando a projeção volta, a UI retoma automaticamente P&L, ganhos, perdas, contagem e
+tabela de liquidações, sem alterar estado financeiro nem depender de pausa.
+**Decisões:** não foi adicionado acesso direto da UI ao SQLite, evento de corretora ou estado local
+autoritativo. O Core continua sendo a única fonte dos resultados confirmados e uma indisponibilidade
+real continua visível como desconexão.
+**Validação executada:** novo teste injeta uma falha IPC depois do snapshot inicial e comprova que o
+poll permanece vivo, recebe a projeção atualizada e restaura `connected=True` sem comando manual.
+Suíte completa: **584 passed, 4 skipped, 0 failed**. Ruff check e format aprovados nos 331 arquivos
+de produto/teste/build; mypy aprovado em 208 arquivos; compileall aprovado. O build PyInstaller
+passou scanner de segredos com zero achados, verificou 296 arquivos e gerou manifesto SHA-256
+`4ca450fd302c4b754240bd62404105b6b1dec3026a80f2a631473eb6233fe0ce`. O portátil passou smoke
+isolado com código 0 e zero processos v1.9.2 remanescentes; depois abriu visivelmente, reutilizou o
+perfil, autenticou a conta Demo salva e manteve a UI responsiva com o worker `live-demo` ativo.
+**Resultado:** `TradingLab-Desktop-v1.9.2-LIVE-DASHBOARD.exe`, `FileVersion 1.9.2.0`, tamanho
+44.747.264 bytes e SHA-256
+`2FEB1EBCBFBD69524C8B69A49E2CB9670A863B9202946ADF029060BFBDC202EE`.
+**Riscos/limitações:** a UI só publica liquidações confirmadas pelo Core; atrasos externos da Deriv
+antes da confirmação continuam possíveis e não são inventados como resultado. Nenhuma ordem Real
+ou Demo externa foi enviada nesta correção e o binário permanece sem assinatura Authenticode.
+**Próximo passo:** observar uma sessão Demo com o bot ligado e confirmar visualmente que cada nova
+liquidação aparece sem acionar pausa; manter o Safe Stop disponível para qualquer divergência.
+
+### WL-2026-08-25-11 — Gestão de risco ampliada e integralmente visível
+
+**Objetivo:** corrigir a gestão de risco comprimida/oculta na workspace Deriv e apresentar todos os
+controles e indicadores em uma tela sem rolagem.
+**Requisitos relacionados:** arquitetura de informação da UI, AG-INV-001, AG-INV-009,
+R-RISK-001, R-RISK-005 e R-TEST-001.
+**Arquivos alterados:** resumo de estratégia Deriv, painel de configuração Digit Edge, composição
+da aba de parâmetros, tema visual, traduções, testes de UI, documentação, versões/scripts de build e
+pacote v1.9.3.
+**Implementação:** no Resumo, a área de gestão de risco passou de uma faixa única para seis cartões
+maiores em grade 3×2, com valores em tipografia ampliada, progresso de exposição mais visível e uso
+de todo o espaço vertical. Na aba `Parámetros y riesgo`, os blocos introdutórios que consumiam a
+altura foram retirados da composição visível; os controles autoritativos agora ocupam a área útil
+com largura flexível. Campos monetários, ativo, perdas máximas, cooldown, confiança, checkbox de
+Martingale, multiplicador, etapas, teto absoluto, projeções, validação e botão Aplicar permanecem
+simultaneamente visíveis.
+**Decisões:** a mudança não cria estado financeiro na UI nem altera cálculos/limites; a configuração
+continua validada e aplicada pelo Core. Informações técnicas da estratégia permanecem no hero,
+biblioteca, mercado ao vivo e tooltip, sem competir com a gestão de risco.
+**Validação executada:** inspeção visual antes/depois e renderização no tamanho real **1382×744**;
+automação Windows confirmou todos os controles relevantes com `IsOffscreen=False`, inclusive
+`Martingale` e `Aplicar Parámetros`. Suíte completa: **585 passed, 4 skipped, 0 failed**; testes
+direcionados finais: **8 passed**. Ruff check/format aprovados em 331 arquivos, mypy aprovado em 208
+arquivos e compileall aprovado. Build final passou scanner de segredos com zero achados, health
+check e manifesto de 296 arquivos, SHA-256
+`4e919cbfdf9e768720b9a6bad96ff1a0ca996d66d06f1f0ef1064de5f0958c6b`. O portátil final passou
+smoke isolado com código 0 e abriu visivelmente com a conta Demo conectada e bot pausado.
+**Resultado:** `TradingLab-Desktop-v1.9.3-RISK-MANAGEMENT-FINAL.exe`, `FileVersion 1.9.3.0`,
+tamanho 44.749.312 bytes e SHA-256
+`DFD750B116EED6E577BA9E7D2F2B64F57913C4B4CA0AA3A44B9C101582607AE1`.
+**Riscos/limitações:** o layout foi validado na resolução observada e possui mínimos seguros, mas
+escalas de acessibilidade extremas do Windows podem exigir adaptação futura. Nenhuma ordem externa
+foi enviada nesta alteração e o EXE permanece sem assinatura Authenticode.
+**Próximo passo:** o usuário pode revisar os valores na aba já aberta e aplicar somente depois de
+confirmar Stop Loss, meta, stake e, se optar, os limites do Martingale delimitado.
+
+### WL-2026-08-25-12 — Progressão Martingale efetiva e persistente
+
+**Objetivo:** corrigir o relato de que as ordens Digit continuavam sempre na stake base mesmo com o
+Martingale delimitado habilitado e entregar um novo portátil verificável.
+**Causa raiz:** o histórico autoritativo confirmou que as liquidações e seus produtos chegavam
+corretamente ao Core, porém a configuração de risco existia apenas em memória. Depois de reiniciar o
+aplicativo, o Core voltava ao padrão com Martingale desligado. Além disso, reaplicar uma configuração
+idêntica zerava desnecessariamente uma sequência já iniciada.
+**Implementação:** a configuração de risco Digit agora é salva atomicamente no perfil local e
+restaurada pelo Core na próxima inicialização. Aplicações idempotentes preservam o passo ativo. Foi
+adicionado um teste de aplicação completo para cada uma das três estratégias, comprovando que uma
+perda com stake USD 1.00 produz a próxima ordem com USD 2.00; a validação unitária continua cobrindo
+a sequência delimitada USD 1.00 → USD 2.00 → USD 4.00 e o retorno à base.
+**Validação executada:** testes direcionados **46 passed**; suíte completa **591 passed, 4 skipped,
+0 failed**; Ruff e mypy aprovados; compileall aprovado. O build PyInstaller passou scanner de
+segredos com zero achados, gerou manifesto de 297 arquivos com SHA-256
+`56fb4fcd3fa05de4626107d578229bb4710ac941194cf25f7dd2b735a4fb1b2a` e passou o health check. O
+portátil passou smoke isolado com código 0 e abriu visivelmente como v1.9.4 em modo prática. Nenhuma
+ordem externa Demo ou Real foi enviada durante esta correção.
+**Resultado:** `TradingLab-Desktop-v1.9.4-MARTINGALE-FIXED.exe`, `FileVersion 1.9.4.0`, tamanho
+44.757.504 bytes e SHA-256
+`C5751F0E411C36151DC7886A479967EA5146D1B64E97B66779AA21DA46265C94`.
+**Estado entregue:** configuração ativa preservada em USD 1.00, multiplicador 2.00×, duas etapas,
+teto USD 4.00 e máximo de três perdas consecutivas. O aplicativo inicia com o bot pausado; a conexão
+Demo e o início das entradas continuam sendo ações explícitas do operador.
+
+### WL-2026-08-25-13 — Radar multiativo Shadow com isolamento por símbolo
+
+**Objetivo:** implementar a primeira fatia segura da seleção dinâmica de ativos: observar os cinco
+índices R clássicos, comparar evidência estatística conservadora e mostrar um candidato ou
+abstenção, sem permitir que o radar envie ordens ou altere automaticamente o ativo do executor.
+**Implementação:** o Core descobre `R_10`, `R_25`, `R_50`, `R_75` e `R_100` por
+`active_symbols`/`contracts_for`, mantém uma instância independente do motor de três estratégias e
+uma janela paginada de 500 ticks para cada símbolo. O ranking usa apenas sinais Shadow atuais e
+ordena pela margem entre estimativa e piso conservador, com um único candidato visual. A UI recebeu
+uma tabela somente leitura com ativo, estado, hipótese, margem, aquecimento e aviso explícito de que
+payout/EV ainda é requisito futuro. O executor continua consumindo exclusivamente as projeções do
+ativo selecionado pelo operador. Falha de um stream secundário não fecha o Health Gate nem derruba
+a conexão principal.
+**Decisões:** esta versão não faz troca automática, não cria `TradeIntent`, não toca em stake,
+Martingale, Risk Ledger ou roteamento. Sem payout válido/recente e EV líquido conservador, o ranking
+é evidência de pesquisa e pode permanecer em abstenção. A expansão para índices 1HZ foi adiada para
+evitar carga operacional antes da validação dos cinco ativos iniciais.
+**Validação executada:** testes novos cobrem buffers independentes, preservação durante refresh,
+candidato único, abstenção, isolamento de falha, protocolo IPC estrito e UI sem controles de
+execução. Suíte completa: **599 passed, 4 skipped, 0 failed**; bateria final direcionada:
+**37 passed**. Ruff format/check aprovados em 335 arquivos, mypy aprovado em 210 arquivos e
+compileall aprovado. O build passou scanner com zero achados, manifesto de 298 arquivos com SHA-256
+`db000057e0d80c566de6897e780bb84d7a3412b2a677769f83c7d3207482b14d` e health check com código 0.
+**Resultado:** `TradingLab-Desktop-v1.9.5-MULTI-ASSET-SHADOW-RADAR.exe`, `FileVersion 1.9.5.0`,
+tamanho 44.791.296 bytes e SHA-256
+`7075FBDAA8D38C65ED69340759C328C41A0F06E1E10CADB8112A51846F8B78F6`.
+**Segurança operacional:** nenhuma ordem externa Demo ou Real foi enviada. A instância v1.9.4 que
+já estava aberta foi preservada; o novo executável não substitui nem encerra uma sessão ativa sem
+ação explícita do operador.
+
+### WL-2026-08-25-14 — Reconciliação Deriv sem passthrough e desbloqueio das entradas
+
+**Objetivo:** diagnosticar por que o bot conectado não abria novas operações e corrigir o bloqueio
+sem apagar a ordem ambígua nem liberar risco sem evidência da corretora.
+**Causa raiz comprovada:** a última submissão ficou `UNKNOWN` após timeout de possível envio. A
+Deriv havia executado e liquidado a compra no contrato `10526152179`, mas as respostas atuais de
+`statement` e `profit_table` omitiram o `passthrough.order_id`. O reconciliador anterior pesquisava
+exclusivamente esse campo e retornava `DERIV_CONTRACT_NOT_FOUND`; uma reserva de USD 1.00 permanecia
+ativa e `HG_ORDER_UNKNOWN` bloqueava corretamente todas as entradas seguintes. Stop Loss e Take
+Profit estavam dentro dos limites e não eram a causa.
+**Implementação:** `OrderStatusQuery` agora transporta o timestamp UTC persistido da submissão. Se
+o ID do contrato e o passthrough estiverem ausentes, o worker examina `profit_table` dentro de uma
+janela pós-submissão bounded e exige correspondência única de horário, ativo, tipo de contrato e
+stake Decimal exata. Zero ou mais de uma correspondência continuam fail-closed com razão explícita;
+nenhuma heurística libera reserva. O contrato encontrado ainda é consultado por
+`proposal_open_contract` e passa por todas as validações financeiras antes de produzir evidência.
+**Validação:** consulta autenticada somente leitura confirmou `DIGITDIFF`, `R_100`, USD 1.00,
+liquidação `won` e P&L USD +0.09. Testes direcionados: **57 passed**; suíte completa:
+**601 passed, 4 skipped, 0 failed**; Ruff, mypy em 210 arquivos e compileall aprovados. Build com
+scanner de segredos sem achados, 298 arquivos e manifesto SHA-256
+`48b34dff8e80ff44659624f7337e80f6b8138c8e2a0d7029dae6ba90a209bef7`; health check código 0.
+**Prova no perfil real de teste:** após iniciar a v1.9.6, a ordem mudou de `UNKNOWN` para `SETTLED`,
+o broker ID foi persistido, P&L +9 minor units aplicado uma vez, reserva liberada uma vez e Outbox
+reconciliado. Estado final: zero ordens não terminais e zero reservas ativas. Durante a observação
+Demo o bot esteve ativo e houve novas liquidações confirmadas; ele foi colocado em Safe Stop e
+permaneceu pausado ao final.
+**Resultado:** `TradingLab-Desktop-v1.9.6-RECONCILIATION-FIXED.exe`, `FileVersion 1.9.6.0`, tamanho
+44.795.392 bytes e SHA-256
+`82F577322214C9673D71577FDCB89857584C5D82F7187B3CC0C3A6AE423CB83B`.
+
+### WL-2026-08-25-15 — Seleção automática Demo e filtro por vantagem líquida
+
+**Objetivo:** remover o fundo branco dos controles numéricos, habilitar variação automática entre
+os índices R monitorados e impedir que uma taxa de acerto alta seja confundida com resultado
+financeiro positivo.
+**Diagnóstico:** 1.551 operações Deriv liquidadas no perfil de teste mostraram que
+`deriv-digit-diff-frequency` acertou 90,05% em 221 operações, porém acumulou -409 minor units; a
+`selective-differs-edge` acertou 88,87% em 1.330 operações, mas acumulou -4.612 minor units. O payout
+assimétrico tornava a taxa de acerto isolada um critério incorreto.
+**Implementação:** os `QSpinBox`, campos e listas receberam tema escuro explícito, inclusive foco,
+seleção e estado desabilitado. A configuração persistida ganhou seleção automática de ativo, ligada
+por padrão para perfis existentes e visível como opção Demo; o ativo manual permanece fallback. O
+executor Demo agora consome o ranking multiativo, preserva isolamento dos buffers e fixa o ativo
+durante uma sequência Martingale já iniciada. Antes de cada ordem, exige uma margem estatística
+mínima derivada do filtro conservador e consulta as últimas 200 liquidações da estratégia. Com ao
+menos 10 resultados, P&L recente não positivo bloqueia novas entradas; quando há payout histórico,
+o break-even observado eleva o piso exigido. Sem vantagem líquida o comportamento correto é
+abstenção. Conta Real continua fora da automação financeira.
+**Segurança operacional:** além do `dispatcher_started`, o executor exige um segundo estado de
+armamento explícito do operador, fornecido pelo ciclo de vida. Assim, reconexão, reconciliação ou
+mudança de worker não podem armar o bot. O bot permanece pausado ao iniciar e a automação só pode
+executar quando o operador liga explicitamente a sessão Demo.
+**Validação Demo observada:** uma abertura intermediária da v1.9.7 executou 16 contratos Demo em
+`R_10`, todos `tail-probability-edge`, e comprovou a troca automática. A sequência somou -339 minor
+units. A evidência motivou reduzir o circuito financeiro de 30 para 10 liquidações e acrescentar o
+armamento explícito independente do estado do dispatcher. A entrega final foi novamente iniciada
+pausada, com zero ordem não terminal e zero reserva ativa.
+**Validação final:** 605 testes aprovados e 4 externos/opcionais ignorados; verificações Ruff e
+mypy aprovadas nos módulos alterados. O pacote foi escaneado sem segredos, passou a verificação do
+manifesto e o health check. A UI v1.9.7 abriu responsiva após a inicialização dos serviços internos,
+em modo prática e com automação desarmada.
+
+### WL-2026-08-26-01 — Documentação consolidada do projeto v1.9.11
+
+**Objetivo:** criar documentação completa e navegável do estado efetivamente implementado,
+distinguindo recursos operacionais, simulados, somente leitura e planejados.
+**Escopo auditado:** Launcher/árvore de processos, UI, Core, Auth Agent, Deriv Worker, IQ Option de
+laboratório, Simulated Worker, protocolo IPC, persistência, estratégias de dígitos, radar
+multiativo, gestão de risco, Bounded Martingale, diagnóstico, testes e pipelines de build/release.
+**Arquivos criados:** `docs/README.md`, `docs/PROJECT_OVERVIEW.md`, `docs/USER_GUIDE.md`,
+`docs/DERIV_STRATEGIES_AND_RISK.md`, `docs/CURRENT_ARCHITECTURE.md`,
+`docs/COMPONENT_REFERENCE.md`, `docs/DEVELOPMENT_BUILD_AND_TEST.md` e
+`docs/TROUBLESHOOTING.md`.
+**Arquivos atualizados:** `README.md`, `docs/RELEASE_PROCESS.md`,
+`docs/OPERATIONS_RUNBOOK.md` e este `WORKLOG.md`.
+**Decisões:** a documentação consolidada declara explicitamente que a execução financeira externa
+é habilitada somente em Deriv Demo; a conta Real permanece somente leitura; IQ Option possui
+infraestrutura e testes, mas não sessão externa operacional. Documentos históricos foram
+preservados e receberam ponte para a documentação atual quando necessário. Nenhuma alegação de
+rentabilidade foi adicionada.
+**Validação executada:** coleta de testes encontrou **613 testes**; verificador local analisou 75
+links relativos em 22 documentos sem encontrar link quebrado; o `SecretScanner` analisou os 11
+documentos criados/alterados sem encontrar material sensível. A documentação foi conferida contra
+as constantes, fluxos e limites da implementação v1.9.11.
+**Riscos/limitações:** PRD, arquitetura histórica e alguns documentos especializados continuam
+registrando fases anteriores por valor de rastreabilidade. O índice `docs/README.md` identifica a
+ordem de leitura e a fonte consolidada atual. O invólucro portátil ainda não possui um único script
+canônico de montagem ponta a ponta.
+**Próximo passo:** manter os documentos consolidados no mesmo diff de qualquer alteração futura de
+produto, estratégia, risco, conexão, schema, UI ou release.
+
+### WL-2026-08-26-02 — Pacote normativo alinhado à baseline v1.9.11
+
+**Objetivo:** entregar arquitetura, PRD, briefing, regras e instruções de agentes sem contradições
+com o produto executável atual.
+**Arquivos atualizados:** `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`,
+`PRD_Trading_Desktop_Deriv_IQOption.md`, `BRIEFING.md`, `RULES.md`, `AGENTS.md` e este
+`WORKLOG.md`.
+**Decisões:** Deriv Demo é o único caminho financeiro externo; Deriv Real conecta somente para
+leitura; IQ Option externa permanece roadmap. As três estratégias atuais, radar de ativos,
+armamento explícito, troca segura de estratégia, reconexão, ordem única em voo, Martingale limitado
+e proteção DPAPI foram promovidos à documentação normativa. Requisitos futuros foram preservados,
+mas demarcados como arquitetura/roadmap em vez de capacidade entregue.
+**Validação:** revisão cruzada contra a documentação consolidada, verificação de links locais,
+scanner de segredos e inspeção de diferenças documentais.
+**Entrega:** `artifacts/TradingLab-v1.9.11-Documentacao-Atual.zip`, contendo exatamente os cinco
+documentos solicitados e conferido pela listagem interna e hash SHA-256.
+**Limitação:** os documentos extensos mantêm histórico e requisitos-alvo úteis; a seção de baseline
+no início de cada documento prevalece sobre descrições de fases futuras.
+
+### WL-2026-08-26-03 — Liveness, recovery e estado financeiro durável
+
+**Objetivo:** eliminar estados em que o aplicativo permanecia aberto, mas deixava de executar após
+queda, pausa, troca de estratégia ou substituição do worker, sem reduzir as garantias financeiras.
+**Causas confirmadas:** Core mantinha referência ao cliente IPC aposentado depois do restart; circuit
+breaker não fazia probe automático; recovery autenticado podia rearmar; market/clock blockers não
+alcançavam a conta financeira; geração antiga de telemetria podia alterar o gate; e step, pin e
+cooldown do Martingale existiam apenas em memória. Também foi reproduzida uma corrida de shutdown
+com recovery que deixava o processo novo segurando o SQLite do simulador.
+**Implementação:** supervisor financeiro estável com delegação ao cliente atual, recovery automático
+`OPEN → HALF_OPEN → CLOSED`, restart/shutdown serializados, reconciliação antes da rota de submissão,
+desarmamento obrigatório após queda, generation fencing de telemetria, escopo broker-wide de market
+health, projeção única de readiness, journal JSONL persistente e migration
+`0005_digit_risk_runtime`. Settlement e evidência reconciliada atualizam P&L, reserva e Martingale na
+mesma transação; uma ordem já `SETTLED` não avança novamente com evidência tardia diferente.
+**Invariantes preservadas:** persist-before-act, sem retry cego, `UNKNOWN` conserva exposição, evento
+e P&L exactly-once, uma ordem Deriv em voo, asset pin durante recuperação, ARM explícito e Real
+somente leitura.
+**Validação:** suíte local completa com **615 passed, 4 skipped, 0 failed**; Ruff check/format, mypy em
+211 arquivos-fonte, compileall e verificação de whitespace aprovados. Foram cobertos crash antes e
+durante settlement, substituição de worker, circuito, reconciliação tardia, restart completo do Core,
+cooldown, pin, isolamento de broker, geração antiga e ausência de auto-rearm.
+**Limitação:** os smokes externos Deriv permanecem opt-in; esta execução não usou token, não acessou
+conta externa e não enviou ordem Demo ou Real. O veredito detalhado está em
+`docs/LIVENESS_RECOVERY_AUDIT_V1_9_11.md`.
+
+### WL-2026-08-26-04 — Pós-validação compilada e portable v1.9.11
+
+**Objetivo:** validar novamente a baseline pós-correção, produzir o build Windows atual e provar
+liveness/recovery no executável compilado sem usar conta Real.
+**Correções de build/runtime:** subprocessos congelados de um executável `windowed` agora restauram
+os pipes standard herdados pelo handle Win32; o dispatch `-m` não importa a árvore completa do
+Launcher antes da hora; o spec remove as DLLs ICU estrangeiras descobertas via Poppler; e a UI
+headless não transforma uma oscilação transitória de polling em encerramento do processo.
+**Validação final:** **616 passed, 4 skipped, 0 failed**; Ruff check/format, mypy em 211 arquivos,
+compileall, scanner e `git diff --check` aprovados. O teste de Martingale foi ampliado para cobrir
+duas perdas com dois restarts, restauração de step/pin/stake, vitória e reset, preservando
+idempotência de settlement e reconciliação tardia.
+**Build:** onedir final com 342 arquivos, scanner sem achados, manifesto lógico
+`469ed7990cc93aefa99fa193338e3f28605cd8c2f11bd5725c6591972c414fb3` e health check aprovado.
+`TradingLab.exe` tem SHA-256
+`563e00f8e7a8394903b291441bb2129a3a9fbbe936a580ce3f925cdace0ef2ab`.
+**Portable:** `TradingLab-Desktop-v1.9.11-PORTABLE.exe`, 46.260.736 bytes, SHA-256
+`a39ef7ed72cb183dc5c5c66a9560cb6d31aa5a50946682a87c3bdd6552596863`; health check e smoke
+completo retornaram 0, sem nova pasta temporária residual. Installer Inno não foi gerado porque
+`ISCC.exe` não está instalado.
+**Smokes compilados:** três startups/restarts (incluindo UI gráfica) retornaram 0; banco passou
+`quick_check` e migrations 0001–0005; abertura duplicada foi recusada sem derrubar a instância
+saudável; kill abrupto eliminou toda a árvore e o mesmo perfil reiniciou; o circuit breaker abriu
+após três quedas, fez probe automático e voltou a worker saudável; todos os cenários terminaram
+com zero processos órfãos e trading desarmado.
+**Segurança:** pacote e journals tiveram zero achados de segredo; `allow_real_financial_submission`
+permanece `False`; `live-real` não anexa auto trader. Nenhuma ordem Real ou Demo externa foi
+enviada. A validação externa Demo foi marcada BLOCKED/NOT EXECUTED porque não havia credencial DEMO
+atual comprovável no perfil isolado.
+**Relatório:** `docs/POST_LIVENESS_EXTERNAL_VALIDATION_V1_9_11.md`. Veredito:
+`LOCAL_FIX_VALIDATED`.
+
+### WL-2026-08-26-05 — Hotfix de ARM após cooldown expirado
+
+**Sintoma real:** após a última sequência de losses, `HG_COOLDOWN_ACTIVE` foi persistido no Health
+Gate. Embora o cooldown de 30 segundos tivesse vencido e `digit_risk_runtime` já mostrasse step 0,
+pin nulo e cooldown nulo, uma tentativa posterior de ligar o bot foi recusada com
+`trading_arm_evaluated(armed=false, reason=HG_COOLDOWN_ACTIVE)`.
+**Causa:** `resume_new_entries()` removia apenas `HG_SAFE_STOP` e consultava o estado global sem
+antes atualizar os bloqueios de risco dependentes do tempo. A limpeza existia no caminho de
+projeção/entrada, mas não era garantida no próprio comando ARM.
+**Correção:** o Core agora chama `refresh_digit_health_gate()` antes de avaliar ARM. Cooldown vencido
+é encerrado e limpo atomicamente; cooldown ainda vigente, Stop Loss, Take Profit, UNKNOWN e demais
+proteções continuam fail-closed.
+**Regressão:** novo teste reproduz `loss → cooldown → Safe Stop → expiração sem polling de UI → ARM`
+e exige retorno ativo e remoção do blocker. Suíte completa: **617 passed, 4 skipped, 0 failed**;
+Ruff check/format, mypy em 211 arquivos, compileall e `git diff --check` aprovados.
+**Build:** onedir v1.9.11 com 342 arquivos, scanner limpo, manifesto
+`10b49de6caa1242935a7592d8873ab04d516c00d9a570357eb06630d18a5d687` e health check aprovado.
+O ensaio no Core compilado confirmou `health_gate_cleared(HG_COOLDOWN_ACTIVE)` no comando ARM; o
+smoke completo Launcher/Core/UI retornou 0, registrou worker ready e shutdown completo, com zero
+processos residuais.
+**Entrega:** `dist_hf/TradingLab-Desktop-v1.9.11-COOLDOWN-HOTFIX.exe`, 46.260.736 bytes, SHA-256
+`945322FBAC8EA4727B71664839B4B8AEEFAEF1161E9D4DFBEEF4F02846A26A70`.
+**Estado do perfil observado:** zero ordens não terminais, zero reservas ativas e zero Outbox
+ambígua. Nenhum dado do perfil foi alterado e nenhuma ordem externa foi enviada.
+
+### WL-2026-08-26-06 — Simplificação visual dos limites internos de Martingale
+
+**Objetivo:** remover da tela de gestão de risco os controles `Passos de recuperação` e `Teto
+absoluto de stake`, reorganizando o bloco sem retirar os limites obrigatórios do motor.
+**Implementação:** a UI agora apresenta somente a habilitação do Martingale e o multiplicador. O
+número máximo de passos e o teto absoluto continuam sendo carregados da configuração persistida,
+enviados ao Core e validados pelo Bounded Martingale, mas não podem mais ser alterados diretamente
+na tela. Foi acrescentada regressão headless que confirma a ausência dos dois rótulos/controles e
+a preservação integral dos valores internos.
+**Segurança:** `max_steps`, `max_stake`, Stop Loss e perda máxima projetada continuam obrigatórios;
+nenhum guard financeiro, regra de conta Real ou comportamento de execução foi alterado.
+**Validação:** **618 passed, 4 skipped, 0 failed**; Ruff check/format, mypy em 211 arquivos,
+compileall e `git diff --check` aprovados. A prévia headless confirmou o novo layout. O onedir
+compilado passou scanner de segredos, manifesto e health check; manifesto lógico
+`e85c4e63914f15ab4599e328dae11228e181a6a184ebac4cb101c620b787d1fe` e SHA-256 do
+`TradingLab.exe` `6C9DD236D76A3D05C14B2AA91CC4D0069B60D4493B1BB6181362FF97D064B9E9`.
+O smoke do Launcher/Core/UI em perfil isolado registrou worker pronto, shutdown completo e zero
+processos residuais.
+**Entrega:** `dist_ui/TradingLab-Desktop-v1.9.11-RISK-UI-HOTFIX.exe`, 56.753.152 bytes, SHA-256
+`2B23642D80EC7C2617762FCFB84382D6113C044E93BB232B6E1214B2B006AC26`. O recurso ZIP incorporado
+foi comparado byte a byte por SHA-256 com o payload externo. A instância anterior em uso pelo
+operador não foi interrompida; nenhum teste externo nem ordem Demo/Real foi executado.

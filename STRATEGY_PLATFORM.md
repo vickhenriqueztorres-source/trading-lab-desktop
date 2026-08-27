@@ -159,3 +159,92 @@ ordem já aceita, suspendem a estratégia, bloqueiam a próxima entrada e ainda 
 - assinatura de pacotes remotos pertence a uma fase futura; FR-109 não foi implementado.
 
 Detalhes e limites do contrato estão em `docs/CLOSED_CANDLE_REPLAY.md`.
+
+## 8. Gestão de risco especializada para DIGITDIFF
+
+O Core mantém uma `DigitRiskConfig` imutável para operações Deriv `DIGITDIFF`. Stake, Stop Loss,
+Take Profit e P&L usam minor units inteiros com moeda USD explícita. A configuração também limita
+perdas consecutivas, define cooldown monotônico e restringe o ativo a uma allowlist de índices
+sintéticos.
+
+Antes da reserva e do despacho, o `RiskLedger` verifica, em modo fail-closed:
+
+1. Stop Loss diário (`HG_DAILY_STOP_REACHED`);
+2. Take Profit diário (`HG_DAILY_TAKE_PROFIT_REACHED`);
+3. cooldown pós-perda (`HG_COOLDOWN_ACTIVE`).
+
+As travas impedem somente novas entradas. Eventos e liquidações de contratos já abertos continuam
+sendo processados e persistidos. A UI não grava configuração financeira: envia
+`UI_UPDATE_DIGIT_RISK_CONFIG_COMMAND` pelo IPC autenticado e recebe a configuração efetiva no
+snapshot seguinte.
+
+O campo chamado “confiança quântica” é apenas um limiar decimal configurável consumido por uma
+estratégia futura. Ele não representa probabilidade calibrada, previsão de lucro ou garantia de
+resultado, e esta fatia não introduz uma estratégia comercial nem afirma vantagem estatística.
+
+## 9. Motor de ticks e execução DIGITDIFF de 1 tick
+
+O Deriv Worker mantém uma janela circular fixa do índice sintético selecionado. Cada tick preserva
+o preço em `Decimal`, extrai o último dígito sem conversão para `float` e atualiza em O(1) as dez
+frequências e a matriz 10x10 de transições, inclusive ao ejetar o item mais antigo. A memória não
+cresce com o tempo. Latência de recebimento e custo local usam relógio monotônico.
+
+A projeção da UI exibe dez barras verticais: maior frequência observada em âmbar e menor em ciano.
+Esses contadores descrevem somente a janela histórica em memória. Não são probabilidade calibrada,
+sinal, previsão nem garantia de retorno.
+
+Uma intenção `DIGITDIFF` válida continua seguindo a ordem financeira obrigatória:
+
+```text
+Risk Ledger → TradeIntent + reserva + Outbox no SQLite → dispatch → buy Deriv
+```
+
+O comando durável inclui `prediction_digit`. Somente depois do commit o worker envia a compra direta
+oficial com stake em USD, `DIGITDIFF`, barreira, duração de um tick e IDs de rastreio. A liquidação
+usa o `profit` oficial e confere o último dígito de saída contra a barreira; conflito ou ausência de
+evidência permanece fail-closed. Contratos não-DIGITDIFF continuam usando proposta seguida de compra
+por ID.
+
+## 10. Três estratégias de dígitos em validação Demo
+
+A aba Deriv acompanha três hipóteses determinísticas. Em dados públicos e conta Real elas permanecem
+`RESEARCH_SHADOW`. Na conta Demo explicitamente conectada, o botão **Ligar Bot** promove somente o
+sinal novo daquela sessão a `PRACTICE_VALIDATION`, passando por alocação, Risk Ledger, commit de
+`TradeIntent`/reserva/Outbox e worker autenticado:
+
+1. **Tail Probability Edge** — avalia `DIGITOVER` e `DIGITUNDER` nas barreiras 2/3/4 e 7/6/5,
+   condicionado à paridade do dígito anterior.
+2. **Selective Differs Edge** — escolhe o dígito menos provável para `DIGITDIFF`, mas exige que as
+   três janelas independentes indiquem o mesmo dígito e superem o piso conservador.
+3. **Parity Regime Edge** — avalia `DIGITEVEN` e `DIGITODD` condicionado à paridade anterior.
+
+Todas usam os últimos 500 ticks, janelas de 200/350/500 observações e limite Wilson unilateral de
+99%. Um sinal só aparece quando as três janelas concordam; dados uniformes de controle permanecem em
+`MONITORING`. O hot path mede latência monotônica e a projeta para a UI. O executor Demo consome no
+máximo um candidato novo por epoch, escolhe deterministicamente a maior margem conservadora quando
+há simultaneidade e nunca reutiliza sinal vencido. Real não possui capability de submissão. A gestão
+de stake (fixa ou Bounded Martingale com teto de etapas e stop loss) é de domínio exclusivo do
+Portfolio Allocator e Risk Ledger do Core; estratégias não calculam stake e martingale ilimitado é
+proibido.
+
+### Radar multiativo Shadow
+
+O Core observa `R_10`, `R_25`, `R_50`, `R_75` e `R_100` em paralelo, desde que a descoberta
+`active_symbols` confirme que o ativo está negociável e `contracts_for` confirme ao menos um
+contrato de dígitos suportado. Cada ativo possui sua própria instância de
+`DerivDigitShadowEngine`, janela de 500 ticks, aquecimento, decisões e latência; históricos e
+transições nunca são compartilhados entre símbolos.
+
+O radar ordena somente candidatos estatísticos atuais pela margem conservadora entre a estimativa
+e o piso da estratégia. No máximo um item recebe a marca visual de candidato principal. Quando
+nenhum ativo supera o filtro, o estado é explicitamente **sem vantagem/abstenção**. Esse ranking:
+
+- é somente `RESEARCH_SHADOW` e não cria `TradeIntent`, reserva ou ordem;
+- não muda automaticamente o ativo escolhido pelo operador;
+- não participa do cálculo de stake ou da sequência de Martingale;
+- não representa EV líquido, porque a camada de payout/custos ainda não foi incorporada;
+- não pode derrubar a conexão do ativo principal se um stream secundário falhar.
+
+Uma promoção futura para seleção executável exige payout válido e recente por ativo/contrato,
+estimativa calibrada fora da amostra, EV líquido conservador, histerese/cooldown, limites de
+exposição e aprovação explícita no Core. Até lá, a UI apresenta o radar como evidência de pesquisa.

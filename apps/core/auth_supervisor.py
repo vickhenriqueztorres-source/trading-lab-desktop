@@ -52,6 +52,7 @@ class AuthAgentSupervisor:
         profile_dir: Path,
         *,
         force_simulation: bool = False,
+        allow_real_mode: bool = False,
         enable_test_otp: bool = False,
         test_lease_ttl_seconds: float | None = None,
         startup_timeout: float = 5.0,
@@ -64,13 +65,16 @@ class AuthAgentSupervisor:
             raise ValueError("auth supervisor timeouts must be positive")
         self._profile_dir = Path(profile_dir)
         self._force_simulation = force_simulation
+        self._allow_real_mode = allow_real_mode
         self._enable_test_otp = enable_test_otp
         if test_lease_ttl_seconds is not None and (
             not enable_test_otp or not 0 < test_lease_ttl_seconds <= 7 * 24 * 60 * 60
         ):
             raise ValueError("test lease TTL requires the test OTP channel")
         self._lease_ttl_seconds = (
-            float(7 * 24 * 60 * 60) if test_lease_ttl_seconds is None else test_lease_ttl_seconds
+            float((24 if allow_real_mode else 7 * 24) * 60 * 60)
+            if test_lease_ttl_seconds is None
+            else test_lease_ttl_seconds
         )
         self._startup_timeout = startup_timeout
         self._request_timeout = request_timeout
@@ -131,13 +135,14 @@ class AuthAgentSupervisor:
             self._process = process
             self._session_token = session_token
             self._test_otp = test_otp
-        startup = {
-            "force_simulation": self._force_simulation,
-            "lease_ttl_seconds": self._lease_ttl_seconds,
-            "profile_dir": str(self._profile_dir),
-            "session_token": session_token.reveal_text(),
-            "test_otp": None if test_otp is None else test_otp.value,
-        }
+            startup = {
+                "allow_real_mode": self._allow_real_mode,
+                "force_simulation": self._force_simulation,
+                "lease_ttl_seconds": self._lease_ttl_seconds,
+                "profile_dir": str(self._profile_dir),
+                "session_token": session_token.reveal_text(),
+                "test_otp": None if test_otp is None else test_otp.value,
+            }
         try:
             if process.stdin is None:
                 raise RuntimeError("auth agent stdin is unavailable")
@@ -193,7 +198,9 @@ class AuthAgentSupervisor:
     def renew(self) -> AuthCheckAuthorizationResponse:
         return self.client.renew()
 
-    def authorization(self, broker: str, strategy_pack: str) -> AuthorizationDecision:
+    def authorization(
+        self, broker: str, strategy_pack: str, *, real_mode: bool = False
+    ) -> AuthorizationDecision:
         with self._lock:
             client = self._client
             ready = self._state is AuthAgentHealthState.READY
@@ -203,7 +210,7 @@ class AuthAgentSupervisor:
             response = client.check_authorization(
                 broker,
                 strategy_pack,
-                mode=AuthMode.PRACTICE,
+                mode=AuthMode.REAL if real_mode else AuthMode.PRACTICE,
             )
             reason = AuthorizationReason(response.reason_code)
         except (AuthIpcError, ValueError):

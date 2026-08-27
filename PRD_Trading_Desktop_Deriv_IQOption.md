@@ -1,29 +1,53 @@
 # PRD — Plataforma Desktop de Trading Automatizado para Deriv e IQ Option
 
-**Nome provisório:** DualTrade Desktop  
-**Versão do PRD:** 1.1  
-**Status:** atualizado com identidade/licenciamento e plataforma multi-estratégias; pronto para refinamento técnico e planejamento  
-**Plataforma inicial:** Windows 10/11 64 bits  
-**Idioma inicial:** português do Brasil  
+**Produto:** Trading Lab Desktop
+
+**Versão do PRD:** 1.9.11
+
+**Status:** baseline executável atual + requisitos-alvo identificados como roadmap
+
+**Atualizado em:** 2026-08-26
+
+**Plataforma inicial:** Windows 10/11 64 bits
+
+**Idioma inicial:** português do Brasil
 **Documento técnico relacionado:** `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`
 
-**Estado executável da Fase 3 (Fatia 3.4 Concluída):** o sistema suporta execução multi-corretora
-(Deriv Demo + IQ Option Practice), gestão de risco global e alocação consolidada, pacote de diagnóstico
-redigido e suporte local (`DiagnosticBundleBuilder`), calculadora de métricas estatísticas puras com `Decimal`
-(`StrategyPerformanceMetrics`), motor de Walk-Forward Analysis (`WalkForwardEngine`), repositório de validação
-durável em `strategy_data.db` (`SqliteValidationRepository`), gate formal de promoção de ciclo de vida
-no catálogo de estratégias, empacotamento Windows Onedir com verificação de integridade no startup
-(`ReleaseIntegrityVerifier`), e mecanismo de atualizações assinadas com Ed25519, checagem de exposição ativa
-e rollback transacional automático (`UpdateManager`, `UpdateApplier`). Todas as operações financeiras continuam
-estritamente em ambiente DEMO/PRACTICE com persistência atômica e proteção fail-closed.
+## 0. Baseline executável v1.9.11
+
+Esta seção é a fotografia autoritativa do produto entregue. Requisitos posteriores que descrevem
+IQ Option operacional, conta Real financeira, identidade remota, instalador ou atualização assinada
+são requisitos-alvo e não devem ser interpretados como capacidade disponível.
+
+| Área | Disponível na v1.9.11 |
+|---|---|
+| Windows desktop | UI PySide6, launcher portátil, instância única e supervisão |
+| Deriv pública | ticks, catálogo/diagnóstico e transporte fake-public padrão |
+| Deriv autenticada | API Token interno, lista oficial de contas e seleção Demo/Real |
+| Deriv Demo | conexão, saldo, ticks, execução das três estratégias e reconciliação |
+| Deriv Real | conexão e monitoramento read-only; submissão financeira desabilitada |
+| IQ Option | domínio, worker/harnesses e testes; sem login ou execução externa no app |
+| Estratégias | Tail Probability Edge, Selective Differs Edge e Parity Regime Edge |
+| Risco | ledger, limites, cooldown, filtro de desempenho e Martingale limitado opcional |
+| Dados | `state.db` financeiro e `strategy_data.db` de análise |
+| Diagnóstico | pacote ZIP local redigido, sem vault, token ou bancos |
+
+A suíte atual coleta 613 testes. Esse número mede cobertura de comportamento e segurança, não
+rentabilidade. O nome histórico “DualTrade” permanece em partes do domínio e da documentação;
+“Trading Lab Desktop” é o nome exibido na aplicação atual.
 
 ## 1. Resumo executivo
 
-O DualTrade Desktop será um aplicativo Windows para execução automatizada de estratégias de trading nas corretoras Deriv e IQ Option. Todo o ciclo operacional — conexão, dados de mercado, estratégia, risco, envio de ordens, acompanhamento, recuperação e histórico — ocorrerá localmente no computador do cliente.
+O Trading Lab Desktop é um aplicativo Windows que hoje executa estratégias na Deriv Demo e mantém
+uma arquitetura preparada para integração independente da IQ Option. Todo o ciclo implementado —
+conexão, dados de mercado, estratégia, risco, envio Demo, acompanhamento, recuperação e histórico —
+ocorre localmente no computador do cliente.
 
 O produto não prometerá lucro nem apresentará estratégias como garantidas. Sua proposta de valor será oferecer execução disciplinada, controles de risco, transparência operacional e recuperação segura diante de falhas comuns de internet, corretora ou computador.
 
-O MVP validará as duas corretoras em contas de demonstração/practice. Conta real será uma fase posterior, protegida por critérios técnicos, confirmação explícita e limites conservadores.
+A v1.9.11 valida execução externa somente na Deriv Demo. A conta Deriv Real pode ser conectada para
+leitura, mas não recebe ordens. A integração operacional da IQ Option e qualquer execução Real são
+marcos posteriores protegidos por critérios técnicos, jurídicos e de risco.
 
 ## 2. Problema
 
@@ -33,7 +57,7 @@ Traders que desejam automatizar estratégias em Deriv e IQ Option encontram um a
 - a integração da IQ Option não possui a mesma estabilidade contratual de uma API oficial;
 - bots existentes frequentemente misturam estratégia, risco, conexão e execução no mesmo código;
 - falhas de internet podem produzir ordens duplicadas ou desconhecidas;
-- martingale e promessas de win rate escondem o risco real;
+- martingale ilimitado e promessas de win rate escondem o risco real de ruína;
 - o usuário raramente consegue entender por que uma entrada ocorreu ou foi bloqueada;
 - soluções dependentes de servidor geram custo, dependência e custódia de credenciais.
 
@@ -103,26 +127,26 @@ O produto precisa automatizar sem transformar uma falha técnica em exposição 
 
 ## 7. Objetivos
 
-### Objetivos do MVP
+### Objetivos entregues na baseline v1.9.11
 
-- suportar Deriv e IQ Option em modo demo/practice;
-- permitir conexão independente das duas corretoras;
-- suportar um catálogo versionado de estratégias candidatas, liberando para execução apenas versões aprovadas pelos gates de validação;
-- incluir inicialmente três arquétipos candidatos — continuação de tendência, reversão em mercado lateral e expansão de volatilidade — sem tratá-los como estratégias comprovadamente lucrativas;
-- executar estratégias aprovadas com candles fechados, manifesto versionado e estado isolado;
-- operar um ativo por conta e uma operação simultânea por conta;
-- aplicar stake fixa ou percentual sem martingale;
+- suportar Deriv Demo com execução financeira externa e Deriv Real read-only;
+- manter a IQ Option isolada no domínio e em testes, ainda sem integração operacional na UI;
+- suportar catálogo versionado e execução das três estratégias Digit Edge;
+- incluir Tail Probability Edge, Selective Differs Edge e Parity Regime Edge, sem tratá-las como estratégias comprovadamente lucrativas;
+- executar estratégias de um tick com manifesto versionado e estado isolado;
+- manter uma única ordem Deriv em voo;
+- aplicar stake fixa ou Martingale opcional delimitado por etapas, multiplicador, stake máxima e stop loss;
 - bloquear entradas quando saúde, risco ou dados não forem confiáveis;
 - registrar sinais, bloqueios, ordens, resultados e incidentes;
 - recuperar com segurança após crash, queda de internet ou suspensão do Windows;
-- gerar relatório local exportável;
-- produzir instalador reproduzível para Windows;
-- autenticar o cliente com um único mecanismo visível de e-mail + código de seis dígitos;
-- registrar dispositivo com identidade aleatória e chave própria, mantendo tokens e lease protegidos no Windows;
-- operar com lease assinada e renovação silenciosa sem transformar o serviço de identidade em servidor de trading.
+- gerar pacote de diagnóstico local redigido;
+- proteger a credencial Deriv com Windows DPAPI e manter o App ID público interno;
+- iniciar sempre desarmado e exigir ação explícita do operador para novas entradas.
 
 ### Objetivos da versão 1.0 comercial
 
+- produzir instalador reproduzível e binários assinados para Windows;
+- ativar identidade/licenciamento remoto apenas se o modelo comercial exigir;
 - habilitar conta real com fluxo de confirmação e critérios mínimos;
 - oferecer atualização assinada e reversível;
 - disponibilizar pacote de diagnóstico redigido;
@@ -148,12 +172,12 @@ O produto precisa automatizar sem transformar uma falha técnica em exposição 
 | ID | Premissa |
 |---|---|
 | A-01 | O produto será distribuído como aplicativo Windows local. |
-| A-02 | Deriv e IQ Option são obrigatórias, mas possuem integrações independentes. |
+| A-02 | O alvo continua multi-corretora, com integrações independentes; somente a Deriv está operacional externamente na v1.9.11. |
 | A-03 | A execução não dependerá de servidor próprio. |
 | A-04 | Um plano de controle remoto mínimo PODE ser usado para identidade, dispositivos, assinatura/entitlements, catálogo/compatibilidade, atualização e telemetria consentida; ele NÃO executa trades nem recebe credenciais de corretora. |
-| A-05 | O MVP operará somente em demo/practice. |
+| A-05 | A v1.9.11 envia ordens somente à Deriv Demo; Deriv Real é read-only e IQ Option externa permanece planejada. |
 | A-06 | A primeira estratégia compartilhada utilizará candles fechados e parâmetros versionados. |
-| A-07 | Martingale ficará fora do MVP. |
+| A-07 | Martingale, quando habilitado, deve ser estritamente delimitado (teto de etapas, multiplicador e stop loss financeiro); martingale ilimitado é proibido. |
 | A-08 | O usuário é responsável por possuir e utilizar contas elegíveis nas corretoras. |
 | A-09 | O aplicativo deverá interromper entradas diante de incerteza operacional. |
 | A-10 | Credenciais nunca serão enviadas para infraestrutura do produto. |
@@ -172,6 +196,10 @@ O produto precisa automatizar sem transformar uma falha técnica em exposição 
 
 ### MVP — validação operacional
 
+Nesta seção, “Incluído” representa o escopo de produto originalmente definido. O estado realizado
+de cada item deve ser conferido na seção 0; itens IQ Option, identidade remota, instalador e conta
+Real financeira continuam roadmap.
+
 Incluído:
 
 - onboarding e aviso de risco;
@@ -183,7 +211,7 @@ Incluído:
 - catálogo local de estratégias candidatas e Strategy Runtime;
 - Signal Arbiter e Portfolio Allocator antes do Risk Ledger;
 - estratégia(s) liberada(s) somente após validação e status compatível;
-- stake fixa e percentual;
+- stake fixa, percentual e gestão delimitada (Bounded Martingale com teto de etapas e stop loss);
 - stop diário, limite de perdas consecutivas e limite de operações;
 - uma operação simultânea por conta;
 - modo simulado, demo/practice;
@@ -199,7 +227,7 @@ Incluído:
 Não incluído:
 
 - conta real;
-- martingale;
+- martingale ilimitado;
 - múltiplas estratégias simultâneas por conta;
 - marketplace de estratégias;
 - sincronização entre computadores;
@@ -332,20 +360,20 @@ Prioridades: **P0** obrigatório para o MVP; **P1** obrigatório para beta; **P2
 | FR-003 | P0 | Criar perfil local | Preferências são restauradas sem conter credenciais em texto puro. |
 | FR-004 | P1 | Atualizar com assinatura e rollback | Pacote adulterado é rejeitado; falha de health check restaura versão anterior. |
 
-Na implementação local atual, `profile.lock` rejeita o segundo Launcher e o lock próprio do Core
-continua sendo a defesa independente contra dois writers. O redirecionamento visual para uma
-instância existente depende da UI futura.
+Na implementação atual, `profile.lock`, mutex nativo e o lock próprio do Core impedem dois writers.
+Uma segunda abertura do executável portátil traz a janela existente para frente em vez de iniciar
+outro Core.
 
 ### 14.2 Contas e autenticação
 
 | ID | Pri. | Requisito | Critério de aceite resumido |
 |---|---:|---|---|
 | FR-010 | P0 | Conectar conta demo Deriv | Conta, saldo, moeda e modo são confirmados antes de `READY`. |
-| FR-011 | P0 | Conectar conta practice IQ Option | Conta, saldo, moeda e modo são confirmados antes de `READY`. |
+| FR-011 | P1 | Conectar conta practice IQ Option | Planejado: conta, saldo, moeda e modo são confirmados antes de `READY`. |
 | FR-012 | P0 | Desconectar uma corretora sem afetar a outra | Deriv continua saudável quando IQ é desconectada e vice-versa. |
 | FR-013 | P0 | Remover credenciais locais | Após remoção, nova conexão exige autenticação novamente. |
 | FR-014 | P0 | Impedir troca silenciosa de practice para real | Mudança de modo força bloqueio, reconciliação e confirmação. |
-| FR-015 | P1 | Habilitar conta real controladamente | Requer feature flag, confirmação explícita e todos os gates aprovados. |
+| FR-015 | P1 | Habilitar conta real controladamente | A conexão read-only exige confirmação explícita; envio financeiro continua bloqueado até todos os gates serem aprovados. |
 
 ### 14.3 Saúde e capacidades
 
@@ -416,15 +444,13 @@ instância existente depende da UI futura.
 | FR-074 | P0 | Destacar conta real | Modo real utiliza cor, texto e confirmação não confundíveis com practice. |
 | FR-075 | P1 | Oferecer acessibilidade básica | Navegação por teclado, contraste e escala do Windows funcionam nas telas principais. |
 
-**Implementação atual da UI:** `apps/ui` usa PySide6/Qt 6 e um controller testável, conectados somente
-ao serviço loopback autenticado do Core. A navegação separa Visão geral, Deriv, IQ Option,
-Atividade e Configurações; cada corretora possui Status e Configuração próprios, e controles ainda
-não confirmáveis pelo Core aparecem apenas como explicação de somente leitura. `UI_SAFE_STOP_COMMAND` acrescenta `HG_SAFE_STOP` e não
-interrompe event pump, reconciliação ou settlement. `UI_RESUME_COMMAND` remove somente esse motivo e
-só reabre entradas se nenhum outro gate estiver bloqueado. O fechamento seguro da janela sinaliza
-o Launcher por estado de lifecycle; kill/desconexão da UI apenas degrada a projeção e deixa o Core
-vivo. Saldos e relógio são exibidos como indisponíveis/não comprovados enquanto não existir fonte
-practice autoritativa; zero nunca é fabricado. P&L só é agregado quando há uma única moeda provada.
+**Implementação atual da UI:** `apps/ui` usa PySide6/Qt 6 e um controller testável, conectado ao
+serviço loopback autenticado do Core. A navegação separa Visão geral, Deriv, IQ Option, Atividade e
+Configurações. Na área Deriv, o usuário conecta por token, seleciona conta, escolhe estratégia,
+configura risco, arma/pausa o bot e acompanha ticks, ordens e resultados em tempo real.
+`UI_SAFE_STOP_COMMAND` acrescenta `HG_SAFE_STOP` sem interromper event pump, reconciliação ou
+settlement. Ao retomar ou trocar estratégia, o motor exige um sinal novo. Fechamento seguro
+sinaliza o Launcher; falha da UI degrada apenas a projeção e o Core permanece autoritativo.
 
 ### 14.9 Histórico e diagnóstico
 
@@ -466,7 +492,7 @@ practice autoritativa; zero nunca é fabricado. P&L só é agregado quando há u
 | FR-108 | P0 | Distribuir somente código confiável no MVP | Estratégias vêm compiladas/empacotadas com a aplicação; Python arbitrário baixado não é executado. |
 | FR-109 | P1 | Suportar pacotes assinados e entitlement | Pacote remoto adulterado, não autorizado, suspenso ou incompatível é rejeitado. |
 | FR-110 | P0 | Suspender estratégia sem abandonar operação existente | `SUSPENDED` impede novas entradas e mantém acompanhamento das ordens abertas. |
-| FR-111 | P0 | Manter candidatas iniciais separadas de promessa de resultado | Tendência, reversão lateral e expansão de volatilidade são candidatas para validação, não garantias de rentabilidade. |
+| FR-111 | P0 | Manter estratégias atuais separadas de promessa de resultado | Tail Probability Edge, Selective Differs Edge e Parity Regime Edge são experimentais, não garantias de rentabilidade. |
 
 ## 15. Regras de negócio
 
@@ -483,7 +509,7 @@ practice autoritativa; zero nunca é fabricado. P&L só é agregado quando há u
 | BR-009 | Falha de persistência bloqueia imediatamente novas entradas. |
 | BR-010 | Falha de uma corretora não bloqueia a outra, salvo quando o limite global ficar incerto. |
 | BR-011 | Conta real nunca é selecionada por padrão. |
-| BR-012 | Martingale não está disponível no MVP. |
+| BR-012 | Martingale deve ser estritamente delimitado por etapas máximas (max_steps), teto de stake e stop loss financeiro; martingale sem limite é proibido. |
 | BR-013 | Valores financeiros usam moeda explícita e precisão decimal. |
 | BR-014 | “Parar” significa bloquear entradas; não significa eliminar contratos já abertos. |
 | BR-015 | O cliente vê um único login do produto por e-mail + código; identidades e tokens internos não são credenciais manuais. |
@@ -523,8 +549,8 @@ practice autoritativa; zero nunca é fabricado. P&L só é agregado quando há u
 - estratégia compatível;
 - parâmetros;
 - timeframe e expiração válidos;
-- stake;
-- limites de risco;
+- modelo de stake (fixa, percentual ou Bounded Martingale com multiplicador, teto de etapas e projeção de drawdown da sequência);
+- limites de risco e stop loss diário;
 - resumo e validações.
 
 ### 16.4 Dashboard
@@ -909,8 +935,81 @@ Construir o produto em duas trilhas que avançam juntas:
 - **Trilha de confiabilidade:** Core, ledger, persistência, workers, reconciliação, segurança e atualização.
 - **Trilha de evidência:** gravação de dados, replay, prática, métricas e validação de estratégias.
 
-O MVP deve provar primeiro que o sistema opera e falha com segurança nas duas corretoras. Rentabilidade deve ser avaliada depois, com dados reproduzíveis, sem alterar os controles de risco para “melhorar” resultados.
+O produto deve provar primeiro que o sistema opera e falha com segurança na Deriv Demo; a mesma
+prova será exigida separadamente quando a IQ Option ganhar uma integração suportada. Rentabilidade
+deve ser avaliada depois, com dados reproduzíveis, sem afrouxar controles de risco para “melhorar”
+resultados.
 
 ---
 
-**Resumo da decisão de produto:** um aplicativo Windows local, com identidade do produto por e-mail + código de seis dígitos, dispositivo registrado e lease assinada; Deriv e IQ Option isoladas em workers independentes; Strategy Platform versionada com arbitragem antes do risco; modo practice como padrão; candidatas iniciais sujeitas a validação; risco conservador, histórico auditável e conta real somente após critérios técnicos, de autenticação e jurídicos explícitos.
+**Resumo da decisão de produto atual:** um aplicativo Windows local, com Deriv isolada em worker,
+Strategy Platform antes do risco, Demo como único modo financeiro externo, três estratégias Digit
+Edge, risco conservador e histórico auditável. Identidade remota, IQ Option operacional e execução
+Real permanecem arquitetura-alvo até conclusão dos respectivos gates.
+
+## 32. Incremento Deriv Live Demo — execução e reconciliação (2026-08-23)
+
+O worker Deriv passa a oferecer execução automatizada exclusivamente em conta Demo `VRTC...`, sob
+opt-in externo explícito. O Core continua obrigado a persistir `TradeIntent`, `RiskReservation` e
+Outbox na mesma transação antes do IPC `ORDER_SUBMIT`. O worker traduz o comando para `buy`, mantém
+`order_id` e `correlation_id` no `passthrough`, acompanha `proposal_open_contract` e publica eventos
+normalizados `OPEN`/`SETTLED`.
+
+Timeout ou desconexão após o possível envio produz `UNKNOWN`, mantém a reserva ativa e proíbe retry
+automático. A resolução consulta o contrato conhecido ou busca de forma limitada em `statement` e
+`profit_table`, exigindo correspondência de símbolo, direção, stake e moeda. Liquidação comprovada
+atualiza ordem e P&L e libera a reserva atomicamente. Safe Stop bloqueia apenas novas entradas; o
+acompanhamento e a liquidação de contratos abertos permanecem ativos. Conta real e endpoint real
+continuam sem rota executável; a resposta oficial `account_type = demo` é a prova autoritativa.
+
+O build Windows preserva o startup normal e apresenta a conexão Deriv dentro de
+`Deriv > Configuração`. O App ID público fica interno no aplicativo; conta, tipo e token com escopo
+de leitura/operação são persistidos no cofre DPAPI CurrentUser. A UI entrega o token por um canal
+local autenticado e ele não integra o IPC financeiro normal. A autorização efetiva depende da resposta oficial
+`account_type = demo` e de OTP cujo URL aponta exatamente para o WebSocket Demo; o formato textual
+do account ID não substitui essa prova. Falha de autenticação mantém o aplicativo aberto em modo
+público read-only e permite correção interna.
+
+## 33. Liberação formal Deriv Token-only Demo/Real (2026-08-23)
+
+Esta seção registra o desenho aprovado para conta Deriv Real. Na implementação v1.9.11, ela
+autoriza conexão e monitoramento read-only, mas não habilita submissão financeira. IQ Option Real
+continua fora do escopo.
+
+O fluxo suportado é exclusivamente API Token/PAT. O App ID do produto é configuração pública
+interna. Depois de abrir normalmente em modo público read-only, o cliente cola o token na área
+Deriv. A ferramenta consulta a API oficial e exibe somente contas Options ativas classificadas pela
+própria Deriv como `demo` ou `real`. Nenhuma conta é pré-selecionada e Demo aparece antes de Real.
+
+Para Demo, a seleção explícita basta. Para Real, o cliente deve selecionar a conta marcada
+`REAL — DINHEIRO REAL`, marcar a confirmação de risco e digitar `REAL`. O worker deve comprovar a
+mesma conta e tipo no endpoint de contas, obter OTP novo e aceitar somente o WebSocket Real oficial.
+A UI mantém badge, título, modo, moeda e saldo inequívocos enquanto Real estiver conectado.
+
+Antes de qualquer nova entrada Real continuam obrigatórios: entitlement `real_mode_allowed`, lease
+Ed25519 válida de no máximo 24 horas, Health Gate integralmente aberto, estratégia/versionamento
+compatíveis, arbitragem, alocação, Risk Ledger, persistência atômica de intenção/reserva/outbox e
+deadline válido. Safe Stop, expiração ou revogação bloqueiam novas entradas sem abandonar contratos
+abertos. Timeout depois do possível envio permanece `UNKNOWN`, conserva exposição e nunca gera retry
+automático.
+
+O token permanece separado da identidade Trading Lab e é protegido por DPAPI CurrentUser. Não entra
+em argv, IPC financeiro, logs, fixtures, screenshots, banco financeiro ou pacote de release. A troca
+de conta fica bloqueada enquanto houver ordem Deriv não terminal.
+
+Testes comuns e externos usam Demo. É proibido enviar ordem Real durante desenvolvimento, build ou
+aceitação automatizada. A rota Real é validada localmente por transportes fakes, contratos IPC,
+lease assinada e testes de falha; um token sem conta Real não constitui falha do produto, apenas
+indisponibilidade dessa opção para aquele cliente.
+
+### 33.1 Implementação de validação Demo v1.9
+
+A v1.9 libera execução automatizada exclusivamente em Demo para as três estratégias Digit Edge,
+sempre desarmada no startup e ativada pelo botão **Ligar Bot**. Cada sinal de um tick é consumido no
+máximo uma vez, uma única ordem pode ficar em voo e a stake continua subordinada ao Portfolio
+Allocator/Risk Ledger. Over/Under, Differs e Even/Odd compartilham o mesmo caminho durável.
+
+Queda do WebSocket autenticado fecha novas entradas, substitui o worker, obtém OTP novo, reconcilia
+ordens não terminais e restaura ticks antes de voltar a `READY`. Nenhuma ordem com envio ambíguo é
+reenviada. A conta Real segue conectável para monitoramento, mas sem capability financeira nesta
+release até a conclusão independente dos gates descritos nesta seção.

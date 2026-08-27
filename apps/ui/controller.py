@@ -6,8 +6,10 @@ from collections.abc import Callable
 from apps.ui.ipc_client import UiIpcClient, UiIpcError
 from packages.protocol import (
     UiCommandAck,
+    UiDigitRiskConfig,
     UiGenerateDiagnosticResponse,
     UiProjectionSnapshot,
+    UiUpdateDigitRiskConfigAck,
 )
 
 
@@ -72,6 +74,16 @@ class UiController:
     def generate_diagnostic(self) -> UiGenerateDiagnosticResponse:
         return self._client.generate_diagnostic()
 
+    def connect_deriv_demo(self) -> UiCommandAck:
+        ack = self._client.connect_deriv_demo()
+        self.refresh()
+        return ack
+
+    def update_digit_risk_config(self, config: UiDigitRiskConfig) -> UiUpdateDigitRiskConfigAck:
+        ack = self._client.update_digit_risk_config(config)
+        self.refresh()
+        return ack
+
     def stop(self) -> None:
         self._stop.set()
         thread = self._thread
@@ -86,7 +98,10 @@ class UiController:
                 self.refresh()
             except UiIpcError:
                 self._set_state(self.snapshot, False)
-                return
+                # A transient timeout must not permanently freeze the dashboard.  The
+                # serialized IPC client reconnects on the next request, so keep this
+                # bounded poll loop alive until the UI is explicitly stopped.
+                continue
 
     def _set_state(self, snapshot: UiProjectionSnapshot | None, connected: bool) -> None:
         with self._lock:

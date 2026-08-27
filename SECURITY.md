@@ -15,10 +15,12 @@ estado, isolamento entre corretoras e disponibilidade para acompanhar ordens já
 
 ## 2. Estado de segurança da fase atual
 
-- não existe conta real nem rota financeira externa;
-- o worker financeiro executável é simulado;
-- Deriv é somente read-only, com transporte fake padrão; demo live exige opt-in duplo, aceita
-  estritamente conta demo/OTP URL oficial e expõe apenas relógio/saldo reduzidos ao Core;
+- a conexão Deriv Real existe somente após seleção/confirmação explícitas e prova oficial do tipo
+  da conta, mas opera read-only: não cria sessão de ordens, não anuncia `can_submit_orders` e não é
+  anexada ao dispatch financeiro do Core;
+- o worker financeiro simulado permanece o padrão local;
+- Deriv inicia read-only; Demo/Real live exigem seleção interna, conta e OTP oficiais do mesmo tipo;
+  somente Demo pode compor a sessão financeira e ainda permanece sem auto-trader nesta fatia;
 - Auth Agent, UI e Simulated Worker recebem ambiente sanitizado sem variáveis de credencial Deriv
   ou IQ; somente o subprocesso Deriv herda a configuração externa necessária ao opt-in;
 - IQ Option não está implementada;
@@ -86,7 +88,7 @@ validação antes do domínio.
 | credencial em log/fixture | tipos redigidos, allowlist de campos, scanner manual | remover artefato e rotacionar |
 | vault copiado/adulterado | DPAPI CurrentUser, entropia por chave e checksums interno/externo | erro tipado, nenhum valor |
 | ACL ou persistência do vault falha | DACL protegida por SID e replace atômico | startup/operação falha; sem fallback |
-| conta real acidental | capabilities/allowlists e proibição normativa | reason code estável |
+| conta real acidental | nenhuma pré-seleção, confirmação dupla, tipo/OTP coincidentes, lease e capabilities | reason code estável |
 | estratégia adulterada | manifesto, hash, status, entitlement | não carregar/não gerar entrada |
 | sinais conflitantes | Arbiter antes de allocator/risk | nenhuma entrada |
 | licença revogada | gate exclusivo de novas entradas | ordens abertas continuam |
@@ -229,7 +231,8 @@ exija credencial real ou ação financeira e preserve somente evidência redigid
 
 ## 14. Checklist de revisão
 
-- [ ] nenhuma rota real foi criada ou habilitada;
+- [ ] rota Real, quando alterada, preserva seleção/confirmacão explícitas, lease curta, Health Gate e
+  proibição de testes financeiros reais;
 - [ ] entrada externa é validada antes do domínio;
 - [ ] filas, relatórios e payloads possuem limite;
 - [ ] correlação/proveniência foi preservada;

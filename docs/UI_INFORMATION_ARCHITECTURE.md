@@ -22,6 +22,17 @@ Cada aba de corretora possui:
 - **Configuração:** explicação, escopo, valor efetivo confirmado pelo Core e aviso explícito de que
   modo real não está disponível.
 
+Na workspace Deriv, o resumo de risco usa seis cartões em duas linhas para exposição, Stop Loss,
+meta diária, perdas consecutivas, pausa e stake. A aba `Parâmetros e risco` reserva sua área útil aos
+controles efetivos do Core; conteúdo explicativo não pode comprimir ou ocultar campos, Martingale
+delimitado, validação ou o botão de aplicação. O layout de referência 1382×744 não exige scroll.
+
+Em `Mercado ao vivo`, o radar multiativo Shadow aparece antes do painel da estratégia selecionada.
+A tabela mostra posição, ativo, estado, melhor hipótese estatística, margem conservadora e
+aquecimento. A marca de candidato é informativa: não existe botão de execução no radar, ele não
+altera o ativo configurado e deve exibir abstenção quando nenhum candidato conservador existe. O
+aviso visível distingue margem estatística de payout/EV líquido.
+
 ## Configuração explicável
 
 Uma opção editável só pode existir depois de haver comando IPC versionado, validação no Core e
@@ -39,6 +50,9 @@ As seções globais explicam:
 
 - trocar de aba não altera estado financeiro;
 - desconexão IPC conserva a última projeção apenas para visualização e marca o Core desconectado;
+- uma falha IPC transitória não encerra o polling da dashboard: a UI mantém a cadência bounded,
+  tenta reconectar no ciclo seguinte e volta a projetar liquidações sem exigir Safe Stop ou outro
+  comando manual;
 - restart da UI reconstrói as abas a partir da próxima projeção;
 - Safe Stop permanece visível em todas as abas e não abandona operações abertas;
 - broker desconhecido não é inferido como Deriv ou IQ Option;

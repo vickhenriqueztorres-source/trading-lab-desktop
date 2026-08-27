@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 9, 11, 0),
+    prodvers=(1, 9, 11, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,13 +17,13 @@ VSVersionInfo(
           '040904B0',
           [
             StringStruct('CompanyName', 'Trading Lab Systems'),
-            StringStruct('FileDescription', 'Trading Lab Desktop - Practice & Demo Trading Platform'),
-            StringStruct('FileVersion', '1.0.0.0'),
+            StringStruct('FileDescription', 'Trading Lab Desktop - Deriv Digit Research Platform'),
+            StringStruct('FileVersion', '1.9.11.0'),
             StringStruct('InternalName', 'TradingLab'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 Trading Lab Systems. All rights reserved.'),
             StringStruct('OriginalFilename', 'TradingLab.exe'),
             StringStruct('ProductName', 'Trading Lab Desktop'),
-            StringStruct('ProductVersion', '1.0.0.0')
+            StringStruct('ProductVersion', '1.9.11.0')
           ]
         )
       ]

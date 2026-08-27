@@ -248,6 +248,7 @@ class SubprocessCoreController:
             startup = {
                 "headless": self._ui_headless,
                 "port": port,
+                "profile_dir": str(self._profile_dir),
                 "session_token": token.reveal_text(),
             }
             process.stdin.write(json.dumps(startup, separators=(",", ":")) + "\n")

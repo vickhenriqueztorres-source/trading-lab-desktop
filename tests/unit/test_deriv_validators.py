@@ -47,7 +47,17 @@ def test_only_explicit_demo_account_is_accepted() -> None:
 
     with pytest.raises(DerivWorkerError) as captured:
         validate_deriv_account({"account_id": "real-placeholder", "account_type": "real"})
-    assert captured.value.reason_code == "DERIV_REAL_ACCOUNT_FORBIDDEN"
+    assert captured.value.reason_code == "DERIV_ACCOUNT_TYPE_MISMATCH"
+
+    validate_deriv_account(
+        {"account_id": "real-placeholder", "account_type": "real"},
+        expected_account_type="real",
+    )
+
+
+def test_real_websocket_requires_explicit_real_expectation() -> None:
+    url = "wss://api.derivws.com/trading/v1/options/ws/real?otp=placeholder"
+    assert validate_deriv_ws_url(url, expected_account_type="real") == url
 
 
 @pytest.mark.parametrize("opcode", ["buy", "sell", "proposal", "deposit", "withdraw"])

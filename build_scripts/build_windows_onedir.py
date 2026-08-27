@@ -38,7 +38,7 @@ EXCLUDE_PATTERNS = (
 def build_onedir_package(
     source_root: Path,
     output_dir: Path,
-    version: str = "1.0.0",
+    version: str = "1.9.11",
     platform_name: str = "windows_x86_64",
 ) -> Path:
     src = Path(source_root).resolve()
@@ -118,7 +118,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--version",
-        default="1.0.0",
+        default="1.9.11",
         help="Release version string",
     )
     parser.add_argument(

@@ -200,6 +200,21 @@ def test_windows_vault_atomic_replace_failure_leaves_no_partial_blob(
     assert list(directory.glob("*.tmp")) == []
 
 
+def test_windows_vault_supports_long_profile_paths(tmp_path: Path) -> None:
+    directory = tmp_path / "vault"
+    while len(str(directory)) < 155:
+        directory = directory / "long-profile"
+
+    vault = WindowsUserScopedVault(directory)
+    original = SecretValue(secrets.token_bytes(32))
+
+    vault.set_secret("auth-agent-key-registry", original)
+
+    restored = vault.get_secret("auth-agent-key-registry")
+    assert restored is not None
+    assert restored.reveal_bytes() == original.reveal_bytes()
+
+
 def test_factory_uses_explicit_simulation_and_never_masks_windows_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

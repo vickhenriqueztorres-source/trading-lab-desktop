@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
@@ -20,15 +24,20 @@ from PySide6.QtWidgets import (
 from apps.ui.components import (
     BrokerCardWidget,
     BrokerWorkspaceWidget,
+    DerivAssetRadarWidget,
+    DerivWorkspaceWidget,
     GlobalRiskGaugeWidget,
     HealthGatePillWidget,
     OrderTableView,
-    SafeStopButton,
+    ResultsDashboardWidget,
     SettingsWorkspaceWidget,
+    SyntheticStrategyConfigWidget,
+    SyntheticStrategyLiveWidget,
 )
 from apps.ui.controller import UiController
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import I18nManager, t
+from apps.ui.ipc_client import UiIpcError
 from apps.ui.theme import (
     ACCENT_AMBER,
     ACCENT_CYAN,
@@ -38,7 +47,18 @@ from apps.ui.theme import (
     TEXT_SECONDARY,
     get_application_stylesheet,
 )
-from packages.protocol.ui_messages import UiGlobalState
+from packages.protocol.ui_messages import (
+    UiDigitRiskConfig,
+    UiDigitRiskConfigStatus,
+    UiGlobalState,
+)
+from packages.security import without_broker_credentials
+
+APP_VERSION = "1.9.11"
+
+
+def _window_title(mode: str) -> str:
+    return f"{t('app.title')} v{APP_VERSION} — {mode}"
 
 
 class TradingLabMainWindow(QMainWindow):
@@ -50,11 +70,20 @@ class TradingLabMainWindow(QMainWindow):
     _TAB_ACTIVITY = 3
     _TAB_SETTINGS = 4
 
-    def __init__(self, controller: UiController, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        controller: UiController,
+        parent: QWidget | None = None,
+        *,
+        profile_dir: Path | None = None,
+    ) -> None:
         super().__init__(parent)
         self._controller = controller
+        self._profile_dir = Path(profile_dir or "data/profiles/default")
+        self._bot_enabled = False
+        self._deriv_real_selected = False
 
-        self.setWindowTitle(t("app.title") + " — " + t("app.practice_badge"))
+        self.setWindowTitle(_window_title(t("app.practice_badge")))
         self.resize(1180, 780)
         self.setMinimumSize(960, 640)
 
@@ -88,13 +117,19 @@ class TradingLabMainWindow(QMainWindow):
         self._main_tabs.setAccessibleName("Trading Lab navigation")
 
         self._main_tabs.addTab(self._create_overview_page(), "")
-        self._deriv_workspace = BrokerWorkspaceWidget(
-            "DERIV",
-            "Deriv",
-            "broker.deriv.intro",
-            "config.deriv.body",
-        )
+        self._deriv_workspace = DerivWorkspaceWidget()
         self._main_tabs.addTab(self._deriv_workspace, "")
+        self._deriv_workspace.deriv_demo_connect_requested.connect(self._on_connect_deriv_demo)
+        self._synthetic_config_panel = SyntheticStrategyConfigWidget()
+        self._asset_radar_panel = DerivAssetRadarWidget()
+        self._synthetic_live_panel = SyntheticStrategyLiveWidget()
+        self._deriv_workspace.set_configuration_widget(self._synthetic_config_panel)
+        self._deriv_workspace.set_live_widget(self._asset_radar_panel)
+        self._deriv_workspace.set_live_widget(self._synthetic_live_panel)
+        self._deriv_workspace.strategy_selected.connect(self._on_strategy_selected)
+        self._synthetic_config_panel.config_apply_requested.connect(
+            self._on_digit_risk_config_apply
+        )
         self._iqoption_workspace = BrokerWorkspaceWidget(
             "IQ_OPTION",
             "IQ Option",
@@ -128,6 +163,8 @@ class TradingLabMainWindow(QMainWindow):
 
         content_layout.addLayout(self._create_kpis_row())
         content_layout.addLayout(self._create_broker_hub())
+        self._results_dashboard = ResultsDashboardWidget()
+        content_layout.addWidget(self._results_dashboard)
         self._health_pill_widget = HealthGatePillWidget()
         content_layout.addWidget(self._health_pill_widget)
         content_layout.addStretch()
@@ -164,6 +201,11 @@ class TradingLabMainWindow(QMainWindow):
             f"color: {ACCENT_CYAN}; font-size: 18px; font-weight: 900; letter-spacing: 1px;"
         )
         layout.addWidget(self._lbl_brand)
+
+        self._lbl_version = QLabel(f"v{APP_VERSION}  ·  DIGIT EDGE")
+        self._lbl_version.setObjectName("BadgeInfo")
+        self._lbl_version.setStyleSheet(f"color: {ACCENT_CYAN}; font-size: 11px; font-weight: 800;")
+        layout.addWidget(self._lbl_version)
 
         # Practice Mode Badge
         self._lbl_badge = QLabel(t("app.practice_badge"))
@@ -277,16 +319,11 @@ class TradingLabMainWindow(QMainWindow):
         layout.setContentsMargins(20, 12, 20, 12)
         layout.setSpacing(12)
 
-        # Safe Stop Emergency Button
-        self._btn_safe_stop = SafeStopButton()
-        self._btn_safe_stop.safe_stop_triggered.connect(self._on_safe_stop)
-        layout.addWidget(self._btn_safe_stop)
-
-        # Resume Button
-        self._btn_resume = QPushButton(t("btn.resume"))
-        self._btn_resume.setObjectName("PrimaryButton")
-        self._btn_resume.clicked.connect(self._on_resume)
-        layout.addWidget(self._btn_resume)
+        # One authoritative automation toggle. OFF is the Core Safe Stop state.
+        self._btn_bot = QPushButton()
+        self._btn_bot.clicked.connect(self._on_toggle_bot)
+        layout.addWidget(self._btn_bot)
+        self._update_bot_button()
 
         # Diagnostic Export Button
         self._btn_diag = QPushButton("📦 " + t("btn.diagnostic"))
@@ -308,22 +345,23 @@ class TradingLabMainWindow(QMainWindow):
         self._btn_en.setChecked(lang == "en")
 
     def _on_language_changed(self, lang: str) -> None:
-        self.setWindowTitle(t("app.title") + " — " + t("app.practice_badge"))
+        self.setWindowTitle(_window_title(t("app.practice_badge")))
         self._lbl_badge.setText(t("app.practice_badge"))
         self._lbl_subtitle.setText(t("app.practice_subtitle"))
         self._lbl_pnl_title.setText(t("kpi.daily_pnl"))
         self._lbl_pnl_detail.setText(t("kpi.pnl_detail"))
         self._lbl_state_title.setText(t("kpi.global_state"))
-        self._btn_resume.setText(t("btn.resume"))
         self._btn_diag.setText("📦 " + t("btn.diagnostic"))
         self._btn_close.setText("🔒 " + t("btn.safe_close"))
-        self._btn_safe_stop.retranslate()
+        self._update_bot_button()
         self._risk_gauge.retranslate()
         self._health_pill_widget.retranslate()
         self._order_table_widget.retranslate()
+        self._results_dashboard.retranslate()
         self._card_deriv.retranslate()
         self._card_iqoption.retranslate()
         self._deriv_workspace.retranslate()
+        self._asset_radar_panel.retranslate()
         self._iqoption_workspace.retranslate()
         self._settings_workspace.retranslate()
         self._retranslate_navigation()
@@ -401,8 +439,19 @@ class TradingLabMainWindow(QMainWindow):
         # 4. Update Broker Cards
         for card_data in snapshot.broker_cards:
             if card_data.broker == "DERIV":
+                self._deriv_real_selected = card_data.account_mode.value == "REAL"
                 self._card_deriv.update_card(card_data)
                 self._deriv_workspace.update_status(card_data)
+                if card_data.account_mode.value == "REAL":
+                    self.setWindowTitle(_window_title("DINHEIRO REAL"))
+                    self._lbl_badge.setText("DINHEIRO REAL")
+                    self._lbl_badge.setStyleSheet(
+                        f"background: {ACCENT_RED}; color: white; font-weight: 900; padding: 5px;"
+                    )
+                else:
+                    self.setWindowTitle(_window_title(t("app.practice_badge")))
+                    self._lbl_badge.setText(t("app.practice_badge"))
+                    self._lbl_badge.setStyleSheet("")
             elif card_data.broker == "IQ_OPTION":
                 self._card_iqoption.update_card(card_data)
                 self._iqoption_workspace.update_status(card_data)
@@ -413,7 +462,20 @@ class TradingLabMainWindow(QMainWindow):
 
         # 6. Update Orders
         self._order_table_widget.update_orders(snapshot.active_orders)
+        self._results_dashboard.update_results(snapshot.active_orders)
         self._deriv_workspace.update_orders(snapshot.active_orders)
+        self._deriv_workspace.update_risk(
+            snapshot.global_exposure_minor_units,
+            snapshot.global_max_exposure_minor_units,
+            snapshot.daily_pnl_currency,
+            snapshot.risk_state,
+            snapshot.consecutive_losses,
+            snapshot.digit_risk_config,
+            snapshot.cooldown_remaining_seconds,
+            snapshot.digit_martingale_step,
+            snapshot.digit_next_stake_minor_units,
+            snapshot.digit_projected_sequence_loss_minor_units,
+        )
         self._iqoption_workspace.update_orders(snapshot.active_orders)
         self._settings_workspace.update_risk_projection(
             snapshot.global_exposure_minor_units,
@@ -421,10 +483,50 @@ class TradingLabMainWindow(QMainWindow):
             snapshot.daily_pnl_currency,
             snapshot.risk_state,
         )
+        self._deriv_workspace.update_strategy_statuses(snapshot.deriv_strategies)
+        self._synthetic_live_panel.update_statuses(snapshot.deriv_strategies)
+        self._asset_radar_panel.update_ranking(snapshot.deriv_asset_ranking)
+        if snapshot.digit_risk_config is not None:
+            self._deriv_workspace.set_execution_strategy(
+                snapshot.digit_risk_config.active_strategy_id
+            )
+            self._synthetic_config_panel.set_strategy(snapshot.digit_risk_config.active_strategy_id)
+            self._synthetic_live_panel.set_strategy(snapshot.digit_risk_config.active_strategy_id)
+            self._synthetic_config_panel.set_risk_config(snapshot.digit_risk_config)
+        self._synthetic_config_panel.set_cooldown_remaining(snapshot.cooldown_remaining_seconds)
 
-        # 7. Button States
-        self._btn_safe_stop.setEnabled(not snapshot.safe_stop_active)
-        self._btn_resume.setEnabled(snapshot.safe_stop_active)
+        # 7. Bot state is authoritative from the Core Safe Stop projection.
+        self._bot_enabled = not snapshot.safe_stop_active
+        self._btn_bot.setEnabled(connected)
+        self._update_bot_button()
+        deriv_connected = any(
+            card.broker == "DERIV" and card.is_connected for card in snapshot.broker_cards
+        )
+        self._deriv_workspace.update_automation_state(
+            self._bot_enabled,
+            deriv_connected,
+            self._deriv_real_selected,
+            snapshot.deriv_bot_reason,
+        )
+
+    def _update_bot_button(self) -> None:
+        self._btn_bot.setText(t("btn.bot.stop") if self._bot_enabled else t("btn.bot.start"))
+        self._btn_bot.setObjectName("SafeStopButton" if self._bot_enabled else "BotStartButton")
+        self._btn_bot.style().unpolish(self._btn_bot)
+        self._btn_bot.style().polish(self._btn_bot)
+
+    def _on_toggle_bot(self) -> None:
+        if self._bot_enabled:
+            self._on_safe_stop()
+            return
+        if self._deriv_real_selected:
+            QMessageBox.warning(
+                self,
+                t("bot.real.confirm_title"),
+                t("bot.real.confirm_message"),
+            )
+            return
+        self._on_resume()
 
     def _on_safe_stop(self) -> None:
         try:
@@ -448,6 +550,26 @@ class TradingLabMainWindow(QMainWindow):
                 t("error.resume_message", error=str(exc)),
             )
 
+    def _on_strategy_selected(self, strategy_id: str) -> None:
+        """Changing strategy is an execution change, so it always disarms first."""
+
+        if self._bot_enabled:
+            self._on_safe_stop()
+        self._synthetic_config_panel.set_strategy(
+            strategy_id,
+            apply_execution_selection=True,
+        )
+        self._synthetic_live_panel.set_strategy(strategy_id)
+
+    def _on_digit_risk_config_apply(self, config: UiDigitRiskConfig) -> None:
+        try:
+            ack = self._controller.update_digit_risk_config(config)
+            accepted = ack.status is UiDigitRiskConfigStatus.OK
+            self._synthetic_config_panel.set_apply_result(accepted, ack.reason_code)
+            self._refresh_projection()
+        except Exception as exc:
+            self._synthetic_config_panel.set_apply_result(False, str(exc)[:64])
+
     def _on_export_diagnostic(self) -> None:
         try:
             resp = self._controller.generate_diagnostic()
@@ -466,6 +588,83 @@ class TradingLabMainWindow(QMainWindow):
                 self,
                 t("diag.error_title"),
                 t("diag.error_message", error=str(exc)),
+            )
+
+    def _on_connect_deriv_demo(self) -> None:
+        self._deriv_workspace.set_deriv_connect_busy(True, "Abrindo conexão protegida…")
+        command = [
+            sys.executable,
+            "-m",
+            "apps.deriv_login_helper",
+            "--vault-dir",
+            str(self._profile_dir / "broker_credentials"),
+        ]
+        try:
+            helper_cwd = (
+                Path(sys.executable).resolve().parent
+                if getattr(sys, "frozen", False)
+                else Path(__file__).resolve().parents[2]
+            )
+            result = subprocess.run(
+                command,
+                cwd=helper_cwd,
+                env=without_broker_credentials(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                self._deriv_workspace.set_deriv_connect_busy(False)
+                return
+            response = json.loads(result.stdout.strip().splitlines()[-1])
+            if response != {"status": "saved"}:
+                raise ValueError("DERIV_LOGIN_HELPER_INVALID")
+            self._deriv_workspace.set_deriv_connect_busy(True, "Conectando à Deriv…")
+            ack = self._controller.connect_deriv_demo()
+            if not ack.accepted:
+                raise RuntimeError(ack.reason_code)
+            self._deriv_workspace.set_deriv_connect_busy(
+                False, "Conta Deriv conectada com segurança."
+            )
+            self._refresh_projection()
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            self._deriv_workspace.set_deriv_connect_busy(
+                False, "Não foi possível conectar. Confira os dados e tente novamente."
+            )
+            internal_channel_error = isinstance(exc, UiIpcError)
+            reason_code = str(exc)
+            friendly_reasons = {
+                "DERIV_CONNECTION_TIMEOUT": (
+                    "A Deriv demorou para responder. O aplicativo repetiu a conexão "
+                    "automaticamente, mas o limite de tempo foi atingido."
+                ),
+                "DERIV_NETWORK_ERROR": (
+                    "A conexão de internet com a Deriv ficou indisponível durante a autenticação."
+                ),
+                "DERIV_AUTH_FAILED": (
+                    "A Deriv recusou o token. Gere um PAT com as permissões Ler e Operar."
+                ),
+                "DERIV_DEMO_ACCOUNT_NOT_FOUND": (
+                    "A conta Demo escolhida não pertence ao token informado."
+                ),
+                "DERIV_ACCOUNT_TYPE_MISMATCH": (
+                    "O tipo de conta escolhido não corresponde à conta autorizada pelo token."
+                ),
+            }
+            error_message = (
+                "A conta foi salva, mas o canal interno não respondeu. Feche e abra o "
+                "Trading Lab; a credencial protegida será reutilizada."
+                if internal_channel_error
+                else friendly_reasons.get(
+                    reason_code,
+                    "A conta não foi confirmada. Verifique o token, a permissão trade "
+                    "e a internet.",
+                )
+            )
+            QMessageBox.warning(
+                self,
+                "Falha ao conectar à Deriv",
+                f"{error_message}\n\nCódigo: {exc}",
             )
 
     def closeEvent(self, event: QCloseEvent) -> None:

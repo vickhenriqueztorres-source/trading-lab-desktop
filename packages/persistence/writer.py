@@ -4,12 +4,13 @@ import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from packages.domain.models import (
     BrokerEvent,
@@ -395,6 +396,133 @@ class SingleDatabaseWriter:
             self._inject("before_commit")
 
         self._transaction(operation)
+
+    def configure_digit_risk_runtime(self, policy: Mapping[str, object]) -> None:
+        """Mirror the active digit policy into state.db without losing an active sequence."""
+
+        required = {
+            "config_fingerprint": str,
+            "currency": str,
+            "martingale_enabled": bool,
+            "martingale_max_steps": int,
+            "max_consecutive_losses": int,
+            "cooldown_seconds": str,
+        }
+        for name, expected in required.items():
+            value = policy.get(name)
+            if type(value) is not expected:
+                raise ValueError(f"invalid digit runtime policy field: {name}")
+        fingerprint = str(policy["config_fingerprint"])
+        currency = str(policy["currency"])
+        max_steps = cast(int, policy["martingale_max_steps"])
+        max_losses = cast(int, policy["max_consecutive_losses"])
+        try:
+            cooldown = Decimal(str(policy["cooldown_seconds"]))
+        except InvalidOperation as exc:
+            raise ValueError("invalid digit runtime cooldown") from exc
+        if (
+            not fingerprint
+            or len(currency) != 3
+            or not 1 <= max_steps <= 4
+            or not 1 <= max_losses <= 5
+            or not cooldown.is_finite()
+            or cooldown <= 0
+        ):
+            raise ValueError("invalid digit runtime policy")
+        now = utc_now().isoformat()
+
+        def operation(connection: sqlite3.Connection) -> None:
+            current = connection.execute(
+                "SELECT config_fingerprint, martingale_step FROM digit_risk_runtime "
+                "WHERE singleton_id = 1"
+            ).fetchone()
+            if (
+                current is not None
+                and current["config_fingerprint"] != fingerprint
+                and int(current["martingale_step"]) > 0
+            ):
+                raise PersistenceError("DIGIT_MARTINGALE_SEQUENCE_ACTIVE")
+            if current is None:
+                connection.execute(
+                    """
+                    INSERT INTO digit_risk_runtime(
+                        singleton_id, config_fingerprint, currency, martingale_enabled,
+                        martingale_max_steps, max_consecutive_losses, cooldown_seconds,
+                        updated_at
+                    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        fingerprint,
+                        currency,
+                        int(bool(policy["martingale_enabled"])),
+                        max_steps,
+                        max_losses,
+                        str(cooldown),
+                        now,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE digit_risk_runtime
+                    SET config_fingerprint = ?, currency = ?, martingale_enabled = ?,
+                        martingale_max_steps = ?,
+                        max_consecutive_losses = ?, cooldown_seconds = ?, updated_at = ?
+                    WHERE singleton_id = 1
+                    """,
+                    (
+                        fingerprint,
+                        currency,
+                        int(bool(policy["martingale_enabled"])),
+                        max_steps,
+                        max_losses,
+                        str(cooldown),
+                        now,
+                    ),
+                )
+
+        self._transaction(operation)
+
+    def expire_digit_cooldown(self, now: datetime | None = None) -> dict[str, Any] | None:
+        """Atomically end an elapsed durable cooldown and return the current state."""
+
+        checked_at = now or utc_now()
+        if checked_at.tzinfo is None:
+            raise ValueError("digit cooldown clock must be timezone-aware")
+
+        def operation(connection: sqlite3.Connection) -> dict[str, Any] | None:
+            row = connection.execute(
+                "SELECT * FROM digit_risk_runtime WHERE singleton_id = 1"
+            ).fetchone()
+            if row is None:
+                return None
+            started_raw = row["cooldown_started_at"]
+            if isinstance(started_raw, str):
+                started = datetime.fromisoformat(started_raw)
+                if started.tzinfo is None:
+                    raise PersistenceError("digit cooldown timestamp is not timezone-aware")
+                duration = Decimal(str(row["cooldown_seconds"]))
+                elapsed = Decimal(str((checked_at - started).total_seconds()))
+                if elapsed >= duration:
+                    connection.execute(
+                        """
+                        UPDATE digit_risk_runtime
+                        SET consecutive_losses = 0, martingale_step = 0,
+                            pinned_symbol = NULL, cumulative_sequence_loss_minor = 0,
+                            cooldown_started_at = NULL, updated_at = ?
+                        WHERE singleton_id = 1
+                        """,
+                        (checked_at.isoformat(),),
+                    )
+                    row = connection.execute(
+                        "SELECT * FROM digit_risk_runtime WHERE singleton_id = 1"
+                    ).fetchone()
+            return None if row is None else dict(row)
+
+        result = self._transaction(operation)
+        if result is not None and not isinstance(result, dict):
+            raise PersistenceError("unexpected digit runtime result")
+        return result
 
     def claim_next_message(
         self,
@@ -987,6 +1115,21 @@ class SingleDatabaseWriter:
                     reason=f"BROKER_EVENT_{target.value}",
                     evidence=event.event_id,
                 )
+            if (
+                target is OrderState.SETTLED
+                and event.result_minor is not None
+                and event.result_currency is not None
+            ):
+                self._apply_digit_runtime_settlement(
+                    connection,
+                    product=event.product,
+                    symbol=event.symbol,
+                    currency=event.result_currency,
+                    pnl_minor=event.result_minor,
+                    order_id=str(row["order_id"]),
+                    settlement_id=event.event_id,
+                    occurred_at=event.occurred_at,
+                )
             self._inject("before_broker_event_commit")
             return BrokerEventApplyResult(processing_status, target, reason_code)
 
@@ -1296,6 +1439,9 @@ class SingleDatabaseWriter:
             }
             target = target_states[evidence.external_status]
             current = OrderState(str(row["state"]))
+            settlement_newly_applied = (
+                target is OrderState.SETTLED and current is not OrderState.SETTLED
+            )
             if current in {OrderState.UNKNOWN, OrderState.SETTLEMENT_UNKNOWN}:
                 self._transition_order(
                     connection,
@@ -1350,6 +1496,17 @@ class SingleDatabaseWriter:
                     reason=f"RECONCILED_{target.value}",
                     evidence=evidence.evidence_id,
                 )
+            if settlement_newly_applied and evidence.realized_pnl_minor is not None:
+                self._apply_digit_runtime_settlement(
+                    connection,
+                    product=str(row["product"]),
+                    symbol=str(row["symbol"]),
+                    currency=str(row["currency"]),
+                    pnl_minor=evidence.realized_pnl_minor,
+                    order_id=str(row["order_id"]),
+                    settlement_id=evidence.evidence_id,
+                    occurred_at=actual_resolved_at,
+                )
             self._finish_reconciliation_attempt(
                 connection,
                 attempt_id,
@@ -1365,6 +1522,83 @@ class SingleDatabaseWriter:
         if not isinstance(result, ReconciliationApplyResult):
             raise PersistenceError("unexpected reconciliation result")
         return result
+
+    @staticmethod
+    def _apply_digit_runtime_settlement(
+        connection: sqlite3.Connection,
+        *,
+        product: str,
+        symbol: str,
+        currency: str,
+        pnl_minor: int,
+        order_id: str,
+        settlement_id: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Advance durable digit recovery state inside the settlement transaction."""
+
+        if product.strip().upper() not in {
+            "DIGITDIFF",
+            "DIGITOVER",
+            "DIGITUNDER",
+            "DIGITEVEN",
+            "DIGITODD",
+        }:
+            return
+        runtime = connection.execute(
+            "SELECT * FROM digit_risk_runtime WHERE singleton_id = 1"
+        ).fetchone()
+        if runtime is None:
+            raise PersistenceError("digit risk runtime policy is not configured")
+        if runtime["currency"] != currency:
+            raise PersistenceError("digit settlement currency does not match runtime policy")
+        # One order has exactly one terminal financial effect. Event streaming and
+        # reconciliation may describe it with different evidence IDs.
+        if runtime["last_order_id"] == order_id:
+            return
+        daily_pnl = int(runtime["daily_pnl_minor"]) + pnl_minor
+        losses = int(runtime["consecutive_losses"])
+        step = int(runtime["martingale_step"])
+        cumulative = int(runtime["cumulative_sequence_loss_minor"])
+        pinned_symbol: str | None = runtime["pinned_symbol"]
+        cooldown_started_at: str | None = runtime["cooldown_started_at"]
+        if pnl_minor < 0:
+            losses += 1
+            cumulative += -pnl_minor
+            if bool(runtime["martingale_enabled"]):
+                step = 0 if step >= int(runtime["martingale_max_steps"]) else step + 1
+            else:
+                step = 0
+            pinned_symbol = symbol if step > 0 else None
+            if losses >= int(runtime["max_consecutive_losses"]):
+                cooldown_started_at = occurred_at.isoformat()
+        else:
+            losses = 0
+            step = 0
+            cumulative = 0
+            pinned_symbol = None
+            cooldown_started_at = None
+        connection.execute(
+            """
+            UPDATE digit_risk_runtime
+            SET daily_pnl_minor = ?, consecutive_losses = ?, martingale_step = ?,
+                pinned_symbol = ?, cumulative_sequence_loss_minor = ?,
+                cooldown_started_at = ?, last_order_id = ?, last_settlement_id = ?,
+                updated_at = ?
+            WHERE singleton_id = 1
+            """,
+            (
+                daily_pnl,
+                losses,
+                step,
+                pinned_symbol,
+                cumulative,
+                cooldown_started_at,
+                order_id,
+                settlement_id,
+                occurred_at.isoformat(),
+            ),
+        )
 
     @staticmethod
     def _evidence_hash(evidence: ReconciliationEvidence) -> str:

@@ -46,14 +46,21 @@ def test_core_ui_projection_safe_stop_and_resume_preserve_core_authority(
     client = UiIpcClient.connect(service.ui_port, token)
     try:
         initial = client.projection()
-        assert initial.global_state is UiGlobalState.READY
+        assert initial.global_state is UiGlobalState.SAFE_STOPPED
+        assert initial.safe_stop_active is True
         assert all(card.balance_minor_units is None for card in initial.broker_cards)
+
+        assert client.resume().accepted
+        running = client.projection()
+        assert running.safe_stop_active is False
+        assert running.global_state is UiGlobalState.READY
 
         assert client.safe_stop().accepted
         stopped = client.projection()
         assert stopped.safe_stop_active is True
         assert stopped.global_state is UiGlobalState.SAFE_STOPPED
-        assert service.state is CoreServiceState.SAFE_STOP
+        # Process availability and trading authority are independent dimensions.
+        assert service.state is CoreServiceState.READY
 
         assert client.resume().accepted
         resumed = client.projection()

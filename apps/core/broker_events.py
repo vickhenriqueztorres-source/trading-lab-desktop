@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from apps.core.coordinator import AccountCommandSerializer
+from apps.core.digit_risk_config import is_bounded_digit_product
 from apps.core.health import HealthGate
 from apps.core.risk import RiskLedger
 from packages.domain.models import BrokerOrderEvent, OrderState
@@ -23,6 +24,7 @@ class OrderEventSource(Protocol):
 
 
 FallbackReconciliation = Callable[[str], bool]
+ProcessedEventCallback = Callable[[BrokerOrderEvent, BrokerEventApplyResult], None]
 
 
 class BrokerEventProcessor:
@@ -46,6 +48,8 @@ class BrokerEventProcessor:
         self._event_sink = event_sink or NullEventSink()
         self._serializer = serializer or AccountCommandSerializer()
         self._fallback_reconciliation = fallback_reconciliation
+        self._writer.configure_digit_risk_runtime(self._risk_ledger.digit_runtime_policy())
+        self._risk_ledger.restore_digit_runtime(self._writer.expire_digit_cooldown())
 
     def process(self, event: BrokerOrderEvent) -> BrokerEventApplyResult:
         broker = event.broker.value
@@ -116,6 +120,33 @@ class BrokerEventProcessor:
                         event_id=event.event_id,
                         correlation_id=event.correlation_id,
                     )
+                if (
+                    result.status
+                    in {BrokerEventApplyStatus.APPLIED, BrokerEventApplyStatus.APPLIED_WITH_GAP}
+                    and result.order_state is OrderState.SETTLED
+                    and event.result_minor is not None
+                    and event.result_currency is not None
+                ):
+                    self._risk_ledger.apply_realized_pnl(
+                        broker,
+                        account_id,
+                        event.result_minor,
+                        event.result_currency,
+                        self._health_gate,
+                    )
+                    # Digit progression was committed atomically with this settlement.
+                    # Reloading prevents a crash window and keeps duplicate events idempotent.
+                    self._risk_ledger.restore_digit_runtime(self._writer.expire_digit_cooldown())
+                    if is_bounded_digit_product(event.product):
+                        digit = self._risk_ledger.get_digit_metrics()
+                        self._event_sink.emit(
+                            "digit_risk_transition_committed",
+                            order_id=event.client_order_ref,
+                            settlement_id=event.event_id,
+                            martingale_step=digit.martingale_step,
+                            consecutive_losses=digit.consecutive_losses,
+                            pinned_symbol=digit.recovery_symbol,
+                        )
             self._risk_ledger.restore(self._reader.list_by_state("risk_reservations", "ACTIVE"))
 
         if result.status is BrokerEventApplyStatus.APPLIED_WITH_GAP:
@@ -153,11 +184,13 @@ class BrokerEventPump:
         processor: BrokerEventProcessor,
         health_gate: HealthGate,
         event_sink: EventSink | None = None,
+        on_processed: ProcessedEventCallback | None = None,
     ) -> None:
         self._source = source
         self._processor = processor
         self._health_gate = health_gate
         self._event_sink = event_sink or NullEventSink()
+        self._on_processed = on_processed
         self._stop = threading.Event()
         self._activity = threading.Condition()
         self._processing = 0
@@ -204,7 +237,9 @@ class BrokerEventPump:
                     with self._activity:
                         self._processing += 1
                     try:
-                        self._processor.process(event)
+                        result = self._processor.process(event)
+                        if self._on_processed is not None:
+                            self._on_processed(event, result)
                     finally:
                         with self._activity:
                             self._processing -= 1

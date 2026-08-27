@@ -86,11 +86,14 @@ class FakeIdentityService:
         strategy_packs: tuple[str, ...] = ("strategy-test",),
         signing_key_id: str = "phase0-ed25519-1",
         otp_factory: Callable[[], OtpCode] | None = None,
+        real_mode_allowed: bool = False,
     ) -> None:
-        if lease_ttl <= timedelta(0) or lease_ttl > timedelta(days=7):
+        maximum_ttl = timedelta(hours=24) if real_mode_allowed else timedelta(days=7)
+        if lease_ttl <= timedelta(0) or lease_ttl > maximum_ttl:
             raise ValueError("practice lease_ttl must be within seven days")
         self._now = now or (lambda: datetime.now(UTC))
         self._lease_ttl = lease_ttl
+        self._real_mode_allowed = real_mode_allowed
         self._strategy_packs = strategy_packs
         if not signing_key_id.strip() or len(signing_key_id) > 128:
             raise ValueError("signing_key_id is invalid")
@@ -274,10 +277,10 @@ class FakeIdentityService:
             device_id=device_id,
             issued_at=now,
             expires_at=now + self._lease_ttl,
-            plan="PHASE0_PRACTICE",
+            plan="TRADING_LAB_REAL" if self._real_mode_allowed else "PHASE0_PRACTICE",
             broker_access=("DERIV", "IQ_OPTION"),
             strategy_packs=self._strategy_packs,
-            real_mode_allowed=False,
+            real_mode_allowed=self._real_mode_allowed,
             client_version_min="0.0.1",
             client_version_max="0.0.1",
             nonce=secrets.token_urlsafe(18),

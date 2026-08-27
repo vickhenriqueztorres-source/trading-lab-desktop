@@ -24,6 +24,7 @@ def test_build_spec_and_version_info_exist() -> None:
     assert "packages" in spec_text
     assert "PySide6" in spec_text
     assert "console=False" in spec_text
+    assert 'FOREIGN_ICU_DLLS = {"icuuc.dll", "icudt78.dll"}' in spec_text
 
     compiler_text = (project_root / "build_scripts" / "compile_trading_lab.py").read_text(
         encoding="utf-8"
@@ -38,7 +39,7 @@ def test_build_spec_and_version_info_exist() -> None:
 
     version_text = version_info_path.read_text(encoding="utf-8")
     assert "Trading Lab Desktop" in version_text
-    assert "1.0.0.0" in version_text
+    assert "1.9.11.0" in version_text
 
 
 def test_compile_executable_staging_manifest_and_integrity(tmp_path: Path) -> None:

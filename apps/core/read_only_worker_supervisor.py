@@ -21,12 +21,16 @@ class ReadOnlyWorkerSpec:
     role: EndpointRole
     broker: str
     extra_arguments: tuple[str, ...] = ()
+    allow_demo_financial_submission: bool = False
+    allow_real_financial_submission: bool = False
 
     def __post_init__(self) -> None:
         if not self.module or not self.broker:
             raise ValueError("worker module and broker are required")
         if self.role is EndpointRole.CORE:
             raise ValueError("read-only worker cannot use the Core role")
+        if self.allow_demo_financial_submission and self.allow_real_financial_submission:
+            raise ValueError("worker cannot be both Demo and Real")
 
 
 class ReadOnlyWorkerSupervisor:
@@ -151,7 +155,14 @@ class ReadOnlyWorkerSupervisor:
             ) from exc
         finally:
             listener.close()
-        if client.capabilities.can_submit_orders:
+        financial_mode = (
+            "DEMO"
+            if self._spec.allow_demo_financial_submission
+            else "REAL"
+            if self._spec.allow_real_financial_submission
+            else None
+        )
+        if client.capabilities.can_submit_orders and financial_mode is None:
             client.close()
             self._terminate_process()
             self._set_health(WorkerHealthState.INCOMPATIBLE)
@@ -159,6 +170,21 @@ class ReadOnlyWorkerSupervisor:
             raise ProtocolError(
                 ProtocolErrorCode.IPC_PROTOCOL_INCOMPATIBLE,
                 "read-only worker advertised financial submission",
+            )
+        if financial_mode is not None and not (
+            client.capabilities.can_submit_orders
+            and client.capabilities.supports_order_status_query
+            and client.capabilities.supports_reconciliation
+            and client.capabilities.supports_order_events
+            and client.capabilities.connection_mode == financial_mode
+        ):
+            client.close()
+            self._terminate_process()
+            self._set_health(WorkerHealthState.INCOMPATIBLE)
+            self._block_health("HG_MARKET_DATA_INCOMPATIBLE")
+            raise ProtocolError(
+                ProtocolErrorCode.IPC_PROTOCOL_INCOMPATIBLE,
+                "authenticated financial worker capabilities are incomplete",
             )
         self._client = client
         self._set_health(WorkerHealthState.READY)
@@ -173,6 +199,9 @@ class ReadOnlyWorkerSupervisor:
         return client
 
     def restart(self) -> SocketWorkerClient:
+        self._stopping = True
+        self._monitor_stop.set()
+        self._terminate_process()
         self._cleanup_connection()
         return self.start()
 

@@ -1,4 +1,10 @@
 from packages.portfolio_allocation.allocator import PortfolioAllocator
+from packages.portfolio_allocation.martingale import (
+    BoundedMartingaleAllocator,
+    BoundedMartingaleConfig,
+    BoundedMartingaleProjection,
+    BoundedMartingaleState,
+)
 from packages.portfolio_allocation.models import (
     AllocationDecision,
     AllocationReason,
@@ -12,4 +18,8 @@ __all__ = [
     "BudgetSnapshot",
     "PortfolioAllocation",
     "PortfolioAllocator",
+    "BoundedMartingaleAllocator",
+    "BoundedMartingaleConfig",
+    "BoundedMartingaleProjection",
+    "BoundedMartingaleState",
 ]

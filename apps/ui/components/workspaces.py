@@ -3,7 +3,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from apps.ui.components.broker_card import BrokerCardWidget
 from apps.ui.components.order_table import OrderTableView
@@ -19,6 +28,8 @@ def _mode_text(mode: UiAccountMode) -> str:
 
 class BrokerWorkspaceWidget(QWidget):
     """Broker-isolated projection with honest, read-only configuration guidance."""
+
+    deriv_demo_connect_requested = Signal()
 
     def __init__(
         self,
@@ -57,8 +68,11 @@ class BrokerWorkspaceWidget(QWidget):
         status_layout.addWidget(self.orders, 1)
         self._tabs.addTab(status_page, "")
 
-        configuration_page = QWidget()
-        configuration_layout = QVBoxLayout(configuration_page)
+        configuration_page = QScrollArea()
+        configuration_page.setWidgetResizable(True)
+        configuration_page.setFrameShape(QFrame.Shape.NoFrame)
+        configuration_content = QWidget()
+        configuration_layout = QVBoxLayout(configuration_content)
         configuration_layout.setContentsMargins(14, 14, 14, 14)
         configuration_layout.setSpacing(12)
         guidance = QFrame()
@@ -73,6 +87,17 @@ class BrokerWorkspaceWidget(QWidget):
         self._configuration_body.setWordWrap(True)
         self._configuration_body.setObjectName("GuidanceText")
         guidance_layout.addWidget(self._configuration_body)
+        self._deriv_connect_button: QPushButton | None = None
+        self._deriv_connect_status: QLabel | None = None
+        if broker_key == "DERIV":
+            self._deriv_connect_button = QPushButton()
+            self._deriv_connect_button.setObjectName("PrimaryButton")
+            self._deriv_connect_button.clicked.connect(self.deriv_demo_connect_requested.emit)
+            guidance_layout.addWidget(self._deriv_connect_button)
+            self._deriv_connect_status = QLabel()
+            self._deriv_connect_status.setWordWrap(True)
+            self._deriv_connect_status.setObjectName("Subtitle")
+            guidance_layout.addWidget(self._deriv_connect_status)
         self._scope = QLabel()
         self._scope.setObjectName("Subtitle")
         guidance_layout.addWidget(self._scope)
@@ -84,7 +109,9 @@ class BrokerWorkspaceWidget(QWidget):
         self._real_mode_notice.setObjectName("SafetyNotice")
         guidance_layout.addWidget(self._real_mode_notice)
         configuration_layout.addWidget(guidance)
+        self._configuration_layout = configuration_layout
         configuration_layout.addStretch()
+        configuration_page.setWidget(configuration_content)
         self._tabs.addTab(configuration_page, "")
         self.retranslate()
 
@@ -100,14 +127,29 @@ class BrokerWorkspaceWidget(QWidget):
         self._effective_mode.setText(
             f"{t('config.effective_mode')}: {_mode_text(status.account_mode)}"
         )
+        self._real_mode_notice.setText(
+            t("config.real_mode_active")
+            if status.account_mode is UiAccountMode.REAL
+            else t("config.real_mode_available")
+        )
 
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
         self.orders.update_orders(tuple(item for item in orders if item.broker == self.broker_key))
+
+    def set_deriv_connect_busy(self, busy: bool, message: str | None = None) -> None:
+        if self._deriv_connect_button is None or self._deriv_connect_status is None:
+            return
+        self._deriv_connect_button.setEnabled(not busy)
+        self._deriv_connect_status.setText(message or t("deriv.connect.status.ready"))
 
     def tab_label(self) -> str:
         if self._last_status is None:
             return self._display_name
         return f"{self._display_name} — {_mode_text(self._last_status.account_mode)}"
+
+    def add_configuration_widget(self, widget: QWidget) -> None:
+        stretch_index = self._configuration_layout.count() - 1
+        self._configuration_layout.insertWidget(stretch_index, widget)
 
     def retranslate(self) -> None:
         self._tabs.setTabText(0, t("tabs.status"))
@@ -115,13 +157,17 @@ class BrokerWorkspaceWidget(QWidget):
         self._intro.setText(t(self._intro_key))
         self._configuration_title.setText(t("config.read_only_title"))
         self._configuration_body.setText(t(self._configuration_key))
+        if self._deriv_connect_button is not None:
+            self._deriv_connect_button.setText(t("deriv.connect.button"))
+        if self._deriv_connect_status is not None and not self._deriv_connect_status.text():
+            self._deriv_connect_status.setText(t("deriv.connect.status.ready"))
         self._scope.setText(f"{t('config.scope')}: {self._display_name}")
         if self._last_status is None:
             mode = t("config.waiting_projection")
         else:
             mode = _mode_text(self._last_status.account_mode)
         self._effective_mode.setText(f"{t('config.effective_mode')}: {mode}")
-        self._real_mode_notice.setText(t("config.no_real_mode"))
+        self._real_mode_notice.setText(t("config.real_mode_available"))
         self.card.retranslate()
         self.orders.retranslate()
 

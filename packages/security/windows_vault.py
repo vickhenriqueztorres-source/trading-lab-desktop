@@ -300,7 +300,11 @@ class WindowsUserScopedVault:
         return digest, self._directory / f"{digest.hex()}{_VAULT_SUFFIX}"
 
     def _atomic_write(self, destination: Path, data: bytes) -> None:
-        temporary = self._directory / f".{destination.name}.{uuid.uuid4().hex}.tmp"
+        # Keep the staging name independent of the destination digest. Repeating
+        # the 64-character digest in the temporary filename pushed otherwise
+        # valid profile paths past the legacy Windows MAX_PATH boundary and made
+        # the Auth Agent fail before the UI could open.
+        temporary = self._directory / f".{uuid.uuid4().hex}.tmp"
         try:
             with temporary.open("xb") as stream:
                 stream.write(data)

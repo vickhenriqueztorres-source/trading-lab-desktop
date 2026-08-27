@@ -494,7 +494,7 @@ def test_migration_0003_upgrades_v2_without_losing_financial_rows(tmp_path: Path
     writer = SingleDatabaseWriter(database_path)
     reader = StateReader(database_path)
     try:
-        assert reader.count("schema_migrations") == 4
+        assert reader.count("schema_migrations") == len(MIGRATIONS)
         order = reader.one("orders", "order_id", "order-v2")
         assert order is not None and order["state"] == "UNKNOWN"
         assert order["resolution_source"] is None
@@ -564,7 +564,7 @@ def test_migration_0004_backfills_existing_settlement_effect_counters(
             "pnl_application_count": 1,
             "reservation_release_count": 1,
         }
-        assert reader.count("schema_migrations") == 4
+        assert reader.count("schema_migrations") == len(MIGRATIONS)
         assert reader.count("broker_order_events") == 0
     finally:
         writer.close()

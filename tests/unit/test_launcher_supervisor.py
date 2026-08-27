@@ -154,6 +154,46 @@ def test_shutdown_timeout_escalates_to_terminate(tmp_path: Path) -> None:
     assert controller.process.poll() == 1
 
 
+def test_ui_process_loss_stops_entire_tree_and_releases_profile(tmp_path: Path) -> None:
+    controller = FakeController()
+    supervisor = ProcessTreeSupervisor(
+        tmp_path,
+        controller_factory=lambda _profile, _workers: controller,
+    )
+    assert supervisor.start_all()
+    controller._status = CoreLifecycleStatusResponse(
+        "READY",
+        True,
+        tuple(
+            LifecycleProcessStatus(
+                item.role,
+                item.pid,
+                False if item.role == "UI" else item.is_alive,
+                0 if item.role == "UI" else item.exit_code,
+                "STOPPED" if item.role == "UI" else item.state,
+                item.restarts_count,
+            )
+            for item in controller._status.processes
+        ),
+    )
+
+    snapshot = supervisor.poll_health()
+
+    assert snapshot.overall_state is LauncherLifecycleState.STOPPED
+    assert controller.events[-7:] == [
+        "safe_stop",
+        "drain",
+        "workers",
+        "auth",
+        "core",
+        "wait",
+        "close",
+    ]
+    replacement = LauncherInstanceGuard(tmp_path)
+    replacement.acquire()
+    replacement.release()
+
+
 def test_launcher_profile_lock_rejects_second_owner_and_recovers(tmp_path: Path) -> None:
     first = LauncherInstanceGuard(tmp_path)
     second = LauncherInstanceGuard(tmp_path)

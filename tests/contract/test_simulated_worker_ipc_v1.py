@@ -406,11 +406,40 @@ def test_ipc_17_circuit_breaker_prevents_restart_loop() -> None:
         sleeper=lambda _: None,
     )
     supervisor.start()
-    wait_until(lambda: supervisor.health_state is WorkerHealthState.DISCONNECTED)
-    supervisor.restart()
+    # Recovery is automatic; repeated crashes open the breaker without a manual kick.
     wait_until(lambda: supervisor.circuit_state is CircuitState.OPEN)
     with pytest.raises(RuntimeError, match="circuit breaker"):
         supervisor.restart()
+    supervisor.shutdown()
+
+
+def test_worker_circuit_half_open_probe_recovers_without_manual_restart() -> None:
+    gate = HealthGate()
+    supervisor = WorkerSupervisor(
+        gate,
+        scenario=WorkerScenario.CRASH_AFTER_HANDSHAKE,
+        heartbeat_interval=0.02,
+        heartbeat_timeout=0.02,
+        restart_policy=RestartPolicy(
+            max_crashes=1,
+            open_seconds=0.1,
+            base_delay_seconds=0.01,
+            max_delay_seconds=0.02,
+        ),
+        jitter=lambda _ceiling: 0.0,
+    )
+    supervisor.start()
+    wait_until(lambda: supervisor.circuit_state is CircuitState.OPEN)
+
+    supervisor._scenario = WorkerScenario.ACCEPT
+    wait_until(
+        lambda: (
+            supervisor.health_state is WorkerHealthState.READY
+            and supervisor.circuit_state is CircuitState.CLOSED
+        )
+    )
+    assert not gate.contains("HG_WORKER_CIRCUIT_OPEN")
+    assert not gate.contains("HG_WORKER_DISCONNECTED")
     supervisor.shutdown()
 
 
@@ -560,7 +589,7 @@ def test_ipc_24_bounded_queue_saturation_degrades_without_silent_drop() -> None:
                     causation_id=None,
                     source=EndpointRole.SIMULATED_WORKER,
                     target=EndpointRole.CORE,
-                    message_type=MessageType.WORKER_HEALTH_RESPONSE,
+                    message_type=MessageType.ORDER_EVENT,
                     created_at_utc=datetime.now(UTC),
                     deadline_at=None,
                     payload={"status": "READY"},
@@ -570,6 +599,52 @@ def test_ipc_24_bounded_queue_saturation_degrades_without_silent_drop() -> None:
         assert any(
             event.reason_code == ProtocolErrorCode.IPC_BACKPRESSURE.value for event in events.events
         )
+    finally:
+        client.close()
+        transport.close()
+
+
+def test_late_non_event_worker_response_is_ignored_without_poisoning_financial_queue() -> None:
+    core_socket, worker_socket = socket.socketpair()
+    events = InMemoryEventSink()
+    capabilities = WorkerCapabilities(
+        broker="simulated",
+        account_modes=("practice",),
+        products=("DIGITAL_OPTION",),
+        supports_reconciliation=True,
+        supports_quotes=False,
+        supports_order_status_query=True,
+        worker_version="test",
+    )
+    client = SocketWorkerClient(
+        FramedSocket(core_socket),
+        capabilities,
+        event_queue_size=1,
+        event_sink=events,
+    )
+    transport = FramedSocket(worker_socket)
+    try:
+        transport.send(
+            Envelope(
+                protocol_version=PROTOCOL_VERSION,
+                message_id="late-health-response",
+                correlation_id="late-health-correlation",
+                causation_id="expired-request",
+                source=EndpointRole.SIMULATED_WORKER,
+                target=EndpointRole.CORE,
+                message_type=MessageType.WORKER_HEALTH_RESPONSE,
+                created_at_utc=datetime.now(UTC),
+                deadline_at=None,
+                payload={"status": "READY"},
+            )
+        )
+        wait_until(
+            lambda: any(
+                event.event_name == "late_worker_response_ignored" for event in events.events
+            )
+        )
+        assert client.is_ready
+        assert client.pending_order_event_count == 0
     finally:
         client.close()
         transport.close()

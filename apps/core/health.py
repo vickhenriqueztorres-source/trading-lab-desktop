@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
+from packages.observability.events import EventSink, NullEventSink
 from packages.persistence.health import (
     DatabaseFailureReason,
     DatabaseHealth,
@@ -24,11 +25,16 @@ class HealthGateSnapshot:
 
 
 class HealthGate:
-    def __init__(self, database_health: DatabaseHealth | None = None) -> None:
+    def __init__(
+        self,
+        database_health: DatabaseHealth | None = None,
+        event_sink: EventSink | None = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._blockers: set[str] = set()
         self._scoped_blockers: dict[tuple[str, str], set[str]] = {}
         self._database_health = database_health
+        self._event_sink = event_sink or NullEventSink()
 
     _PRIORITY = (
         "DB_NOT_CHECKED",
@@ -38,6 +44,9 @@ class HealthGate:
         "DB_CHECKPOINT_FAILED",
         "DB_WRITE_FAILED",
         "HG_SAFE_STOP",
+        "HG_DAILY_STOP_REACHED",
+        "HG_DAILY_TAKE_PROFIT_REACHED",
+        "HG_COOLDOWN_ACTIVE",
         "HG_AUTH_AGENT_UNAVAILABLE",
         "HG_LEASE_EXPIRED",
         "HG_LEASE_REVOKED",
@@ -54,6 +63,8 @@ class HealthGate:
         "HG_WORKER_CIRCUIT_OPEN",
         "HG_WORKER_DISCONNECTED",
         "HG_WORKER_NOT_READY",
+        "HG_MARKET_DATA_DISCONNECTED",
+        "MD_CLOCK_UNTRUSTED",
     )
 
     @property
@@ -83,8 +94,15 @@ class HealthGate:
             global_reasons = set(self._blockers)
             if global_reasons:
                 return self._state_from_reasons(global_reasons)
-            key = (broker.upper(), str(account_id))
-            scoped_reasons = self._scoped_blockers.get(key, set())
+            normalized_broker = broker.upper()
+            key = (normalized_broker, str(account_id))
+            scoped_reasons = set(self._scoped_blockers.get(key, set()))
+            # Broker-wide market-data readiness applies to every financial account.
+            # Account-specific blockers remain isolated from other accounts.
+            if str(account_id) != "market-data":
+                scoped_reasons.update(
+                    self._scoped_blockers.get((normalized_broker, "market-data"), set())
+                )
             return self._state_from_reasons(scoped_reasons)
 
     def can_enter_order(self, broker: str, account_id: str) -> tuple[bool, str | None]:
@@ -139,13 +157,29 @@ class HealthGate:
 
     def block(self, reason_code: str) -> None:
         with self._lock:
+            changed = reason_code not in self._blockers
             self._blockers.add(reason_code)
+        if changed:
+            self._event_sink.emit("health_gate_blocked", reason_code=reason_code)
 
     def clear_if(self, reason_code: str) -> None:
         with self._lock:
+            global_changed = reason_code in self._blockers
             self._blockers.discard(reason_code)
-            for scoped in self._scoped_blockers.values():
+            cleared_scopes: list[tuple[str, str]] = []
+            for key, scoped in self._scoped_blockers.items():
+                if reason_code in scoped:
+                    cleared_scopes.append(key)
                 scoped.discard(reason_code)
+        if global_changed:
+            self._event_sink.emit("health_gate_cleared", reason_code=reason_code)
+        for broker, account_id in cleared_scopes:
+            self._event_sink.emit(
+                "health_gate_cleared",
+                reason_code=reason_code,
+                broker=broker,
+                account_id=account_id,
+            )
 
     def clear(self, reason_code: str) -> None:
         self.clear_if(reason_code)
@@ -159,7 +193,16 @@ class HealthGate:
     def block_scope(self, broker: str, account_id: str, reason_code: str) -> None:
         key = (broker.upper(), str(account_id))
         with self._lock:
-            self._scoped_blockers.setdefault(key, set()).add(reason_code)
+            blockers = self._scoped_blockers.setdefault(key, set())
+            changed = reason_code not in blockers
+            blockers.add(reason_code)
+        if changed:
+            self._event_sink.emit(
+                "health_gate_blocked",
+                reason_code=reason_code,
+                broker=key[0],
+                account_id=key[1],
+            )
 
     def clear_scope(self, broker: str, account_id: str, reason_code: str) -> None:
         key = (broker.upper(), str(account_id))
@@ -167,9 +210,17 @@ class HealthGate:
             blockers = self._scoped_blockers.get(key)
             if blockers is None:
                 return
+            changed = reason_code in blockers
             blockers.discard(reason_code)
             if not blockers:
                 self._scoped_blockers.pop(key, None)
+        if changed:
+            self._event_sink.emit(
+                "health_gate_cleared",
+                reason_code=reason_code,
+                broker=key[0],
+                account_id=key[1],
+            )
 
     def fail_database(self, reason: DatabaseFailureReason) -> None:
         if self._database_health is not None:

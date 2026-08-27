@@ -15,6 +15,7 @@ from packages.licensing.models import (
 )
 
 _MAX_PRACTICE_LEASE = timedelta(days=7)
+_MAX_REAL_LEASE = timedelta(hours=24)
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -71,6 +72,8 @@ class LeaseVerifier:
             and claims.expires_at - claims.issued_at > _MAX_PRACTICE_LEASE
         ):
             raise ValueError(AuthorizationReason.LEASE_INVALID.value)
+        if claims.real_mode_allowed and claims.expires_at - claims.issued_at > _MAX_REAL_LEASE:
+            raise ValueError(AuthorizationReason.LEASE_INVALID.value)
         return claims
 
     def evaluate(
@@ -117,7 +120,7 @@ class LeaseVerifier:
             reason = AuthorizationReason.CLIENT_INCOMPATIBLE
         elif broker not in claims.broker_access or strategy_pack not in claims.strategy_packs:
             reason = AuthorizationReason.ENTITLEMENT_MISSING
-        elif real_mode or claims.real_mode_allowed:
+        elif real_mode and not claims.real_mode_allowed:
             reason = AuthorizationReason.REAL_MODE_DISABLED
         if reason is not None:
             return self._blocked(reason, claims)

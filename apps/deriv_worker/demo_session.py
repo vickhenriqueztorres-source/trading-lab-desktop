@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Protocol
 from urllib.parse import quote, urlsplit
 
-from apps.deriv_worker.mapper import map_demo_balance
+from apps.deriv_worker.mapper import map_account_balance
 from apps.deriv_worker.public_session import PublicDerivSession
 from apps.deriv_worker.request_allowlist import DerivOperation
 from apps.deriv_worker.schema import DerivErrorCategory, DerivWorkerError
@@ -176,15 +176,23 @@ class DemoDerivSession:
         rest_client: DerivOptionsRestPort,
         app_id: str,
         *,
-        transport_factory: Callable[[str], DerivReadTransport] = lambda url: DerivWebSocketClient(
-            url, demo_authenticated=True
-        ),
+        expected_account_type: str = "demo",
+        transport_factory: Callable[[str], DerivReadTransport] | None = None,
         on_forbidden_real: Callable[[str], None] = lambda _reason: None,
     ) -> None:
         self._token_provider = token_provider
         self._rest = rest_client
         self._app_id = app_id
-        self._transport_factory = transport_factory
+        if expected_account_type not in {"demo", "real"}:
+            raise ValueError("Deriv account type is invalid")
+        self._expected_account_type = expected_account_type
+        self._transport_factory = transport_factory or (
+            lambda url: DerivWebSocketClient(
+                url,
+                demo_authenticated=True,
+                account_type=self._expected_account_type,
+            )
+        )
         self._on_forbidden_real = on_forbidden_real
         self._transport: DerivReadTransport | None = None
         self.account_id: str | None = None
@@ -244,9 +252,12 @@ class DemoDerivSession:
                 "DERIV_DEMO_ACCOUNT_NOT_FOUND",
             )
         try:
-            validate_deriv_account(selected)
+            validate_deriv_account(
+                selected,
+                expected_account_type=self._expected_account_type,
+            )
         except DerivWorkerError:
-            self._on_forbidden_real("DERIV_REAL_ACCOUNT_FORBIDDEN")
+            self._on_forbidden_real("DERIV_ACCOUNT_TYPE_MISMATCH")
             raise
         otp_payload = self._rest.request_otp(token, self._app_id, explicit_account_id)
         data = otp_payload.get("data")
@@ -256,7 +267,10 @@ class DemoDerivSession:
                 "DERIV_SCHEMA_INCOMPATIBLE",
             )
         try:
-            url = validate_deriv_ws_url(str(data["url"]), expected_demo=True)
+            url = validate_deriv_ws_url(
+                str(data["url"]),
+                expected_account_type=self._expected_account_type,
+            )
         except DerivWorkerError as exc:
             if exc.reason_code == "DERIV_REAL_WS_FORBIDDEN":
                 self._on_forbidden_real(exc.reason_code)
@@ -276,9 +290,15 @@ class DemoDerivSession:
 
 
 class DemoReadOnlyDerivSession(PublicDerivSession):
-    """Demo account reader: market data, server clock and balance only."""
+    """Authenticated account reader for market data, server clock and balance."""
 
-    def __init__(self, transport: DerivReadTransport, account_id: str = "VRTC_DEMO") -> None:
+    def __init__(
+        self,
+        transport: DerivReadTransport,
+        account_id: str = "VRTC_DEMO",
+        *,
+        account_type: str = "demo",
+    ) -> None:
         super().__init__(
             transport,
             retry_policy=ReadOnlyRetryPolicy(
@@ -286,8 +306,16 @@ class DemoReadOnlyDerivSession(PublicDerivSession):
                 base_delay_seconds=0.05,
                 max_delay_seconds=0.05,
             ),
+            # The OTP websocket is single-use and therefore must not be blindly
+            # reconnected.  Give the initial authenticated reads enough time to
+            # survive normal internet jitter instead of failing at the public
+            # session's intentionally aggressive two-second default.
+            request_timeout=8.0,
         )
         self.account_id = account_id
+        if account_type not in {"demo", "real"}:
+            raise ValueError("Deriv account type is invalid")
+        self.account_type = account_type
         self._balance: BrokerAccountBalance | None = None
         self._balance_subscribed = False
 
@@ -311,7 +339,11 @@ class DemoReadOnlyDerivSession(PublicDerivSession):
     def capabilities(self) -> BrokerCapabilities:
         return BrokerCapabilities(
             broker=Broker.DERIV,
-            connection_mode=BrokerConnectionMode.DEMO_AUTH_READ_ONLY,
+            connection_mode=(
+                BrokerConnectionMode.DEMO_AUTH_READ_ONLY
+                if self.account_type == "demo"
+                else BrokerConnectionMode.REAL_AUTH_READ_ONLY
+            ),
             authenticated=True,
             can_trade=False,
             supports_ticks=True,
@@ -326,14 +358,14 @@ class DemoReadOnlyDerivSession(PublicDerivSession):
     def account_balance(self) -> BrokerAccountBalance:
         latest = self._transport.receive_account(timeout=0.0)
         while latest is not None:
-            self._balance = map_demo_balance(latest, self._now())
+            self._balance = map_account_balance(latest, self._now(), self.account_type)
             latest = self._transport.receive_account(timeout=0.0)
         if not self._balance_subscribed:
             response = self._read_request(
                 DerivOperation.BALANCE,
                 {"balance": 1, "subscribe": 1},
             )
-            self._balance = map_demo_balance(response, self._now())
+            self._balance = map_account_balance(response, self._now(), self.account_type)
             self._balance_subscribed = True
         if self._balance is None:
             raise DerivWorkerError(

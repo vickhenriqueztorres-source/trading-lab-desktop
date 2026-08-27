@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from math import ceil
 from typing import TYPE_CHECKING
 
+from apps.core.digit_risk_config import (
+    DigitRiskConfig,
+    bounded_martingale_config,
+    is_bounded_digit_product,
+    projected_martingale_stakes,
+    validate_digit_risk_config,
+)
 from packages.domain.models import Money, OrderRequest
 from packages.persistence.writer import RiskLimitExceededError
+from packages.portfolio_allocation import (
+    BoundedMartingaleAllocator,
+    BoundedMartingaleState,
+)
 
 if TYPE_CHECKING:
     from apps.core.health import HealthGate
@@ -62,6 +78,19 @@ class RiskMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class DigitRiskMetrics:
+    active_config: DigitRiskConfig
+    daily_pnl_minor_units: int
+    consecutive_losses: int
+    cooldown_remaining_seconds: int
+    martingale_step: int
+    next_stake_minor_units: int
+    projected_sequence_loss_minor_units: int
+    recovery_symbol: str | None = None
+    cumulative_sequence_loss_minor_units: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class RiskDecision:
     amount: Money
 
@@ -78,9 +107,32 @@ class RestoredExposure:
 class RiskLedger:
     """Consolidated Global Risk Ledger managing cross-broker limits, stop loss and cooldowns."""
 
-    def __init__(self, config: GlobalRiskConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: GlobalRiskConfig | None = None,
+        *,
+        digit_config: DigitRiskConfig | None = None,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+        utc_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        digit_runtime_expirer: Callable[[datetime], Mapping[str, object] | None] | None = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._config = config or GlobalRiskConfig()
+        initial_digit_config = digit_config or DigitRiskConfig()
+        valid, reason = validate_digit_risk_config(initial_digit_config)
+        if not valid:
+            raise ValueError(reason)
+        self._digit_config = initial_digit_config
+        self._monotonic_clock = monotonic_clock
+        self._utc_clock = utc_clock
+        self._digit_runtime_expirer = digit_runtime_expirer
+        self._digit_daily_pnl_minor_units = 0
+        self._digit_consecutive_losses = 0
+        self._digit_cooldown_deadline: float | None = None
+        self._martingale_allocator = BoundedMartingaleAllocator()
+        self._digit_martingale_state = BoundedMartingaleState()
+        self._digit_recovery_symbol: str | None = None
+        self._digit_cumulative_sequence_loss_minor_units = 0
         self._active_reservations: dict[str, RestoredExposure] = {}
         self._daily_pnl_minor_units: int = 0
         self._consecutive_losses: int = 0
@@ -142,8 +194,77 @@ class RiskLedger:
                     symbol=symbol,
                 )
 
+    def digit_runtime_policy(self) -> dict[str, object]:
+        config = self.digit_config
+        serialized = json.dumps(
+            {key: str(value) for key, value in asdict(config).items()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return {
+            "config_fingerprint": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+            "currency": config.currency,
+            "martingale_enabled": config.martingale_enabled,
+            "martingale_max_steps": config.martingale_max_steps,
+            "max_consecutive_losses": config.max_consecutive_losses,
+            "cooldown_seconds": str(config.cooldown_seconds_after_loss),
+        }
+
+    def restore_digit_runtime(self, row: Mapping[str, object] | None) -> None:
+        """Restore durable progression/cooldown state after startup or settlement."""
+
+        if row is None:
+            return
+        with self._lock:
+            if (
+                str(row.get("config_fingerprint"))
+                != self.digit_runtime_policy()["config_fingerprint"]
+            ):
+                raise ValueError("digit runtime configuration does not match active policy")
+            self._digit_daily_pnl_minor_units = self._persisted_int(row, "daily_pnl_minor")
+            self._digit_consecutive_losses = self._persisted_int(row, "consecutive_losses")
+            self._digit_martingale_state = BoundedMartingaleState(
+                self._persisted_int(row, "martingale_step")
+            )
+            pinned = row.get("pinned_symbol")
+            self._digit_recovery_symbol = str(pinned) if isinstance(pinned, str) else None
+            self._digit_cumulative_sequence_loss_minor_units = self._persisted_int(
+                row, "cumulative_sequence_loss_minor"
+            )
+            started_raw = row.get("cooldown_started_at")
+            if isinstance(started_raw, str):
+                started = datetime.fromisoformat(started_raw)
+                duration = float(str(row.get("cooldown_seconds")))
+                remaining = (
+                    started + timedelta(seconds=duration) - self._utc_clock()
+                ).total_seconds()
+                self._digit_cooldown_deadline = self._monotonic_clock() + max(0.0, remaining)
+            else:
+                self._digit_cooldown_deadline = None
+
+    @staticmethod
+    def _persisted_int(row: Mapping[str, object], field: str) -> int:
+        value = row.get(field)
+        if type(value) is not int:
+            raise ValueError(f"invalid persisted digit runtime field: {field}")
+        return value
+
     def reserve(self, request: OrderRequest, health_gate: HealthGate | None = None) -> RiskDecision:
         with self._lock:
+            if is_bounded_digit_product(request.product):
+                allowed, reason = self.check_digit_entry(self._digit_config, health_gate)
+                if not allowed:
+                    raise RiskLimitExceededError(
+                        reason or "DIGIT_RISK_ENTRY_BLOCKED",
+                        "Specialized DIGITDIFF risk gate blocked the entry.",
+                    )
+                if self._digit_config.martingale_enabled:
+                    expected = self._current_digit_stake_minor_units()
+                    if request.amount.minor_units != expected:
+                        raise RiskLimitExceededError(
+                            "DIGIT_RISK_STAKE_MISMATCH",
+                            "DIGIT stake does not match the Core-owned bounded progression.",
+                        )
             if self._risk_state is RiskState.RISK_LOCKED:
                 if health_gate is not None:
                     health_gate.block("HG_DAILY_STOP_REACHED")
@@ -194,6 +315,163 @@ class RiskLedger:
                 )
 
             return RiskDecision(amount=request.amount)
+
+    @property
+    def digit_config(self) -> DigitRiskConfig:
+        with self._lock:
+            return self._digit_config
+
+    def update_digit_risk_config(
+        self,
+        config: DigitRiskConfig,
+        health_gate: HealthGate | None = None,
+    ) -> tuple[bool, str | None]:
+        valid, reason = validate_digit_risk_config(config)
+        if not valid:
+            return False, reason
+        with self._lock:
+            if config == self._digit_config:
+                self.check_digit_entry(config, health_gate)
+                return True, None
+            if self._digit_martingale_state.step > 0 and config.martingale_enabled:
+                return False, "DIGIT_MARTINGALE_SEQUENCE_ACTIVE"
+            self._digit_config = config
+            self._digit_martingale_state = BoundedMartingaleState()
+            self.check_digit_entry(config, health_gate)
+            return True, None
+
+    def digit_entry_stake(self, health_gate: HealthGate | None = None) -> Money:
+        with self._lock:
+            allowed, reason = self.check_digit_entry(self._digit_config, health_gate)
+            if not allowed:
+                raise RiskLimitExceededError(
+                    reason or "DIGIT_RISK_ENTRY_BLOCKED",
+                    "DIGIT risk gate blocked stake allocation.",
+                )
+            return Money(
+                self._current_digit_stake_minor_units(),
+                self._digit_config.currency,
+            )
+
+    def check_digit_entry(
+        self,
+        config: DigitRiskConfig,
+        health_gate: HealthGate | None = None,
+    ) -> tuple[bool, str | None]:
+        valid, reason = validate_digit_risk_config(config)
+        if not valid:
+            return False, reason
+        with self._lock:
+            if self._risk_state is RiskState.RISK_LOCKED:
+                if health_gate is not None:
+                    health_gate.block("HG_DAILY_STOP_REACHED")
+                return False, "HG_DAILY_STOP_REACHED"
+            if self._digit_daily_pnl_minor_units <= -config.daily_stop_loss_minor_units:
+                if health_gate is not None:
+                    health_gate.block("HG_DAILY_STOP_REACHED")
+                return False, "HG_DAILY_STOP_REACHED"
+            if self._digit_daily_pnl_minor_units >= config.daily_take_profit_minor_units:
+                if health_gate is not None:
+                    health_gate.block("HG_DAILY_TAKE_PROFIT_REACHED")
+                return False, "HG_DAILY_TAKE_PROFIT_REACHED"
+            if self._digit_cooldown_deadline is not None:
+                if self._monotonic_clock() < self._digit_cooldown_deadline:
+                    if health_gate is not None:
+                        health_gate.block("HG_COOLDOWN_ACTIVE")
+                    return False, "HG_COOLDOWN_ACTIVE"
+                self._digit_cooldown_deadline = None
+                self._digit_consecutive_losses = 0
+                self._digit_martingale_state = BoundedMartingaleState()
+                self._digit_recovery_symbol = None
+                self._digit_cumulative_sequence_loss_minor_units = 0
+                if self._digit_runtime_expirer is not None:
+                    refreshed = self._digit_runtime_expirer(self._utc_clock())
+                    if refreshed is not None:
+                        self.restore_digit_runtime(refreshed)
+                if health_gate is not None and self._risk_state is not RiskState.COOLDOWN:
+                    health_gate.clear("HG_COOLDOWN_ACTIVE")
+            if config.martingale_enabled:
+                state = (
+                    self._digit_martingale_state
+                    if config == self._digit_config
+                    else BoundedMartingaleState()
+                )
+                next_stake = self._digit_stake_minor_units(config, state)
+                remaining_loss_budget = (
+                    config.daily_stop_loss_minor_units + self._digit_daily_pnl_minor_units
+                )
+                if next_stake > remaining_loss_budget:
+                    self._risk_state = RiskState.RISK_LOCKED
+                    self._digit_martingale_state = BoundedMartingaleState()
+                    if health_gate is not None:
+                        health_gate.block("HG_DAILY_STOP_REACHED")
+                    return False, "HG_DAILY_STOP_REACHED"
+            return True, None
+
+    def refresh_digit_health_gate(self, health_gate: HealthGate) -> None:
+        """Refresh time-dependent digit blockers before the global entry-gate check."""
+
+        self.check_digit_entry(self.digit_config, health_gate)
+
+    def apply_digit_realized_pnl(
+        self,
+        pnl_minor_units: int,
+        currency: str,
+        health_gate: HealthGate | None = None,
+    ) -> None:
+        if type(pnl_minor_units) is not int:
+            raise TypeError("digit P&L must use integer minor units")
+        with self._lock:
+            if currency != self._digit_config.currency:
+                raise ValueError("digit P&L currency does not match active configuration")
+            self._digit_daily_pnl_minor_units += pnl_minor_units
+            if self._digit_config.martingale_enabled:
+                self._digit_martingale_state = self._martingale_allocator.after_settlement(
+                    bounded_martingale_config(self._digit_config),
+                    self._digit_martingale_state,
+                    pnl_minor_units,
+                )
+            else:
+                self._digit_martingale_state = BoundedMartingaleState()
+            if pnl_minor_units < 0:
+                self._digit_cumulative_sequence_loss_minor_units += -pnl_minor_units
+                self._digit_consecutive_losses += 1
+                if self._digit_consecutive_losses >= self._digit_config.max_consecutive_losses:
+                    self._digit_cooldown_deadline = (
+                        self._monotonic_clock() + self._digit_config.cooldown_seconds_after_loss
+                    )
+                    if health_gate is not None:
+                        health_gate.block("HG_COOLDOWN_ACTIVE")
+            elif pnl_minor_units > 0:
+                self._digit_consecutive_losses = 0
+                self._digit_recovery_symbol = None
+                self._digit_cumulative_sequence_loss_minor_units = 0
+
+            self.check_digit_entry(self._digit_config, health_gate)
+
+    def get_digit_metrics(self) -> DigitRiskMetrics:
+        with self._lock:
+            remaining = 0
+            if self._digit_cooldown_deadline is not None:
+                remaining = max(
+                    0,
+                    ceil(self._digit_cooldown_deadline - self._monotonic_clock()),
+                )
+            return DigitRiskMetrics(
+                active_config=self._digit_config,
+                daily_pnl_minor_units=self._digit_daily_pnl_minor_units,
+                consecutive_losses=self._digit_consecutive_losses,
+                cooldown_remaining_seconds=remaining,
+                martingale_step=self._digit_martingale_state.step,
+                next_stake_minor_units=self._current_digit_stake_minor_units(),
+                projected_sequence_loss_minor_units=sum(
+                    projected_martingale_stakes(self._digit_config)
+                ),
+                recovery_symbol=self._digit_recovery_symbol,
+                cumulative_sequence_loss_minor_units=(
+                    self._digit_cumulative_sequence_loss_minor_units
+                ),
+            )
 
     def register_active_reservation(
         self,
@@ -249,17 +527,47 @@ class RiskLedger:
             self._daily_pnl_minor_units = 0
             self._consecutive_losses = 0
             self._risk_state = RiskState.NORMAL
+            self._digit_daily_pnl_minor_units = 0
+            self._digit_consecutive_losses = 0
+            self._digit_cooldown_deadline = None
+            self._digit_martingale_state = BoundedMartingaleState()
+            self._digit_recovery_symbol = None
+            self._digit_cumulative_sequence_loss_minor_units = 0
             if health_gate is not None:
                 health_gate.clear("HG_DAILY_STOP_REACHED")
+                health_gate.clear("HG_DAILY_TAKE_PROFIT_REACHED")
                 health_gate.clear("HG_COOLDOWN_ACTIVE")
 
     def reset_cooldown(self, health_gate: HealthGate | None = None) -> None:
         with self._lock:
             self._consecutive_losses = 0
+            self._digit_consecutive_losses = 0
+            self._digit_cooldown_deadline = None
+            self._digit_martingale_state = BoundedMartingaleState()
+            self._digit_recovery_symbol = None
+            self._digit_cumulative_sequence_loss_minor_units = 0
             if self._risk_state is RiskState.COOLDOWN:
                 self._risk_state = RiskState.NORMAL
             if health_gate is not None:
                 health_gate.clear("HG_COOLDOWN_ACTIVE")
+
+    def _current_digit_stake_minor_units(self) -> int:
+        return self._digit_stake_minor_units(
+            self._digit_config,
+            self._digit_martingale_state,
+        )
+
+    def _digit_stake_minor_units(
+        self,
+        config: DigitRiskConfig,
+        state: BoundedMartingaleState,
+    ) -> int:
+        if not config.martingale_enabled:
+            return config.stake_minor_units
+        return self._martingale_allocator.stake_for_step(
+            bounded_martingale_config(config),
+            state,
+        ).minor_units
 
     def get_metrics(self) -> RiskMetrics:
         with self._lock:

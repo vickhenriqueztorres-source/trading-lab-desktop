@@ -60,6 +60,7 @@ def _read_startup(
             "fake-demo",
             "live-public",
             "live-demo",
+            "live-real",
         }
     ):
         raise CoreStartupError(CoreStartupError.reason_code)

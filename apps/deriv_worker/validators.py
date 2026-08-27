@@ -36,8 +36,18 @@ TRADING_OPERATION_DENYLIST = (
 )
 
 
-def validate_deriv_ws_url(url: str, *, expected_demo: bool | None = None) -> str:
-    """Accept only the official public or OTP-authenticated demo endpoint."""
+def validate_deriv_ws_url(
+    url: str,
+    *,
+    expected_demo: bool | None = None,
+    expected_account_type: str | None = None,
+) -> str:
+    """Accept only the official public or selected OTP-authenticated endpoint."""
+
+    if expected_account_type is not None:
+        expected_account_type = expected_account_type.strip().lower()
+        if expected_account_type not in {"demo", "real"} or expected_demo is not None:
+            raise ValueError("expected Deriv account mode is invalid")
 
     parsed = urlsplit(url)
     if (
@@ -52,14 +62,15 @@ def validate_deriv_ws_url(url: str, *, expected_demo: bool | None = None) -> str
             DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "DERIV_WS_HOST_FORBIDDEN",
         )
-    if parsed.path == REAL_WS_PATH or "/real" in parsed.path:
+    is_real = parsed.path == REAL_WS_PATH
+    if ("/real" in parsed.path and not is_real) or (is_real and expected_account_type != "real"):
         raise DerivWorkerError(
             DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "DERIV_REAL_WS_FORBIDDEN",
         )
     is_demo = parsed.path == DEMO_WS_PATH
     is_public = parsed.path == PUBLIC_WS_PATH
-    if not is_demo and not is_public:
+    if not is_demo and not is_real and not is_public:
         raise DerivWorkerError(
             DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "DERIV_WS_PATH_FORBIDDEN",
@@ -69,7 +80,15 @@ def validate_deriv_ws_url(url: str, *, expected_demo: bool | None = None) -> str
             DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "DERIV_WS_PATH_FORBIDDEN",
         )
-    if is_demo:
+    if expected_account_type is not None and (
+        (expected_account_type == "demo" and not is_demo)
+        or (expected_account_type == "real" and not is_real)
+    ):
+        raise DerivWorkerError(
+            DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
+            "DERIV_WS_PATH_FORBIDDEN",
+        )
+    if is_demo or is_real:
         try:
             query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
         except ValueError as exc:
@@ -90,12 +109,16 @@ def validate_deriv_ws_url(url: str, *, expected_demo: bool | None = None) -> str
     return url
 
 
-def validate_deriv_account(account_payload: Mapping[str, object]) -> None:
+def validate_deriv_account(
+    account_payload: Mapping[str, object], *, expected_account_type: str = "demo"
+) -> None:
     account_type = account_payload.get("account_type")
-    if account_type != "demo":
+    if expected_account_type not in {"demo", "real"}:
+        raise ValueError("expected account type is invalid")
+    if account_type != expected_account_type:
         raise DerivWorkerError(
             DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
-            "DERIV_REAL_ACCOUNT_FORBIDDEN",
+            "DERIV_ACCOUNT_TYPE_MISMATCH",
         )
 
 

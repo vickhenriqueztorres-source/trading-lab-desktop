@@ -1,7 +1,30 @@
 # RULES — Regras Obrigatórias do Projeto
 
-**Projeto:** DualTrade Desktop — Deriv + IQ Option  
+**Projeto:** Trading Lab Desktop
+
+**Baseline executável:** v1.9.11
+
+**Atualizado em:** 2026-08-26
 **Linguagem normativa:** “DEVE” é obrigatório; “NÃO DEVE” é proibido; “PODE” é opcional.
+
+## 0. Escopo executável obrigatório da v1.9.11
+
+- **R-SCOPE-001:** A aplicação PODE enviar ordens externas somente para conta Deriv Demo
+  oficialmente confirmada pela API.
+- **R-SCOPE-002:** Conta Deriv Real PODE conectar para leitura/monitoramento, mas NÃO DEVE receber
+  submissão financeira nesta versão.
+- **R-SCOPE-003:** A IQ Option NÃO DEVE ser apresentada como conexão externa operacional até que
+  login, capabilities, execução e reconciliação tenham implementação e validação próprias.
+- **R-SCOPE-004:** O bot DEVE iniciar pausado e só PODE abrir novas entradas depois de ação
+  explícita do operador.
+- **R-SCOPE-005:** Troca de estratégia, troca de conta ou recuperação de conexão DEVE executar
+  Safe Stop, invalidar o sinal anterior e exigir avaliação nova; reconexão NÃO DEVE rearmar o bot.
+- **R-SCOPE-006:** Cada sinal de tick DEVE ser consumido no máximo uma vez e somente uma ordem
+  Deriv PODE permanecer em voo.
+- **R-SCOPE-007:** O launcher portátil DEVE impedir duas instâncias do mesmo perfil e uma segunda
+  abertura DEVE trazer a janela já existente para frente.
+- **R-SCOPE-008:** Pacote de diagnóstico NÃO DEVE incluir vault, token, bancos operacionais ou
+  payload bruto capaz de revelar credenciais.
 
 ## 1. Arquitetura
 
@@ -42,7 +65,7 @@
 - **R-RISK-002:** Exposição DEVE incluir valores reservados, abertos e desconhecidos.
 - **R-RISK-003:** Limites DEVEM existir por conta e globalmente.
 - **R-RISK-004:** Saldos em moedas diferentes DEVEM manter código de moeda e conversão explícita.
-- **R-RISK-005:** O MVP NÃO DEVE oferecer martingale.
+- **R-RISK-005:** Martingale, quando habilitado, DEVE ser estritamente delimitado (*Bounded Martingale*) por teto de etapas (*max_steps*), teto de stake (*max_stake*) e Stop Loss financeiro diário; martingale ilimitado ou sem validação prévia de risco É PROIBIDO.
 - **R-RISK-006:** Estratégia NÃO DEVE alterar, ignorar ou substituir o Risk Ledger.
 - **R-RISK-007:** Payout/payoff inválido, expirado ou desconhecido DEVE bloquear a entrada.
 - **R-RISK-008:** Configuração de risco ativa DEVE ser imutável; mudança cria nova versão.
@@ -85,7 +108,8 @@
 
 - **R-STR-001:** Estratégias DEVEM ser funções/componentes determinísticos sempre que possível.
 - **R-STR-002:** Estado DEVE ser isolado por versão, broker, conta, produto, ativo e timeframe.
-- **R-STR-003:** A estratégia inicial DEVE usar candle fechado.
+- **R-STR-003:** Estratégias Digit Edge DEVEM decidir somente sobre tick completo, com sequência,
+  símbolo e timestamp validados; estratégias futuras de candle DEVEM usar candle fechado.
 - **R-STR-004:** Sinais DEVEM possuir validade e evidência estruturada.
 - **R-STR-005:** “Confiança” NÃO DEVE ser apresentada como probabilidade sem calibração demonstrada.
 - **R-STR-006:** O mesmo código de estratégia DEVE ser utilizável em replay e execução live.
@@ -112,13 +136,12 @@
 - **R-UI-005:** A UI DEVE continuar exibindo ordens abertas, desconhecidas e em reconciliação.
 - **R-UI-006:** Fechar a UI NÃO DEVE apagar estado nem interromper o Core sem encerramento seguro.
 
-**Aplicação executável (Fase 1 / Fatia 1.4):** a UI é um processo de projeção descartável e não
-importa persistência, domínio de risco ou SDK de corretora. Seu protocolo bounded não contém
-credenciais de broker nem material de identidade; o único token efêmero é a capability de spawn do
-canal IPC, entregue por pipe e nunca incluída no snapshot, argv, log ou banco. Saldo/clock sem fonte
-autoritativa DEVEM aparecer como indisponíveis, nunca como `0`/sincronizados. Retomada remove apenas
-`HG_SAFE_STOP`; qualquer outro blocker mantém novas entradas fechadas. Kill da janela não equivale
-a “Encerrar com segurança” e não encerra o Core.
+**Aplicação executável v1.9.11:** a UI é uma projeção comandada pelo Core e não possui autoridade
+financeira. Na aba Deriv, login por token, conta, estratégia, risco, bot e resultados DEVEM refletir
+estado confirmado, sem fabricar saldo ou conexão. A entrega inicial da credencial usa canal local
+autenticado específico; depois disso, token NÃO DEVE integrar snapshot, IPC financeiro, argv, log
+ou banco. Retomada remove somente `HG_SAFE_STOP`; qualquer outro blocker mantém entradas fechadas.
+Kill da janela não equivale a “Encerrar com segurança” e não autoriza abandono de contrato.
 
 ## 10A. Identidade e licenciamento
 
@@ -133,7 +156,9 @@ a “Encerrar com segurança” e não encerra o Core.
 - **R-AUTH-009:** Expiração, revogação, assinatura inválida ou entitlement ausente DEVEM bloquear somente novas entradas no escopo afetado; ordens abertas continuam acompanhadas e liquidadas.
 - **R-AUTH-010:** Serviço de identidade/licenciamento NÃO DEVE receber senha, cookie ou token de corretora, ordens, saldo ou histórico operacional completo.
 - **R-AUTH-011:** Autenticação Deriv e IQ Option DEVE permanecer separada da identidade DualTrade.
-- **R-AUTH-012:** Deriv DEVE preferir OAuth na distribuição comercial; PAT, quando permitido em protótipo, NÃO DEVE virar credencial do produto.
+- **R-AUTH-012:** A integração Deriv da v1.9.11 DEVE usar API Token/PAT informado dentro do app,
+  protegido por DPAPI CurrentUser e separado da identidade do produto; qualquer migração futura
+  para OAuth exige revisão de fluxo e segurança.
 - **R-AUTH-013:** Credenciais/sessão IQ Option DEVEM permanecer no IQ Option Worker e armazenamento local protegido; NÃO DEVEM transitar pelo serviço de identidade.
 - **R-AUTH-014:** Limite e revogação de dispositivos DEVEM ser aplicados pelo `user_id` e pelo registro criptográfico do dispositivo, sem depender de hardware fingerprint.
 - **R-AUTH-015:** Código de e-mail, access token, refresh token, chave privada, lease bruta e respostas de autenticação NÃO DEVEM aparecer em logs, traces, analytics, fixtures ou pacotes de suporte.
@@ -154,7 +179,13 @@ a “Encerrar com segurança” e não encerra o Core.
 - **R-CAT-012:** No MVP, estratégias DEVEM vir empacotadas com a aplicação; execução de Python/código arbitrário baixado remotamente É PROIBIDA.
 - **R-CAT-013:** Pacote remoto futuro DEVE possuir assinatura válida, hash, manifesto, compatibilidade e entitlement correspondente antes de ser carregado.
 - **R-CAT-014:** Estratégia com manifesto incompatível, hash divergente, status não liberado ou entitlement ausente DEVE falhar fechado.
-- **R-CAT-015:** Continuação de tendência, reversão lateral e expansão de volatilidade DEVEM ser tratadas apenas como candidatas iniciais até evidência de validação; documentação NÃO DEVE apresentá-las como lucrativas por definição.
+- **R-CAT-015:** Tail Probability Edge, Selective Differs Edge e Parity Regime Edge DEVEM ser
+  tratadas como estratégias experimentais; documentação NÃO DEVE apresentá-las como lucrativas ou
+  usar assertividade curta como prova de vantagem.
+- **R-CAT-016:** Seleção automática de ativo DEVE respeitar elegibilidade, cooldown, ordem em voo e
+  recuperação Martingale; mudança de ativo NÃO DEVE ocorrer no meio de uma sequência de recuperação.
+- **R-CAT-017:** Martingale DEVE iniciar desligado, ser opt-in e respeitar simultaneamente
+  multiplicador, passos, stake máxima e perda projetada dentro do stop diário.
 
 ## 11. Testes
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
@@ -322,6 +323,7 @@ class ReconciliationCoordinator:
                 if candidate["broker_order_id"] is not None
                 else None
             ),
+            submitted_at=datetime.fromisoformat(str(candidate["order_created_at"])),
         )
 
     @staticmethod

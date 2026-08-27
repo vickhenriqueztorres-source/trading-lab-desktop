@@ -37,10 +37,15 @@ def build_authorized_agent(
     lease_ttl: timedelta = timedelta(days=7),
     backing: dict[str, bytes] | None = None,
     client_version: str = "0.0.1",
+    real_mode_allowed: bool = False,
 ) -> tuple[AuthAgent, FakeIdentityService, SimulatedUserScopedVault, dict[str, bytes]]:
     shared = backing if backing is not None else {}
     vault = SimulatedUserScopedVault("windows-user-a", shared)
-    service = FakeIdentityService(now=clock.now, lease_ttl=lease_ttl)
+    service = FakeIdentityService(
+        now=clock.now,
+        lease_ttl=lease_ttl,
+        real_mode_allowed=real_mode_allowed,
+    )
     agent = AuthAgent(
         service,
         vault,
@@ -228,3 +233,27 @@ def test_known_device_revocation_and_client_or_entitlement_mismatch_block() -> N
     assert entitled.authorization("DERIV", "missing-pack").reason is (
         AuthorizationReason.ENTITLEMENT_MISSING
     )
+
+
+def test_real_mode_requires_explicit_short_signed_entitlement() -> None:
+    clock = MutableClock(datetime(2026, 8, 20, tzinfo=UTC))
+    practice, _, _, _ = build_authorized_agent(clock)
+    assert practice.authorization("DERIV", "strategy-test", real_mode=True).reason is (
+        AuthorizationReason.REAL_MODE_DISABLED
+    )
+
+    real, _, _, _ = build_authorized_agent(
+        clock,
+        lease_ttl=timedelta(hours=24),
+        real_mode_allowed=True,
+    )
+    decision = real.authorization("DERIV", "strategy-test", real_mode=True)
+    assert decision.new_entries_allowed is True
+    assert decision.reason is AuthorizationReason.AUTHORIZED
+
+    with pytest.raises(ValueError):
+        FakeIdentityService(
+            now=clock.now,
+            lease_ttl=timedelta(hours=25),
+            real_mode_allowed=True,
+        )

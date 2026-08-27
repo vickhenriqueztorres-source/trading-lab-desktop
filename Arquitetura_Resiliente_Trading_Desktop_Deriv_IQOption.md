@@ -1,16 +1,62 @@
-# Arquitetura Resiliente — DualTrade Desktop para Deriv e IQ Option
+# Arquitetura Resiliente — Trading Lab Desktop
 
-**Projeto:** DualTrade Desktop  
-**Versão:** 1.1  
-**Status:** arquitetura de referência atualizada para identidade/licenciamento e plataforma multi-estratégias  
-**Plataforma inicial:** Windows 10/11 64 bits  
+**Projeto:** Trading Lab Desktop
+
+**Baseline executável:** v1.9.11
+
+**Versão documental:** 1.9.11
+
+**Status:** arquitetura atual documentada e arquitetura-alvo demarcada
+
+**Atualizado em:** 2026-08-26
+
+**Plataforma inicial:** Windows 10/11 64 bits
 **Documentos normativos relacionados:** `PRD_Trading_Desktop_Deriv_IQOption.md`, `RULES.md`, `AIGUARD.md`, `AGENTS.md`, `WORKLOG.md`
+
+---
+
+## 0. Baseline implementada v1.9.11
+
+Esta seção prevalece quando uma seção histórica ou futura deste documento usar “deve”, “MVP” ou
+“pretendida”. O código executável atual possui a seguinte topologia:
+
+```text
+TradingLabDesktop.exe (launcher portátil C#)
+├── UI PySide6
+├── Auth Agent local simulado
+├── Trading Core / único writer de state.db
+├── Deriv Worker
+│   ├── public/fake-public no startup
+│   ├── conta Demo: ticks + execução financeira + reconciliação
+│   └── conta Real: ticks/saldo/monitoramento read-only
+├── Simulated Financial Worker
+└── componentes IQ Option de domínio/teste, sem sessão externa na UI
+```
+
+| Caminho | Estado |
+|---|---|
+| Deriv pública | implementado |
+| Deriv Demo autenticada | implementado; capacidade financeira habilitada após seleção explícita |
+| Deriv Real autenticada | implementado em read-only; `allow_real_financial_submission=False` |
+| IQ Option externa | não implementada no aplicativo; arquitetura e testes disponíveis |
+
+O bot Deriv inicia pausado. As três estratégias Digit Edge consomem ticks de um segundo, exigem
+500 ticks de aquecimento e podem usar seleção automática entre `R_10`, `R_25`, `R_50`, `R_75` e
+`R_100`. O caminho financeiro mantém uma ordem Deriv em voo, consome cada sinal uma vez e não
+reenvia submissão ambígua. O Martingale é opcional, limitado e desligado por padrão.
+
+Para descrição operacional por componente, consulte
+[docs/CURRENT_ARCHITECTURE.md](docs/CURRENT_ARCHITECTURE.md) e
+[docs/COMPONENT_REFERENCE.md](docs/COMPONENT_REFERENCE.md).
 
 ---
 
 ## 1. Objetivo
 
-Esta arquitetura define como o DualTrade Desktop deve executar estratégias automatizadas para Deriv e IQ Option de forma local, auditável e tolerante a falhas, sem transformar indisponibilidade de rede, corretora, processo, banco, identidade ou estratégia em exposição financeira não controlada.
+Esta arquitetura define como o Trading Lab Desktop executa estratégias automatizadas na Deriv
+Demo e como poderá incorporar a IQ Option de forma local, auditável e tolerante a falhas, sem
+transformar indisponibilidade de rede, corretora, processo, banco, identidade ou estratégia em
+exposição financeira não controlada.
 
 O desenho preserva os princípios já definidos para a arquitetura resiliente v1:
 
@@ -176,7 +222,7 @@ Corretora
 
 O serviço remoto não participa desse caminho de baixa latência e não envia ordens.
 
-Para market data read-only, a Fase 0 agora possui um caminho operacional separado do caminho
+Para pesquisa de market data read-only, existe um caminho operacional separado do caminho
 financeiro: `BrokerShadowSession` compartilha um único worker/cliente por broker entre séries e
 `BrokerShadowSoakRunner` executa ciclos bounded sobre essa sessão, agregando telemetria do processo
 Core e do subprocesso filho. Esse soak só observa, reinicia explicitamente a sessão read-only dentro
@@ -247,10 +293,11 @@ Responsabilidades:
 
 O Supervisor não possui autoridade para inferir resultado de ordem.
 
-Na Fase 1 executável, `ProcessTreeSupervisor` possui somente o lock `profile.lock`, o canal de
-lifecycle e o Windows Job Object. Ele inicia um host do Core, que compõe internamente a sequência
-lógica `Auth Agent → Core/DB/recovery → Simulated Worker → Deriv read-only`. O Core continua dono
-dos supervisores IPC dos workers e é o único processo que abre `state.db`.
+Na v1.9.11, `ProcessTreeSupervisor` combina `profile.lock`, mutex nativo, canal de lifecycle e
+Windows Job Object. O launcher portátil traz a janela existente para frente em uma segunda
+abertura. O host do Core compõe a sequência lógica `Auth Agent → Core/DB/recovery → workers`,
+incluindo Deriv pública e, depois do login interno, Deriv Demo financeira ou Deriv Real read-only.
+O Core continua dono dos supervisores IPC e é o único processo que abre `state.db`.
 
 O canal Launcher ↔ Core usa envelope IPC v1, token efêmero de 256 bits entregue por `stdin` e prova
 HMAC sobre nonces. O shutdown segue `HG_SAFE_STOP → drain bounded de eventos já enfileirados →
@@ -262,8 +309,9 @@ No Windows, o Core é atribuído ao Job Object antes de receber a configuração
 herdam. Fechar o handle do Job ou perder abruptamente o Launcher encerra a árvore sem deixar filho
 órfão; como crash do Launcher não permite diálogo seguro, o próximo Core ainda deve executar
 integridade, recovery e reconciliação. Queda do Core encerra toda a árvore. Queda do worker
-financeiro apenas degrada e não é reiniciada pelo Launcher. Auth Agent e Deriv read-only podem
-receber restart bounded porque não substituem uma porta financeira ativa.
+financeiro apenas degrada e não é reiniciada cegamente pelo Launcher. A recuperação da sessão
+Deriv autenticada usa reinício limitado, OTP novo, restauração de subscriptions e reconciliação;
+ela nunca rearma o bot nem reenvia ordem ambígua.
 
 ### 4.2 UI
 
@@ -291,9 +339,10 @@ Fechar/travar a UI não deve invalidar o estado financeiro já persistido.
 
 O Auth Agent é responsável somente pela identidade do produto.
 
-Na implementação local da Fase 1, seu vault usa DPAPI `CurrentUser`, DACL protegida pelo SID do
-token atual e envelopes versionados publicados por replace atômico. Falha de proteção não seleciona
-automaticamente o simulador.
+Na implementação local, o Auth Agent de identidade do produto ainda é simulado. Seu vault usa
+DPAPI `CurrentUser`, DACL protegida pelo SID do token atual e envelopes versionados publicados por
+replace atômico. A credencial Deriv usa armazenamento DPAPI separado e não se confunde com a
+identidade/licença do produto.
 
 O Auth Agent executa em subprocesso. O supervisor entrega um token efêmero de 256 bits por `stdin`;
 o handshake TCP loopback valida token/roles/version/deadline e prova o servidor por HMAC sobre
@@ -337,6 +386,10 @@ Responsabilidades:
 ### 4.5 Workers
 
 Workers traduzem entre o protocolo interno e a corretora.
+
+Na v1.9.11, o Deriv Worker possui caminhos público, autenticado e financeiro Demo. O IQ Option
+Worker possui contratos, modelos, harnesses e testes, mas ainda não é exposto como integração
+externa operacional no aplicativo.
 
 Eles:
 
@@ -859,6 +912,14 @@ subscritas como reconnecting. O recovery é explícito e reinicia o worker uma �
 recriar router/runtimes e restaurar cada subscription pelo contrato de backfill existente. Isso não
 altera o pipeline financeiro nem autoriza modo real.
 
+Na composição de validação Demo v1.9, a queda da sessão autenticada também fecha imediatamente o
+Health Gate de market data e agenda recuperação supervisionada no Core. O Core interrompe o executor
+de sinais, destaca o worker antigo, inicia processo novo para obter OTP novo, reanexa o worker ao
+roteador financeiro e executa reconciliação dos estados não terminais antes de retomar entradas. O
+backoff é limitado por tentativa e capped em 30 segundos. Esse recovery nunca repete um comando de
+ordem: submissão ambígua continua `UNKNOWN` até evidência externa. Conta Real permanece fora dessa
+rota financeira.
+
 ### 13.3 Migrações
 
 Migrações:
@@ -1031,17 +1092,25 @@ MVP:
 
 A decisão é auditável.
 
-### 16.5 Portfolio Allocator
+### 16.5 Portfolio Allocator e Gestão de Stake (Bounded Martingale)
 
 Depois da arbitragem:
 
 - aplica orçamento máximo da estratégia;
 - aplica orçamento da conta;
-- aplica limite global;
-- respeita exposição aberta/desconhecida;
+- aplica limite global consolidado;
+- respeita exposição aberta e desconhecida;
+- calcula a stake autorizada com base no modelo configurado:
+  1. **Stake Fixa**: valor nominal fixo pré-definido;
+  2. **Stake Percentual**: percentual conservador sobre o saldo livre comprovado;
+  3. **Bounded Martingale (Martingale Delimitado)**: progressão geométrica controlada por máquina de estado sequencial baseada nas liquidações anteriores (`step`, `max_steps`, `multiplier`, `base_stake`, `max_stake_cap`).
+     - Em caso de perda (`LOSS`), calcula `next_stake = min(current_stake * multiplier, max_stake_cap)` e incrementa `step`;
+     - Em caso de ganho (`PROFIT`) ou ao atingir `step == max_steps`, a sequência reinicia para `base_stake` (`step = 0`);
+     - O valor resultante é obrigatoriamente submetido ao `RiskLedger`. Se a stake necessária violar o saldo livre, o teto por operação ou o Stop Loss diário (`daily_stop_loss`), o Health Gate fecha imediatamente (`HG_DAILY_STOP_REACHED` / `RISK_LOCKED`) e a progressão é cancelada;
+     - Martingale ilimitado (sem teto de etapas ou sem stop loss) é estritamente proibido.
 - não autoriza cada estratégia a usar o saldo completo independentemente.
 
-O Allocator não substitui o Risk Ledger; ele fornece um teto/allocação para o Risk Ledger validar e reservar.
+O Allocator não substitui o Risk Ledger; ele fornece um teto/alocação para o Risk Ledger validar e reservar atomicamente antes de qualquer submissão.
 
 ### 16.6 Validation Registry
 
@@ -1066,15 +1135,16 @@ Rentabilidade não é propriedade da arquitetura.
 
 ---
 
-## 17. Estratégias candidatas iniciais
+## 17. Estratégias atuais
 
-A arquitetura admite inicialmente três arquétipos para validação:
+A v1.9.11 inclui três estratégias Digit Edge experimentais:
 
-1. continuação de tendência;
-2. reversão em mercado lateral;
-3. expansão de volatilidade.
+1. Tail Probability Edge — contratos Over/Under;
+2. Selective Differs Edge — contrato Digit Differs;
+3. Parity Regime Edge — contratos Even/Odd.
 
-Eles são candidatos de pesquisa/validação, não garantias de resultado.
+Elas usam 500 ticks de aquecimento, múltiplas janelas e filtro estatístico conservador. Continuam
+candidatas de pesquisa/validação, não garantias de resultado.
 
 Todos devem obedecer exatamente ao mesmo pipeline:
 
@@ -1382,7 +1452,9 @@ Atualizações:
 
 ## 27. Conta real
 
-O MVP não opera conta real.
+A v1.9.11 permite conectar e identificar uma conta Deriv Real com confirmação reforçada, porém
+mantém essa sessão read-only. O Core não anuncia capacidade financeira Real e o worker conserva
+`allow_real_financial_submission=False`; portanto, nenhuma ordem Real pode sair nesta release.
 
 Quando a fase real for formalmente liberada, além dos controles existentes serão obrigatórios:
 
@@ -1599,9 +1671,10 @@ Diretórios devem surgir com código/teste real, não apenas para imitar esta á
 
 ---
 
-## 33. Critérios de arquitetura para liberar scaffolding
+## 33. Critérios históricos que liberaram o scaffolding
 
-A Fase 0 pode avançar quando existirem contratos testáveis para:
+Esta lista registra o gate inicial já superado. A Fase 0 pôde avançar quando foram entregues
+contratos testáveis para:
 
 1. tipos de dinheiro e identificadores;
 2. estado de sessão;
@@ -1620,7 +1693,8 @@ A Fase 0 pode avançar quando existirem contratos testáveis para:
 15. Health Gate;
 16. Recovery Coordinator.
 
-Nenhum desses itens implica integração real com corretora ou liberação de conta real.
+Esses itens, isoladamente, não autorizavam integração financeira externa. A autorização atual está
+definida na seção 0: apenas Deriv Demo possui execução; Deriv Real permanece read-only.
 
 ---
 
@@ -1645,7 +1719,10 @@ Nenhum desses itens implica integração real com corretora ou liberação de co
 | AR-015 | Signal Arbiter precede Portfolio Allocator e Risk Ledger. |
 | AR-016 | Sinais opostos cancelam a entrada no MVP; sinais iguais não somam stake. |
 | AR-017 | Estratégias executáveis do MVP são empacotadas; código remoto arbitrário é proibido. |
-| AR-018 | Tendência, reversão lateral e expansão de volatilidade são candidatas até validação. |
+| AR-018 | Tail Probability Edge, Selective Differs Edge e Parity Regime Edge são as três estratégias Digit Edge atuais e não constituem promessa de rentabilidade. |
+| AR-019 | A v1.9.11 envia ordens somente à Deriv Demo; Deriv Real é read-only. |
+| AR-020 | Trocar estratégia ou recuperar sessão executa Safe Stop, limpa sinal pendente e exige novo armamento/sinal. |
+| AR-021 | Martingale é opcional, limitado e nunca altera a autoridade do Risk Ledger. |
 
 ---
 
@@ -1671,7 +1748,11 @@ Ainda exigem decisão/validação posterior:
 
 ## 36. Resumo
 
-O DualTrade Desktop permanece um sistema de trading local com isolamento forte entre corretoras e um único Core financeiro. A nova camada de identidade/licenciamento é um **plano de controle**, não um servidor de trading. A nova plataforma de estratégias é uma **camada de geração e governança de sinais**, não uma autoridade de risco.
+O Trading Lab Desktop é um sistema local com um único Core financeiro e isolamento por integração.
+Na versão atual, a Deriv Demo é a única corretora/modo com execução externa; a IQ Option permanece
+um alvo arquitetural. A camada de identidade/licenciamento é um **plano de controle** ainda
+simulado, não um servidor de trading. A plataforma de estratégias é uma **camada de geração e
+governança de sinais**, não uma autoridade de risco.
 
 A cadeia de autoridade é:
 
@@ -1705,4 +1786,7 @@ Nenhuma camada anterior ao Risk Ledger pode transformar um sinal em ordem direta
 
 ---
 
-**Resumo da arquitetura v1.1:** execução financeira local e fail closed; Core único; workers isolados; estado durável e reconciliável; autenticação do produto por e-mail + código com cliente público, dispositivo e lease assinada; credenciais de broker separadas; Strategy Platform versionada com arbitragem e alocação antes do risco; demo/practice como padrão; conta real fora do MVP.
+**Resumo da arquitetura v1.9.11:** execução financeira local e fail closed; Core único; workers
+isolados; estado durável e reconciliável; credencial Deriv em DPAPI; três estratégias Digit Edge;
+Martingale limitado opcional; Demo Deriv como único modo financeiro; Deriv Real read-only; IQ
+Option e identidade remota preservadas como arquitetura-alvo.

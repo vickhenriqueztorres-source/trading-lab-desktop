@@ -56,6 +56,7 @@ class FakeDerivTransport:
         self._tick_index = 0
         self._next_contract_id = 200_000_001
         self._contracts: dict[int, dict[str, object]] = {}
+        self._proposals: dict[str, dict[str, object]] = {}
         self._transactions: list[dict[str, object]] = []
         self._stream_events: queue.Queue[dict[str, object]] = queue.Queue(maxsize=128)
         self._account_events: queue.Queue[dict[str, object]] = queue.Queue(maxsize=32)
@@ -123,22 +124,41 @@ class FakeDerivTransport:
             }
             if self.scenario is FakeDerivScenario.SCHEMA_CHANGED:
                 item.pop("underlying_symbol")
-            return {"msg_type": "active_symbols", "active_symbols": [item]}
+            synthetic = [
+                {
+                    "underlying_symbol": symbol,
+                    "underlying_symbol_name": f"Volatility {symbol[2:]} Index",
+                    "underlying_symbol_type": "synthetic_index",
+                    "market": "synthetic_index",
+                    "submarket": "continuous_indices",
+                    "pip_size": "0.01",
+                    "exchange_is_open": 1,
+                    "is_trading_suspended": 0,
+                }
+                for symbol in ("R_10", "R_25", "R_50", "R_75", "R_100")
+            ]
+            return {"msg_type": "active_symbols", "active_symbols": [item, *synthetic]}
         if operation is DerivOperation.CONTRACTS_LIST:
             return {"msg_type": "contracts_list", "contracts_list": ["callput"]}
         if operation is DerivOperation.CONTRACTS_FOR:
             symbol = str(payload["contracts_for"])
+            contract_types = (
+                ("DIGITOVER", "DIGITUNDER", "DIGITDIFF", "DIGITEVEN", "DIGITODD")
+                if symbol.startswith(("R_", "1HZ"))
+                else ("CALL",)
+            )
             return {
                 "msg_type": "contracts_for",
                 "contracts_for": {
                     "available": [
                         {
-                            "contract_type": "CALL",
+                            "contract_type": contract_type,
                             "underlying_symbol": symbol,
-                            "contract_category": "callput",
+                            "contract_category": "digits",
                         }
+                        for contract_type in contract_types
                     ],
-                    "hit_count": 1,
+                    "hit_count": len(contract_types),
                 },
             }
         if operation is DerivOperation.TICKS:
@@ -214,11 +234,17 @@ class FakeDerivTransport:
             contract_id = self._next_contract_id
             self._next_contract_id += 1
             stake = str(payload.get("price", "10.00"))
-            raw_params = payload.get("parameters")
-            parameters = raw_params if isinstance(raw_params, dict) else {}
-            symbol = str(parameters.get("symbol", "frxEURUSD"))
+            proposal_id = str(payload.get("buy", ""))
+            direct_parameters = payload.get("parameters")
+            parameters = (
+                dict(direct_parameters)
+                if isinstance(direct_parameters, Mapping)
+                else self._proposals.get(proposal_id, {})
+            )
+            symbol = str(parameters.get("symbol", parameters.get("underlying_symbol", "frxEURUSD")))
             direction = str(parameters.get("contract_type", "CALL"))
             currency = str(parameters.get("currency", "USD"))
+            barrier = parameters.get("barrier")
             raw_pt = payload.get("passthrough")
             passthrough = raw_pt if isinstance(raw_pt, dict) else {}
 
@@ -236,6 +262,9 @@ class FakeDerivTransport:
                 "date_expiry": self.server_epoch + 60,
                 "passthrough": passthrough,
             }
+            if barrier is not None:
+                contract_record["barrier"] = str(barrier)
+                contract_record["date_expiry"] = self.server_epoch + 1
             self._contracts[contract_id] = contract_record
             self._transactions.append(
                 {
@@ -287,6 +316,21 @@ class FakeDerivTransport:
                     "profit": profit,
                     "payout": payout,
                 }
+                if direction.startswith("DIGIT"):
+                    predicted = int(str(barrier)) if barrier is not None else None
+                    if direction == "DIGITDIFF" and predicted is not None:
+                        exit_digit = (predicted + 1) % 10 if is_win else predicted
+                    elif direction == "DIGITOVER" and predicted is not None:
+                        exit_digit = min(9, predicted + 1) if is_win else predicted
+                    elif direction == "DIGITUNDER" and predicted is not None:
+                        exit_digit = max(0, predicted - 1) if is_win else predicted
+                    elif direction == "DIGITEVEN":
+                        exit_digit = 2 if is_win else 3
+                    elif direction == "DIGITODD":
+                        exit_digit = 3 if is_win else 2
+                    else:
+                        exit_digit = 0
+                    settled_record["exit_tick"] = f"100.0{exit_digit}"
                 self._contracts[contract_id] = settled_record
                 settled_poc: dict[str, object] = {
                     "msg_type": "proposal_open_contract",
@@ -343,10 +387,12 @@ class FakeDerivTransport:
                 },
             }
         if operation is DerivOperation.PROPOSAL:
+            proposal_id = f"fake-proposal-{len(self._proposals) + 1}"
+            self._proposals[proposal_id] = dict(payload)
             return {
                 "msg_type": "proposal",
                 "proposal": {
-                    "id": "fake-proposal-123",
+                    "id": proposal_id,
                     "ask_price": str(payload.get("amount", "10.00")),
                     "payout": "19.50",
                     "spot": "1.08500",
@@ -376,6 +422,34 @@ class FakeDerivTransport:
     def emit_contract_event(self, event: dict[str, object]) -> None:
         with contextlib.suppress(queue.Full):
             self._contract_events.put_nowait(event)
+
+    def settle_latest_contract(self, *, won: bool) -> str:
+        """Settle the newest fake contract and publish its deterministic stream event."""
+
+        if not self._contracts:
+            raise ValueError("no fake contract is available for settlement")
+        contract_id = max(self._contracts)
+        current = self._contracts[contract_id]
+        buy_price = Decimal(str(current["buy_price"]))
+        profit = buy_price * Decimal("0.95") if won else -buy_price
+        payout = buy_price * Decimal("1.95") if won else Decimal("0")
+        settled = {
+            **current,
+            "status": "won" if won else "lost",
+            "is_sold": 1,
+            "is_expired": 1,
+            "profit": str(profit),
+            "payout": str(payout),
+        }
+        self._contracts[contract_id] = settled
+        self.emit_contract_event(
+            {
+                "msg_type": "proposal_open_contract",
+                "proposal_open_contract": settled,
+                "subscription": {"id": f"fake-poc-sub-{contract_id}"},
+            }
+        )
+        return str(contract_id)
 
     def receive(self, *, timeout: float) -> dict[str, object] | None:
         if timeout <= 0:

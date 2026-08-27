@@ -11,6 +11,8 @@ from packages.protocol import (
     OrderSummary,
     ProtocolError,
     UiAccountMode,
+    UiDerivAssetRank,
+    UiDerivStrategyStatus,
     UiGlobalState,
     UiProjectionSnapshot,
 )
@@ -43,6 +45,35 @@ def _snapshot() -> UiProjectionSnapshot:
         ),
         -25,
         "USD",
+        deriv_strategies=(
+            UiDerivStrategyStatus(
+                "tail-probability-edge",
+                "Tail Probability Edge",
+                "R_100 · 1 tick",
+                "RESEARCH_SHADOW",
+                "MONITORING",
+                "TAIL_EDGE_NO_CONSERVATIVE_ADVANTAGE",
+                500,
+                500,
+            ),
+        ),
+        deriv_asset_ranking=(
+            UiDerivAssetRank(
+                "R_100",
+                "CANDIDATE",
+                "ASSET_SHADOW_CANDIDATE",
+                500,
+                500,
+                selected=True,
+                strategy_id="tail-probability-edge",
+                contract_type="DIGITOVER",
+                barrier=4,
+                estimated_probability_pct="75.00",
+                required_probability_pct="72.00",
+                conservative_margin_pct="3.00",
+                analysis_latency_microseconds=9,
+            ),
+        ),
     )
 
 
@@ -55,6 +86,8 @@ def test_ui_projection_round_trip_and_view_model_use_minor_units() -> None:
     assert "USD 12.34" in view.order_lines[0]
     assert "INDISPONÍVEL" in view.broker_lines[0]
     assert view.can_resume is True
+    assert snapshot.deriv_strategies[0].strategy_id == "tail-probability-edge"
+    assert snapshot.deriv_asset_ranking[0].selected is True
 
 
 def test_ui_projection_rejects_float_money_and_unproven_currency() -> None:
@@ -73,3 +106,14 @@ def test_ui_projection_rejects_float_money_and_unproven_currency() -> None:
             1,
             None,
         )
+
+
+def test_ui_projection_rejects_invalid_asset_ranking_decimal() -> None:
+    payload = _snapshot().to_payload()
+    ranking = payload["deriv_asset_ranking"]
+    assert isinstance(ranking, list)
+    assert isinstance(ranking[0], dict)
+    ranking[0]["conservative_margin_pct"] = "NaN"
+
+    with pytest.raises(ProtocolError, match="invalid"):
+        UiProjectionSnapshot.from_payload(payload)

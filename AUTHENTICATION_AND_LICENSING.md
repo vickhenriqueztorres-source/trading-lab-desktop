@@ -1,8 +1,8 @@
 # Autenticação e Licenciamento — Fase 1 Local
 
 **Projeto:** DualTrade Desktop  
-**Status:** vault Windows executável; identidade/lease ainda simuladas; nenhuma conta real ou
-credencial de broker
+**Status:** vault Windows executável; identidade/lease ainda simuladas; lease Real de até 24 horas
+habilitada para a rota Deriv explicitamente confirmada; credencial de broker permanece isolada
 
 ## 1. Escopo implementado
 
@@ -15,8 +15,8 @@ provar:
 - access token curto e refresh token rotativo, com revogação da família após reuso;
 - `device_id` aleatório e chave Ed25519 própria, sem fingerprint de hardware;
 - prova de posse da chave do dispositivo antes da emissão da lease;
-- lease practice Ed25519 assinada, vinculada a usuário, dispositivo, validade, brokers,
-  strategy packs, compatibilidade e proibição de modo real;
+- lease Ed25519 assinada, vinculada a usuário, dispositivo, validade, brokers, strategy packs,
+  compatibilidade e entitlement explícito de modo Real;
 - verificação local contendo somente chave pública;
 - funcionamento offline dentro da validade da lease;
 - bloqueio de novas entradas após expiração, revogação conhecida, adulteração,
@@ -71,7 +71,7 @@ contrato `set_secret/get_secret/delete_secret/has_secret/clear` e preserva a API
 Valores sensíveis usam `SecretValue`, cujo `repr`/`str` é sempre redigido. Código OTP e tokens são
 gerados em runtime e não fazem parte de fixtures ou logs.
 
-## 4. Lease practice
+## 4. Leases Practice e Real
 
 O formato v1 contém:
 
@@ -82,8 +82,10 @@ broker_access[], strategy_packs[], real_mode_allowed,
 client_version_min, client_version_max, nonce
 ```
 
-A assinatura usa Ed25519 sobre JSON canônico. A lease practice não pode exceder sete dias. O
-contrato atual rejeita qualquer caminho de modo real, ainda que um payload tente declará-lo.
+A assinatura usa Ed25519 sobre JSON canônico. A lease Practice não pode exceder sete dias. Uma lease
+com `real_mode_allowed=true` não pode exceder 24 horas; uma autorização solicitada com modo Real é
+negada quando esse claim não existe. O Core solicita a decisão Real somente quando a conta Deriv
+selecionada e comprovada pela API é Real. Essa decisão reduzida nunca contém token da corretora.
 
 ## 5. Matriz de falha
 
@@ -152,7 +154,8 @@ decisão reduzida de autorização.
 - política comercial de limite de dispositivos;
 - distribuição/rotação de chaves públicas de lease;
 - revogação push e política offline definitiva;
-- lease de modo real, que permanece proibida;
+- provedor remoto/produção para emissão e revogação de lease Real (o executável atual usa o serviço
+  local simulado já existente);
 - ensaio negativo sob outro SID real e auditoria da DACL em matriz multiusuário/instalador;
 - garantia de apagamento de todas as cópias imutáveis em memória do runtime Python;
 - roteamento final do fluxo de login pela futura UI/launcher sem ampliar o Core financeiro;

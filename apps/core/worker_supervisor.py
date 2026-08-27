@@ -16,8 +16,10 @@ from pathlib import Path
 from apps.core.health import HealthGate
 from apps.core.worker_client import SocketWorkerClient, WorkerDispatchError
 from apps.simulated_worker.scenarios import WorkerScenario
+from packages.domain.models import BrokerOrderEvent, OrderCommand, OrderStatusQuery
 from packages.observability.events import EventSink, NullEventSink
 from packages.protocol.errors import ProtocolError, ProtocolErrorCode
+from packages.protocol.messages import OrderStatusResult, WorkerSubmissionResult
 from packages.protocol.transport import FramedSocket
 from packages.security import without_broker_credentials
 
@@ -123,6 +125,8 @@ class WorkerSupervisor:
         jitter: Callable[[float], float] | None = None,
         broker_store_path: Path | None = None,
         event_queue_size: int = 128,
+        on_disconnected: Callable[[], None] | None = None,
+        on_recovered: Callable[[], None] | None = None,
     ) -> None:
         self._health_gate = health_gate
         self._scenario = scenario
@@ -141,7 +145,12 @@ class WorkerSupervisor:
         self._client: SocketWorkerClient | None = None
         self._monitor_stop = threading.Event()
         self._monitor_thread: threading.Thread | None = None
+        self._recovery_stop = threading.Event()
+        self._recovery_thread: threading.Thread | None = None
+        self._recovery_lock = threading.Lock()
+        self._restart_lock = threading.RLock()
         self._stopping = False
+        self._recovery_stop.clear()
         self._jitter = jitter or (lambda ceiling: random.uniform(0.0, ceiling))
         self._recorded_crash_pid: int | None = None
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
@@ -152,6 +161,8 @@ class WorkerSupervisor:
             broker_store_path = Path(self._temporary_directory.name) / "broker_state.db"
         self._broker_store_path = broker_store_path
         self._event_queue_size = event_queue_size
+        self._on_disconnected_callback = on_disconnected
+        self._on_recovered_callback = on_recovered
         self.last_shutdown_forced = False
 
     @property
@@ -177,6 +188,34 @@ class WorkerSupervisor:
     def broker_store_path(self) -> Path:
         return self._broker_store_path
 
+    def submit_order(self, command: OrderCommand) -> WorkerSubmissionResult:
+        return self.client.submit_order(command)
+
+    def query_order_status(
+        self,
+        query: OrderStatusQuery,
+        *,
+        timeout: float | None = None,
+    ) -> OrderStatusResult:
+        return self.client.query_order_status(query, timeout=timeout)
+
+    def receive_order_event(self, timeout: float) -> BrokerOrderEvent | None:
+        client = self._client
+        if client is None:
+            if timeout <= 0:
+                raise ValueError("event receive timeout must be positive")
+            self._recovery_stop.wait(min(timeout, 0.05))
+            return None
+        try:
+            return client.receive_order_event(timeout)
+        except (RuntimeError, WorkerDispatchError):
+            return None
+
+    @property
+    def pending_order_event_count(self) -> int:
+        client = self._client
+        return 0 if client is None else client.pending_order_event_count
+
     def _set_health(self, state: WorkerHealthState) -> None:
         with self._state_lock:
             self._health_state = state
@@ -189,7 +228,6 @@ class WorkerSupervisor:
             self._health_gate.block("HG_WORKER_CIRCUIT_OPEN")
             self._event_sink.emit("worker_circuit_opened", reason_code="WORKER_CRASHED")
             raise RuntimeError("worker circuit breaker is open")
-        self._stopping = False
         self._monitor_stop.clear()
         self._set_health(WorkerHealthState.STARTING)
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -253,11 +291,13 @@ class WorkerSupervisor:
             else:
                 self._set_health(WorkerHealthState.DEGRADED)
                 self._health_gate.block("HG_WORKER_DISCONNECTED")
+            self._record_crash_once()
             self._terminate_process()
             raise
         except (OSError, TimeoutError) as exc:
             self._set_health(WorkerHealthState.DISCONNECTED)
             self._health_gate.block("HG_WORKER_DISCONNECTED")
+            self._record_crash_once()
             self._terminate_process()
             raise ProtocolError(
                 ProtocolErrorCode.IPC_HANDSHAKE_TIMEOUT,
@@ -293,6 +333,9 @@ class WorkerSupervisor:
             self._health_gate.block("HG_RECONCILIATION_REQUIRED")
         self._record_crash_once()
         self._event_sink.emit("worker_crashed", reason_code=code.value)
+        if self._on_disconnected_callback is not None:
+            self._on_disconnected_callback()
+        self._schedule_recovery()
 
     def _record_crash_once(self) -> None:
         process = self._process
@@ -326,43 +369,93 @@ class WorkerSupervisor:
             raise
 
     def restart(self) -> SocketWorkerClient:
-        if not self._breaker.allow_restart():
-            self._set_health(WorkerHealthState.DEGRADED)
-            self._health_gate.block("HG_WORKER_CIRCUIT_OPEN")
-            raise RuntimeError("worker circuit breaker is open")
-        base_delay = self._breaker.next_delay()
-        delay = min(
-            self._restart_policy.max_delay_seconds,
-            base_delay + self._jitter(base_delay * 0.2),
-        )
-        self._event_sink.emit(
-            "worker_restart_scheduled",
-            delay_ms=int(delay * 1000),
-            worker_type="SIMULATED",
-        )
-        self._cleanup_connection()
-        self._sleeper(delay)
-        return self.start()
+        with self._restart_lock:
+            if not self._breaker.allow_restart():
+                self._set_health(WorkerHealthState.DEGRADED)
+                self._health_gate.block("HG_WORKER_CIRCUIT_OPEN")
+                raise RuntimeError("worker circuit breaker is open")
+            base_delay = self._breaker.next_delay()
+            delay = min(
+                self._restart_policy.max_delay_seconds,
+                base_delay + self._jitter(base_delay * 0.2),
+            )
+            self._event_sink.emit(
+                "worker_restart_scheduled",
+                delay_ms=int(delay * 1000),
+                worker_type="SIMULATED",
+            )
+            self._monitor_stop.set()
+            self._terminate_process()
+            self._cleanup_connection()
+            if self._recovery_stop.wait(delay):
+                raise RuntimeError("worker recovery stopped")
+            self._monitor_stop.clear()
+            return self.start()
+
+    def _schedule_recovery(self) -> None:
+        if self._stopping or self._recovery_stop.is_set():
+            return
+        with self._recovery_lock:
+            current = self._recovery_thread
+            if current is not None and current.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._recovery_loop,
+                name="simulated-worker-recovery",
+                daemon=True,
+            )
+            self._recovery_thread = thread
+            thread.start()
+
+    def _recovery_loop(self) -> None:
+        while not self._recovery_stop.is_set() and not self._stopping:
+            if self._breaker.state is CircuitState.OPEN:
+                self._health_gate.block("HG_WORKER_CIRCUIT_OPEN")
+                if self._recovery_stop.wait(min(0.1, self._restart_policy.open_seconds)):
+                    return
+                continue
+            try:
+                self.restart()
+                if self._recovery_stop.wait(max(0.05, self._heartbeat_interval * 2)):
+                    return
+                if self.health_state is WorkerHealthState.READY:
+                    if self._on_recovered_callback is not None:
+                        self._on_recovered_callback()
+                    return
+            except (OSError, ProtocolError, RuntimeError):
+                if self._stopping or self._recovery_stop.is_set():
+                    return
+                self._set_health(WorkerHealthState.DEGRADED)
+                self._health_gate.block("HG_WORKER_DISCONNECTED")
 
     def shutdown(self, grace_seconds: float = 1.0) -> None:
         self._stopping = True
+        self._recovery_stop.set()
         self._monitor_stop.set()
-        process = self._process
-        client = self._client
-        acknowledged = client.shutdown(grace_seconds) if client is not None else False
-        self.last_shutdown_forced = False
-        if process is not None and process.poll() is None:
-            try:
-                process.wait(timeout=grace_seconds if acknowledged else 0.05)
-            except subprocess.TimeoutExpired:
-                self.last_shutdown_forced = True
-                process.terminate()
+        # Serialize shutdown with a recovery already inside restart(). Otherwise
+        # shutdown can capture the old process while recovery publishes a new
+        # one, leaving the replacement alive with its SQLite store locked.
+        with self._restart_lock:
+            process = self._process
+            client = self._client
+            acknowledged = client.shutdown(grace_seconds) if client is not None else False
+            self.last_shutdown_forced = False
+            if process is not None and process.poll() is None:
                 try:
-                    process.wait(timeout=grace_seconds)
+                    process.wait(timeout=grace_seconds if acknowledged else 0.05)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=grace_seconds)
-        self._cleanup_connection()
+                    self.last_shutdown_forced = True
+                    process.terminate()
+                    try:
+                        process.wait(timeout=grace_seconds)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=grace_seconds)
+            self._cleanup_connection()
+        recovery = self._recovery_thread
+        self._recovery_thread = None
+        if recovery is not None and recovery is not threading.current_thread():
+            recovery.join(timeout=grace_seconds)
         self._set_health(WorkerHealthState.STOPPED)
         self._event_sink.emit(
             "worker_shutdown_completed",

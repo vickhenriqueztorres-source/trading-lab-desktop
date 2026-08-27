@@ -139,6 +139,16 @@ def test_deriv_contract_07_history_and_candle_are_normalized(
     assert int(paged[0].close_time.timestamp()) == 1_700_000_100
 
 
+def test_oversized_history_page_is_rejected_without_crashing_worker(
+    deriv_supervisor: ReadOnlyWorkerSupervisor,
+) -> None:
+    with pytest.raises(WorkerDispatchError):
+        deriv_supervisor.client.market_history("R_100", style="ticks", count=500)
+
+    deriv_supervisor.client.ping()
+    assert deriv_supervisor.health_state is WorkerHealthState.READY
+
+
 def test_deriv_contract_08_subscription_is_cancelled(
     deriv_supervisor: ReadOnlyWorkerSupervisor,
 ) -> None:

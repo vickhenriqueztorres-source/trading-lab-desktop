@@ -208,17 +208,24 @@ class PublicDerivSession:
         self.health = MarketDataHealthState.STALE
         return True
 
-    def tick_history(self, symbol: str, *, count: int = 100) -> tuple[MarketTick, ...]:
+    def tick_history(
+        self,
+        symbol: str,
+        *,
+        count: int = 100,
+        end_epoch: int | None = None,
+    ) -> tuple[MarketTick, ...]:
         if count <= 0 or count > 1000:
             raise ValueError("tick history count is outside the bounded range")
+        if end_epoch is not None and end_epoch <= 0:
+            raise ValueError("tick history end epoch must be positive")
         response = self._read_request(
             DerivOperation.TICKS_HISTORY,
             {
                 "ticks_history": symbol,
                 "count": count,
-                "end": "latest",
+                "end": "latest" if end_epoch is None else end_epoch,
                 "style": "ticks",
-                "subscribe": 0,
             },
         )
         unique: dict[tuple[object, ...], MarketTick] = {}
@@ -246,7 +253,6 @@ class PublicDerivSession:
                 "end": "latest" if end_epoch is None else end_epoch,
                 "style": "candles",
                 "granularity": timeframe_seconds,
-                "subscribe": 0,
             },
         )
         return map_candle_history(response, symbol, timeframe_seconds, self._now())

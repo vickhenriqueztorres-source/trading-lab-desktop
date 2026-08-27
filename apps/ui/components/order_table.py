@@ -73,8 +73,11 @@ class OrderTableView(QFrame):
         for row, ord in enumerate(orders):
             # ID
             short_id = ord.order_id[:16] + "..." if len(ord.order_id) > 16 else ord.order_id
-            id_item = QTableWidgetItem(short_id)
-            id_item.setToolTip(ord.order_id)
+            contract_id = f"#{ord.broker_order_id}" if ord.broker_order_id else ""
+            id_item = QTableWidgetItem(f"{short_id} / {contract_id}" if contract_id else short_id)
+            id_item.setToolTip(
+                f"{ord.order_id}\nContrato Deriv: {contract_id}" if contract_id else ord.order_id
+            )
             self._table.setItem(row, 0, id_item)
 
             # Broker
@@ -96,7 +99,15 @@ class OrderTableView(QFrame):
             self._table.setItem(row, 4, QTableWidgetItem(amt_str))
 
             # State
-            state_item = QTableWidgetItem(ord.state)
+            state_label = ord.state
+            if ord.state == "OPEN":
+                state_label = "● OPEN"
+            elif ord.state == "SETTLED" and ord.realized_pnl_minor_units is not None:
+                pnl = format_minor_units(ord.realized_pnl_minor_units, ord.currency)
+                state_label = (
+                    f"✓ WON (+ {pnl})" if ord.realized_pnl_minor_units >= 0 else f"✗ LOST ({pnl})"
+                )
+            state_item = QTableWidgetItem(state_label)
             if ord.state in {"SETTLED", "ACCEPTED", "OPEN"}:
                 state_item.setForeground(Qt.GlobalColor.cyan)
             self._table.setItem(row, 5, state_item)

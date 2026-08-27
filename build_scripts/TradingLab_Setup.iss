@@ -2,7 +2,7 @@
 ; Trading Lab Desktop Windows Installer Specification
 
 #define MyAppName "Trading Lab Desktop"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.9.11"
 #define MyAppPublisher "Trading Lab Systems"
 #define MyAppURL "https://tradinglab.local"
 #define MyAppExeName "TradingLab.exe"

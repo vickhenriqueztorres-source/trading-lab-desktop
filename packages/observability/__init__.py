@@ -9,6 +9,7 @@ from packages.observability.events import (
     InMemoryEventSink,
     NullEventSink,
     OperationalEvent,
+    PersistentJsonlEventSink,
 )
 from packages.observability.retention import (
     AtomicJsonWriteError,
@@ -29,6 +30,7 @@ __all__ = [
     "InMemoryEventSink",
     "NullEventSink",
     "OperationalEvent",
+    "PersistentJsonlEventSink",
     "ReportRetentionError",
     "ReportRetentionManager",
     "ReportRetentionPolicy",

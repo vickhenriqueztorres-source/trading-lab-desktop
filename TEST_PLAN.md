@@ -8,7 +8,7 @@
 - testes comuns são locais, determinísticos e sem rede;
 - worker financeiro é simulado;
 - integrações externas são separadas, marcadas e opt-in;
-- conta real nunca é usada;
+- testes nunca enviam ordem com dinheiro real;
 - ausência de resposta não é tratada como rejeição;
 - falha crítica deve fechar o Health Gate;
 - `UNKNOWN` e `SETTLEMENT_UNKNOWN` só mudam com evidência;
@@ -32,12 +32,12 @@
 O smoke público Deriv permanece skipado até `DUALTRADE_RUN_EXTERNAL_DERIV_PUBLIC=1` e usa o marker
 `external_deriv_public`. O smoke demo read-only usa `external_deriv_demo`, só executa com
 `DUALTRADE_RUN_EXTERNAL_DERIV_DEMO=1` e exige configuração demo explícita. Ambos permanecem fora da
-suíte canônica; conta real é rejeitada antes da conexão. IQ Option não possui teste externo
-executável.
+suíte canônica. O smoke autenticado começa em Demo. A rota Real é validada somente com transportes
+fake, conta/tipo simulados e lease assinada; IQ Option não possui teste externo executável.
 
 ### Proibido
 
-- conta real;
+- ordem externa em conta Real;
 - credencial real em fixture/comando/log;
 - teste externo obrigatório para CI/local;
 - depender de internet na suíte comum;
@@ -101,11 +101,12 @@ binário instalado, startup/shutdown bounded da árvore local, desinstalação e
 | domínio | construção válida/inválida, serialização, UTC, dinheiro e IDs |
 | ordem | transições, duplicidade, fora de ordem, terminal, deadline |
 | outbox/dispatch | persist-before-send, claim, crash e entrega ambígua |
-| Risk Ledger | concorrência, limites, moeda, restore e `UNKNOWN` |
+| Risk Ledger | concorrência, limites, moeda, restore, `UNKNOWN` e Bounded Martingale (progressão, reset, teto de stake/steps e Stop Loss projetado) |
 | persistência | migration, checksum, corrupção, DB ausente, I/O e backup |
 | IPC | framing, tamanho, JSON, versão, role, replay e processo morto |
 | launcher | ordem de startup, lock, Job Object, safe shutdown, escala e órfãos |
 | worker | handshake, timeout, crash, backoff, capability e shutdown |
+| liveness | replacement do cliente, circuit HALF_OPEN, reconciliação e retorno desarmado |
 | reconciliação | found/not-found/timeout/conflito/evidência/idempotência |
 | eventos | aceite/open/settled, duplicado, gap e settlement conflict |
 | identidade/licença | OTP/PKCE, rotação, reuso, dispositivo, assinatura e expiry |
@@ -120,6 +121,7 @@ binário instalado, startup/shutdown bounded da árvore local, desinstalação e
 | scanner de segredos | positivos sintéticos, workspace/fixtures e relatório de soak |
 | restore drill | backup, marker, quick/full check, migrations, estado e original intacto |
 | UI futura | projeção, modos, bloqueios, acessibilidade e safe close |
+| readiness | Core disponível, broker/auth/reconciliation/risk/clock/market/warm-up e ARM separados |
 | release futuro | assinatura, adulteração, interrupção e rollback |
 
 ## 6. Cenários financeiros críticos
@@ -180,6 +182,10 @@ Contract tests validam:
 - disconnect/crash/hang/shutdown;
 - filas bounded/backpressure;
 - capability read-only e rejeição de operação Deriv de trading;
+- capability financeira exclusiva de Demo para `DIGITOVER`, `DIGITUNDER`, `DIGITDIFF`,
+  `DIGITEVEN` e `DIGITODD`;
+- queda autenticada bloqueia entrada, substitui worker/OTP, reanexa reconciliação e não reenvia
+  comando ambíguo;
 - processo filho encerrado após falha de startup/recovery.
 
 ## 9. Identidade e segurança
@@ -206,6 +212,7 @@ Contract tests validam:
 - startup lógico Auth Agent → Core/recovery → Simulated → Deriv read-only;
 - token lifecycle ausente/incorreto e prova HMAC inválida;
 - segunda instância do Launcher rejeitada sem perturbar o dono;
+- startup mantém automação desarmada até comando explícito **Ligar Bot**;
 - kill do worker financeiro degrada sem matar o Core nem reiniciar ordem;
 - kill de Auth/Deriv read-only permite apenas restart bounded;
 - kill do Core encerra todos os descendentes e libera locks pelo SO;
@@ -229,6 +236,16 @@ candle fechado e ordenado, clock virtual/monotônico e IDs determinísticos. Dev
 - shadow divergente do replay.
 
 Backtest não usa embaralhamento temporal. Resultado sintético não é evidência de rentabilidade.
+
+O radar multiativo de dígitos deve provar adicionalmente:
+
+- uma janela e um motor independentes por símbolo, preservados durante refresh do universo;
+- descoberta bounded somente para ativos negociáveis com contratos de dígitos disponíveis;
+- exatamente um candidato principal ou abstenção explícita;
+- estabilidade determinística em empates e ausência de candidato em controle pseudoaleatório;
+- falha de assinatura secundária sem desconectar o ativo selecionado;
+- projeção IPC bounded, round-trip estrito e rejeição de decimal inválido;
+- UI somente leitura, sem controle de execução ou troca automática de ativo.
 
 ## 11. Soak e recursos
 
@@ -298,7 +315,7 @@ deadlock ou handshake incompleto.
 - `python -m pytest` passa ou toda falha é documentada e comprovadamente fora da fatia;
 - Ruff, format check, mypy e compileall passam;
 - scanner de segredos foi executado no diff/arquivos afetados;
-- nenhuma conta real/segredo foi usado;
+- nenhuma ordem Real/segredo foi usado;
 - documentação e rastreabilidade foram atualizadas;
 - `WORKLOG.md` contém comandos/resultados reais;
 - risco residual e próximo passo estão explícitos.

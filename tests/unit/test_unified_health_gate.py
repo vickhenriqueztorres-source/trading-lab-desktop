@@ -85,6 +85,20 @@ def test_global_blocker_blocks_all_brokers() -> None:
     assert can_iq_2 is True
 
 
+def test_broker_market_data_blocker_applies_to_financial_account_only() -> None:
+    gate = HealthGate()
+    gate.block_scope("DERIV", "market-data", "MD_CLOCK_UNTRUSTED")
+
+    assert gate.can_enter_order("DERIV", "VRTC1001") == (
+        False,
+        "MD_CLOCK_UNTRUSTED",
+    )
+    assert gate.can_enter_order("IQOPTION", "PRACTICE_01") == (True, None)
+
+    gate.clear_scope("DERIV", "market-data", "MD_CLOCK_UNTRUSTED")
+    assert gate.can_enter_order("DERIV", "VRTC1001") == (True, None)
+
+
 def test_database_health_failure_blocks_globally() -> None:
     db_health = DatabaseHealth()
     gate = HealthGate(db_health)

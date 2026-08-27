@@ -51,6 +51,14 @@ def map_active_symbols(
                 DerivErrorCategory.SCHEMA_INCOMPATIBLE,
                 "DERIV_SCHEMA_INCOMPATIBLE",
             )
+        raw_symbol_type = raw.get("underlying_symbol_type")
+        if not isinstance(raw_symbol_type, str) or not raw_symbol_type.strip():
+            raw_symbol_type = raw.get("subgroup") or submarket or raw.get("market")
+        if not isinstance(raw_symbol_type, str) or not raw_symbol_type.strip():
+            raise DerivWorkerError(
+                DerivErrorCategory.SCHEMA_INCOMPATIBLE,
+                "DERIV_SCHEMA_INCOMPATIBLE",
+            )
         symbols.append(
             MarketSymbol(
                 broker=Broker.DERIV,
@@ -59,7 +67,7 @@ def map_active_symbols(
                 display_name=require_str(raw, "underlying_symbol_name"),
                 market=require_str(raw, "market"),
                 submarket=submarket,
-                symbol_type=require_str(raw, "underlying_symbol_type"),
+                symbol_type=raw_symbol_type.strip(),
                 pip_size=pip,
                 is_trading=exchange_open == 1 and suspended == 0,
                 source_timestamp=source_timestamp,
@@ -191,7 +199,9 @@ def map_clock(
     )
 
 
-def map_demo_balance(payload: Mapping[str, object], observed_at: datetime) -> BrokerAccountBalance:
+def map_account_balance(
+    payload: Mapping[str, object], observed_at: datetime, account_type: str = "demo"
+) -> BrokerAccountBalance:
     validate_response(payload, "balance")
     raw = require_mapping(payload, "balance")
     amount = require_decimal(raw, "balance")
@@ -205,6 +215,10 @@ def map_demo_balance(payload: Mapping[str, object], observed_at: datetime) -> Br
     return BrokerAccountBalance(
         balance_minor_units=int(integral),
         currency=require_str(raw, "currency"),
-        account_type="DEMO",
+        account_type=account_type.upper(),
         observed_at_utc=observed_at,
     )
+
+
+def map_demo_balance(payload: Mapping[str, object], observed_at: datetime) -> BrokerAccountBalance:
+    return map_account_balance(payload, observed_at, "demo")

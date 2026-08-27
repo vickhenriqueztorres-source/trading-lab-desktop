@@ -124,7 +124,7 @@ def test_worker_loss_degrades_without_killing_core(tmp_path: Path) -> None:
     assert _wait_dead([core_pid, worker_pid])
 
 
-def test_ui_loss_degrades_without_killing_core(tmp_path: Path) -> None:
+def test_ui_loss_stops_entire_process_tree(tmp_path: Path) -> None:
     supervisor = ProcessTreeSupervisor(tmp_path)
     assert supervisor.start_all()
     snapshot = supervisor.snapshot()
@@ -133,17 +133,16 @@ def test_ui_loss_degrades_without_killing_core(tmp_path: Path) -> None:
     assert core_pid is not None and ui_pid is not None
 
     _terminate_pid(ui_pid)
-    deadline = time.monotonic() + 3.0
+    deadline = time.monotonic() + 12.0
     while time.monotonic() < deadline:
         snapshot = supervisor.poll_health()
-        if snapshot.overall_state is LauncherLifecycleState.DEGRADED:
+        if snapshot.overall_state is LauncherLifecycleState.STOPPED:
             break
         time.sleep(0.05)
 
-    assert snapshot.overall_state is LauncherLifecycleState.DEGRADED
+    assert snapshot.overall_state is LauncherLifecycleState.STOPPED
     assert snapshot.processes[ManagedProcessRole.UI].is_alive is False
-    assert _is_process_alive(core_pid)
-    supervisor.stop_all(10.0)
+    assert not _is_process_alive(core_pid)
     assert _wait_dead([core_pid, ui_pid])
 
 

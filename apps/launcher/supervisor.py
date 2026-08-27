@@ -61,6 +61,7 @@ class ProcessTreeSupervisor:
             lambda profile, selected: SubprocessCoreController(
                 profile,
                 selected,
+                startup_timeout=(60.0 if deriv_transport in {"live-demo", "live-real"} else 12.0),
                 force_auth_simulation=force_auth_simulation,
                 ui_headless=ui_headless,
                 deriv_transport=deriv_transport,
@@ -149,7 +150,8 @@ class ProcessTreeSupervisor:
         except (CoreLifecycleIpcError, OSError, RuntimeError):
             self._state = LauncherLifecycleState.DEGRADED
             return self.snapshot()
-        if status.ui_shutdown_requested:
+        ui_status = next((item for item in status.processes if item.role == "UI"), None)
+        if status.ui_shutdown_requested or (ui_status is not None and not ui_status.is_alive):
             self.stop_all()
             return self.snapshot()
         processes = self._convert(status.processes)

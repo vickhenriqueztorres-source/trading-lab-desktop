@@ -36,6 +36,11 @@ from apps.core.broker_shadow_soak import (
 )
 from apps.core.candle_pipeline import CoreCandlePipeline, CoreCandleResult
 from apps.core.coordinator import EntryAuthorizationPort, OrderCoordinator, PersistedOrder
+from apps.core.digit_risk_config import (
+    DERIV_SYNTHETIC_INDEX_ALLOWLIST,
+    DigitRiskConfig,
+    validate_digit_risk_config,
+)
 from apps.core.health import HealthGate
 from apps.core.instance import (
     CoreInstanceAlreadyRunning,
@@ -109,6 +114,8 @@ __all__ = [
     "CoreInstanceGuardError",
     "CoreRuntime",
     "DeliveryCertainty",
+    "DERIV_SYNTHETIC_INDEX_ALLOWLIST",
+    "DigitRiskConfig",
     "EntryAuthorizationPort",
     "EntryPlan",
     "HealthGate",
@@ -141,5 +148,6 @@ __all__ = [
     "WorkerSupervisor",
     "soak_cli_main",
     "fault_schedule_for",
+    "validate_digit_risk_config",
     "profile_settings",
 ]

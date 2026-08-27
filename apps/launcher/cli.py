@@ -6,19 +6,18 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-
-from apps.launcher.supervisor import ProcessTreeSupervisor
+from typing import IO, Any
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="DualTrade local process-tree launcher")
     parser.add_argument(
         "--deriv-transport",
-        choices=("fake-public", "fake-demo", "live-public", "live-demo"),
+        choices=("fake-public", "fake-demo", "live-public", "live-demo", "live-real"),
         default="fake-public",
-        help="Deriv read-only transport; external modes require explicit selection",
+        help=("Deriv startup transport; authenticated modes require explicit account selection"),
     )
     parser.add_argument(
         "--profile-dir",
@@ -60,9 +59,68 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _duplicate_redirected_descriptor(descriptor: int) -> int:
+    if os.name != "nt":
+        return os.dup(descriptor)
+
+    # A windowed PyInstaller child may expose the inherited pipe only as a
+    # Win32 standard handle. A stale CRT descriptor may still be duplicable but
+    # point at EOF, so never prefer os.dup() when the Python stream is absent.
+    import ctypes
+    import msvcrt
+
+    standard_handle_ids = {0: -10, 1: -11, 2: -12}
+    get_std_handle = ctypes.windll.kernel32.GetStdHandle
+    get_std_handle.argtypes = [ctypes.c_uint32]
+    get_std_handle.restype = ctypes.c_void_p
+    handle = get_std_handle(standard_handle_ids[descriptor] & 0xFFFFFFFF)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle in {None, 0, -1, invalid_handle}:
+        raise OSError("redirected standard handle is unavailable")
+    flags = os.O_RDONLY if descriptor == 0 else os.O_WRONLY
+    return msvcrt.open_osfhandle(handle, flags)
+
+
+def _restore_redirected_standard_streams(
+    *,
+    system: Any = sys,
+    duplicate: Callable[[int], int] | None = None,
+    open_fd: Callable[..., IO[str]] = os.fdopen,
+) -> None:
+    """Restore redirected pipes hidden by PyInstaller's windowed bootloader.
+
+    The top-level launcher intentionally has no console. Internal subprocesses
+    are different: their standard handles are explicit bootstrap pipes.
+    PyInstaller sets the Python stream objects to ``None`` in windowed mode even
+    when those handles exist, so frozen ``-m`` dispatch rebuilds only missing
+    streams from the inherited descriptors.
+    """
+
+    descriptor_duplicator = duplicate or _duplicate_redirected_descriptor
+    for attribute, descriptor, mode in (
+        ("stdin", 0, "r"),
+        ("stdout", 1, "w"),
+        ("stderr", 2, "w"),
+    ):
+        if getattr(system, attribute, None) is not None:
+            continue
+        try:
+            stream = open_fd(
+                descriptor_duplicator(descriptor),
+                mode,
+                buffering=1,
+                encoding="utf-8",
+                newline="\n",
+            )
+        except OSError:
+            continue
+        setattr(system, attribute, stream)
+
+
 def _dispatch_module(module_name: str, module_args: Sequence[str]) -> int:
     import runpy
 
+    _restore_redirected_standard_streams()
     try:
         sys.argv = [sys.argv[0]] + list(module_args)
         runpy.run_module(module_name, run_name="__main__", alter_sys=True)
@@ -123,6 +181,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
         return 0
 
+    profile_dir = arguments.profile_dir or _default_profile_dir()
+    deriv_transport = arguments.deriv_transport
+    # Keep this import out of frozen ``-m`` subprocess dispatch. Loading the
+    # complete supervisor tree in every Auth/Core/UI/worker child consumed most
+    # of the bounded bootstrap deadline on a cold Windows start.
+    from apps.launcher.supervisor import ProcessTreeSupervisor
+
     workers = tuple(arguments.workers)
     if "simulated" not in workers or len(workers) != len(set(workers)):
         parser.error("simulated worker is mandatory and workers cannot repeat")
@@ -130,10 +195,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if duration is not None and not 0.05 <= duration <= 86_400:
         parser.error("--auto-shutdown-after must be between 0.05 and 86400 seconds")
     supervisor = ProcessTreeSupervisor(
-        arguments.profile_dir or _default_profile_dir(),
+        profile_dir,
         workers=workers,
         ui_headless=arguments.headless_ui,
-        deriv_transport=arguments.deriv_transport,
+        deriv_transport=deriv_transport,
         manifest_path=manifest,
         distribution_root=distribution_root,
     )

@@ -1,11 +1,11 @@
-# Deriv Worker Read-Only
+# Deriv Worker — Market Data and Selected-Account Execution
 
 ## Scope
 
-The Deriv worker implemented in Phase 0 is a broker-isolated, read-only adapter for public market
-data and explicit demo-session authentication architecture. It never submits, modifies or cancels an
-order. The only executable default is the deterministic fake transport; network access to Deriv is
-opt-in.
+The Deriv worker is a broker-isolated adapter for public market data and explicit authenticated
+Options execution. `fake-public` remains the only default. A user-entered API Token/PAT is validated
+inside the application; the official account list supplies Demo and Real choices. `live-demo` or
+`live-real` is selected only after the user chooses one account. Real is never auto-selected.
 
 The Trading Core remains the only local financial authority. The worker owns only Deriv protocol
 translation, raw response validation, websocket/REST transport details, subscriptions and
@@ -14,37 +14,39 @@ global balance or broker secrets.
 
 ## Official Deriv surfaces used
 
-Only the following Deriv Options v1 read-only surfaces are modeled:
+The following Deriv Options v1 surfaces are modeled:
 
 - Public websocket: `wss://api.derivws.com/trading/v1/options/ws/public`
 - Demo websocket: `wss://api.derivws.com/trading/v1/options/ws/demo?otp=...`
+- Real websocket: `wss://api.derivws.com/trading/v1/options/ws/real?otp=...`
 - REST account discovery: `GET https://api.derivws.com/trading/v1/options/accounts`
-- REST demo OTP: `POST https://api.derivws.com/trading/v1/options/accounts/{accountId}/otp`
+- REST account OTP: `POST https://api.derivws.com/trading/v1/options/accounts/{accountId}/otp`
 - Public data operations: `ping`, `time`, `active_symbols`, `contracts_list`, `contracts_for`,
   `ticks`, `ticks_history`, `forget` and `forget_all`
-- Demo read-only operation: `balance`
+- Account operation: `balance`
+- Execution and lifecycle operations: `proposal`, `buy`, `proposal_open_contract`, `statement`,
+  `profit_table` and `forget`
 
 The implementation follows the Deriv developer documentation for API overview, websockets, active
 symbols, ticks, ticks history, contracts metadata and options account/OTP flows.
 
-## Read-only security policy
+## Account-mode security policy
 
-Trading operations are absent from the worker command surface and denied before the network
-boundary. The denylist includes request keys and operations such as `buy`, `sell`, `proposal`,
-`cancel`, `contract_update`, `auto_start`, `bulk_purchase`, `cashier`, `deposit` and `withdraw`.
+The worker validates every outbound request against a mode-specific allowlist. Public and Real mode
+are strictly read-only. Authenticated Demo adds only the operations required to quote, buy and
+reconcile options contracts. Sell/cancel mutation, cashier, deposit,
+withdrawal and every unlisted opcode fail before the transport boundary.
 
-The worker validates every outbound Deriv request against an allowlist. A forbidden opcode returns
-`DERIV_TRADING_OPERATION_DISABLED` or `DERIV_OPERATION_NOT_ALLOWLISTED`; it is never sent to the
-transport.
-
-Real-mode endpoints are blocked before connection. `validate_deriv_ws_url` accepts only the exact
-Deriv host, TLS websocket scheme, no userinfo, no port, no fragment, and one of these exact paths:
+`validate_deriv_ws_url` accepts only the exact Deriv host, TLS websocket scheme, no userinfo, no
+port, no fragment, and the exact path for the explicitly expected account type:
 
 - `/trading/v1/options/ws/public`
 - `/trading/v1/options/ws/demo` with exactly one `otp` query parameter
+- `/trading/v1/options/ws/real` with exactly one `otp` query parameter
 
-`/trading/v1/options/ws/real` raises `DERIV_REAL_WS_FORBIDDEN`. A selected REST account whose
-`account_type` is not `demo` raises `DERIV_REAL_ACCOUNT_FORBIDDEN` before OTP is requested.
+A mode mismatch fails before the trading connection is exposed. Demo cannot accept a Real endpoint
+or account, and Real cannot accept a Demo endpoint or account. Real never constructs or advertises
+an order-submission session in this release.
 
 ## Market data behavior
 
@@ -76,15 +78,17 @@ stream queue. The worker session drains that stream into `SubscriptionManager`, 
 subscription tick and subsequent ticks pass through the same gap, duplicate, late and overload
 checks before IPC publication.
 
-Reconnect restores logical subscriptions and performs read-only tick-history backfill. Reconnect and
-read-only retry use bounded attempts with backoff and jitter injection for deterministic tests.
+Public reconnect restores logical subscriptions and performs read-only tick-history backfill. An
+authenticated disconnect is different: the Core closes new entries, replaces the worker, requests
+a fresh single-use OTP, reconciles non-terminal orders and restores subscriptions. Attempts use
+capped backoff; no potentially accepted financial command is resent.
 
 A monotonic suspension detector invalidates market data when the local process observes a large
 elapsed-time gap compatible with Windows sleep/resume. The session marks subscriptions as
 restoring, sets health to `STALE` and requires reconnect/resynchronization before healthy data is
 advertised again.
 
-## Demo authentication architecture
+## Token-only authentication architecture
 
 Demo auth is explicit and separate from DualTrade identity/licensing:
 
@@ -92,16 +96,38 @@ Demo auth is explicit and separate from DualTrade identity/licensing:
   identity service.
 - The REST client uses the token only inside the Deriv transport layer.
 - Account discovery must find the exact user-selected account ID.
-- The selected account must prove `account_type == "demo"` before OTP is requested.
-- The OTP URL must validate as the exact demo websocket path before connection.
+- The selected account must prove `account_type == "demo"` or `"real"` and match the requested mode.
+- The OTP URL must validate as the exact matching websocket path before connection.
 - `SecretValue` redacts token contents in `str()` and `repr()`.
 
-The CLI wires this flow only when both controls are present: `--deriv-transport live-demo` and
-`DUALTRADE_RUN_EXTERNAL_DERIV_DEMO=1`. It also requires `DUALTRADE_DERIV_APP_ID`,
-`DUALTRADE_DERIV_DEMO_ACCOUNT_ID` and `DUALTRADE_DERIV_DEMO_TOKEN`. The token is read inside the
-Deriv worker, never sent through DualTrade identity/licensing and never included in IPC, argv,
-projection or exception text. The REST response's ready-to-use OTP URL is validated before opening
-the websocket; the worker never constructs or accepts a real endpoint.
+### Desktop login flow
+
+The packaged Windows application always opens its normal main window first in public read-only
+mode. Inside `Deriv > Configuration`, `Conectar conta Deriv` opens an isolated credential helper.
+The user supplies only an OAuth/PAT token with `trade` permission. The product App ID is internal.
+The helper queries active Options accounts and displays Demo before Real without preselecting either.
+Choosing Real reveals a warning, requires a checkbox and requires typing `REAL`. Cancelling leaves
+the already-open application in public read-only mode.
+
+The dialog writes the selected account ID/type and token directly to `broker_credentials/` through
+DPAPI CurrentUser. The App ID is public product configuration and is not written to the vault.
+Only encrypted `.vault` envelopes are persisted. The credential-entry helper and Deriv worker are
+the only processes that handle the token; the main UI and Core pass only the vault directory path
+or a non-secret connect command. Auth Agent, main UI and Simulated Worker continue receiving
+sanitized environments without broker credentials.
+
+The worker does not infer account mode from an account-ID prefix. It retrieves the selected account
+from the official Options accounts endpoint, requires the saved account type to match and validates
+the exact Demo or Real OTP WebSocket endpoint. A failed authenticated connection presents a visible
+error while the application remains available in public read-only mode.
+
+After credentials are saved, a versioned local IPC command asks the Core to replace the public
+worker with `live-demo` or `live-real`. Later clicks can reuse the DPAPI-protected credentials
+without retyping. Switching account type is blocked while a Deriv order is non-terminal.
+The legacy environment-based bootstrap remains available only for controlled development. The
+token is never included in broker IPC, argv, projection or exception text. The REST response's
+ready-to-use OTP URL is validated before opening the websocket; the worker never constructs an OTP
+URL or accepts an account-mode mismatch.
 
 The Auth Agent, UI and Simulated Worker are spawned with broker credential environment variables
 removed. This prevents the demo token from crossing into identity, presentation or the financial
@@ -111,25 +137,32 @@ simulator even when the Launcher/Core process tree was started from an opted-in 
 
 ```text
 fake-public  local deterministic public market-data fake (default)
-fake-demo    local demo/read-only fake with synthetic balance and synchronized fake clock
+fake-demo    local Demo read-only fake with synthetic balance and synchronized fake clock
 live-public  external public read-only websocket, explicit CLI selection
-live-demo    external demo read-only websocket, CLI selection plus environment opt-in
+live-demo    external Demo websocket with balance and controlled execution, selection plus opt-in
+live-real    external Real websocket, explicit selection/confirmation and real authorization gate
 ```
 
 `fake-demo` is always labeled `FAKE SIMULADO` in the UI. Its balance is test data, never external
-evidence. `live-demo` is labeled `DEMO LIVE`. Public mode does not request or fabricate account
+evidence. `live-demo` is labeled `DEMO LIVE`; `live-real` is labeled
+`REAL — DINHEIRO REAL` and changes the window badge/title. Public mode does not request or fabricate account
 balance because the public websocket is unauthenticated.
 
 ## IPC v1 integration
 
 The Deriv worker process uses IPC v1 over loopback framed JSON, with endpoint role `DERIV_WORKER`.
-Handshake capabilities announce:
+Handshake capabilities are mode-dependent. Public mode announces:
 
 - broker `DERIV`
-- `connection_mode = PUBLIC_READ_ONLY` or `DEMO_AUTH_READ_ONLY`
+- `connection_mode = PUBLIC_READ_ONLY`, `DEMO_AUTH_READ_ONLY` or `REAL_AUTH_READ_ONLY`
 - `supports_market_data = true`
 - `can_submit_orders = false`
 - no order status query and no order events
+
+Only an authenticated Demo session additionally announces `can_submit_orders = true`,
+`supports_order_status_query = true`, `supports_reconciliation = true` and
+`supports_order_events = true`. The generic read-only supervisor still rejects those capabilities;
+the financial Core must use the order-aware worker boundary.
 
 `BROKER_CLOCK_REQUEST/RESPONSE` returns the authoritative server epoch, observed UTC timestamp,
 round-trip milliseconds, estimated offset and derived `is_synced`. The Core polls this evidence in
@@ -138,8 +171,8 @@ invalid response adds `MD_CLOCK_UNTRUSTED` to the Core Health Gate; only a later
 clears that specific blocker.
 
 The demo OTP URL is single-use. A demo read timeout/disconnect therefore never reconnects or retries
-that URL in place. It fails with closed health, and the explicit worker restart performs account
-validation plus a fresh OTP bootstrap before producing new evidence.
+that URL in place. It fails with closed health, and supervised Core recovery replaces the worker,
+performs account validation plus a fresh OTP bootstrap, reconciles and then produces new evidence.
 
 `BROKER_BALANCE_REQUEST/RESPONSE` exists only for authenticated demo mode. The worker subscribes to
 `balance`, validates stream events, converts the external numeric value through `Decimal` and emits
@@ -152,7 +185,11 @@ The Core-side generic read-only supervisor refuses any worker whose capabilities
 
 Market tick events are sent as unsolicited `MARKET_TICK_EVENT` envelopes. The original subscription
 correlation ID is preserved in `correlation_id`; `causation_id` is `null` because stream ticks are
-not direct responses.
+not direct responses. Each event also carries a bounded `digit_frequency` snapshot for the active
+synthetic index. The worker maintains a fixed-capacity circular buffer, ten frequency counters and
+a 10x10 first-order transition matrix. Insertions and evictions update these structures in O(1),
+using `Decimal` quotes and a monotonic receipt clock. This telemetry is observational; it is not a
+prediction, trading signal or profit claim.
 
 In the continuous shadow composition, the Core consumes these immutable ticks only after the
 series backfill has made Market Health healthy. The Core builds fixed-timeframe closed candles with
@@ -172,28 +209,85 @@ The request optionally carries a positive `end_epoch`. This is a read-only pagin
 by the Core `BackfillPlanner`; the worker forwards it as Deriv history `end` and never derives a
 financial action from it. Retry, overlap, health and strategy delivery remain Core responsibilities.
 
-## Phase 2 — Controlled Demo Execution and Reconciliation
+Tick-history warm-up is also paginated at the IPC boundary. A worker response contains at most 100
+ticks, while the Core assembles the 500-tick Digit Edge window through bounded backward pages,
+deduplicates epochs and sorts the final window. This preserves the 64 KiB IPC frame limit instead of
+allowing an oversized response to terminate the worker. The authenticated WebSocket receive stream
+is protected by one session I/O lock, so request/response traffic and the live subscription pump
+cannot consume each other's messages. A UI-process loss now triggers safe shutdown of the complete
+supervised tree and releases the profile lock, preventing an invisible stale instance from blocking
+the next launch.
 
-In Phase 2 (Slice 2.1), the Deriv worker introduces controlled order submission and authoritative reconciliation strictly for **DEMO** accounts:
+The Core also maintains a bounded read-only Shadow universe for `R_10`, `R_25`, `R_50`, `R_75`
+and `R_100`. Availability is discovered through `active_symbols` and verified through
+`contracts_for`; each accepted symbol receives an independent subscription and paged 500-tick
+history. The worker remains a transport adapter: it does not rank assets or gain any new authority.
+One secondary subscription failure stays isolated from the operator-selected stream and therefore
+cannot close its health gate. The Core's ranking is observational only and never routes an order.
 
-1. **Submission Guardrails (`can_submit_orders=true` on DEMO only)**:
-   - Order submission is enabled exclusively when authenticated in a demo session (`connection_mode="DEMO"` or demo authenticated `order_session`).
-   - Every attempt to submit an order with a real account ID (`CR...`), real websocket endpoint, or unauthenticated session fails closed raising `DERIV_REAL_ACCOUNT_FORBIDDEN`.
-   - IPC `ORDER_SUBMIT` is translated to the Deriv `buy` request using contract parameters, stake minor units converted via exact `Decimal`, and immutable correlation tags embedded in `passthrough.order_id`.
+## Phase 2 — Controlled Selected-Account Execution and Reconciliation
+
+The Deriv worker provides controlled order submission and authoritative reconciliation for the
+explicitly selected Options account. Demo is the default testing path; Real requires all additional
+gates documented above.
+
+1. **Submission Guardrails**:
+   - Submission is enabled only after authenticated capabilities match the selected Demo/Real mode.
+   - IPC `ORDER_SUBMIT` is rejected locally with `ORDER_COMMAND_EXPIRED` when its UTC deadline has
+     elapsed. Otherwise the worker requests a `proposal` with `underlying_symbol`, exact `Decimal`
+     stake and duration, then sends `buy` using only the returned proposal ID and maximum price.
+     Immutable `passthrough.order_id` and `correlation_id` remain attached.
+   - Network failure or timeout after the send boundary returns `TIMEOUT_AFTER_POSSIBLE_SEND`; the
+     Core records `UNKNOWN`, preserves the reservation and performs zero automatic submission retry.
+   - `DIGITDIFF` is the one explicit direct-buy exception. Its already-persisted `OrderCommand`
+     includes the prediction digit and produces `buy: 1` with `basis=stake`, `duration=1`,
+     `duration_unit=t`, a string barrier and immutable passthrough IDs. Other contract types retain
+     the proposal-ID route.
 
 2. **WebSocket Contract Event Streaming (`ORDER_EVENT`)**:
-   - The worker streams contract lifecycle updates (`proposal_open_contract`) from the Deriv WebSocket into normalized `BrokerOrderEvent` envelopes (`ACCEPTED` → `OPEN` → `SETTLED`).
-   - Settle events contain exact realized P&L integer minor units calculated from `payout` minus `buy_price` via `Decimal`, and full evidence hashes for tamper detection.
+   - The worker subscribes immediately after `buy`, normalizes `OPEN` updates with remaining seconds
+     and current spot when supplied, and emits `SETTLED` when Deriv proves expiry/sale or a terminal
+     `won`/`lost` status.
+   - Settlement uses the official `profit` value, falling back to `payout - buy_price`, converts
+     through `Decimal` to integer minor units, hashes the canonical evidence and forgets the finished
+     subscription.
+   - For `DIGITDIFF`, the worker additionally validates the last digit of official `exit_tick`
+     (accepting `exit_spot` from the current API schema) against the stored barrier. A disagreement
+     between digit outcome and official status/profit fails closed instead of fabricating a result.
    - Events are pumped across loopback IPC to Core without blocking worker market data threads.
 
 3. **Authoritative Reconciliation Handler (`ORDER_STATUS_REQUEST`)**:
-   - The worker implements authoritative status query via Deriv `proposal_open_contract` (when `broker_order_id` is known) or `statement` transaction log matching `passthrough.order_id` (when `broker_order_id` is unknown after timeout).
+   - The worker implements authoritative status query via `proposal_open_contract` when the contract
+     ID is known, or bounded `statement` followed by `profit_table` matching the exact
+     `passthrough.order_id` when it is available.
+   - Current Deriv `statement`/`profit_table` responses may omit `passthrough`. For an ambiguous buy,
+     the Core therefore transmits its durable submission timestamp. The worker may recover a missing
+     contract ID only when `profit_table` yields exactly one record inside the bounded post-submit
+     window with the same symbol, contract type and exact Decimal stake. Zero or multiple matches
+     remain unresolved; there is no heuristic release of risk.
    - Returns immutable `OrderStatusResult` with strict domain `ReconciliationEvidence` (`FOUND`, `NOT_FOUND`, or `UNAVAILABLE`).
-   - Compares symbol, direction, and currency against original `OrderStatusQuery` to prevent mismatched reconciliation.
+   - Compares symbol, direction, stake amount and currency against the original query before producing
+     evidence. Missing external proof stays unresolved; it never releases risk.
 
 4. **Invariants Preserved**:
    - Single database writer transaction on `state.db` before dispatch.
    - Timeouts transition order to `UNKNOWN` while preserving active risk reservation.
    - Zero automatic blind retries on transient errors.
    - Settlement atomically commits realized P&L to `state.db` and releases risk exposure.
+   - Safe Stop blocks new submissions but does not stop the event pump or settlement processing for
+     contracts already open.
+
+## Validation
+
+Local deterministic coverage resides in:
+
+- `tests/contract/test_deriv_live_order_contract.py`
+- `tests/contract/test_deriv_digit_diff_contract.py`
+- `tests/unit/test_tick_ring_buffer.py`
+- `tests/unit/test_deriv_tick_stream.py`
+- `tests/integration/test_deriv_live_trade_lifecycle.py`
+- `tests/chaos/test_deriv_live_timeout_recovery.py`
+
+External Deriv Demo tests remain opt-in and must never contain tokens or live account identifiers in
+fixtures or logs.
 

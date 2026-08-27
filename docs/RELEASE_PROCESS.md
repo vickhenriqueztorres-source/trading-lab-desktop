@@ -21,7 +21,7 @@ limpa ainda são necessários antes de qualquer canal alpha/beta.
 
 ## 3. Versionamento
 
-O pacote atual declara `0.0.1` em `pyproject.toml`. Antes de release formal, definir:
+O pacote atual declara `1.9.11` em `pyproject.toml`. Antes de release comercial formal, definir:
 
 - política SemVer/calendário;
 - compatibilidade de IPC;
@@ -67,7 +67,7 @@ Pipeline implementado em `build_scripts/compile_trading_lab.py`, `build_scripts/
 
 - **Estrutura do Pacote Compilado (`dist/TradingLab/`):**
   - `TradingLab.exe` (binário nativo compilado com PyInstaller em modo `--onedir` e `--windowed`, sem janela CMD de console).
-  - Metadados de versão do Windows (`version_info.txt` com Versão "1.0.0.0", Produto "Trading Lab Desktop", Copyright e Descrição).
+  - Metadados de versão do Windows (`version_info.txt` com Versão "1.9.11.0", Produto "Trading Lab Desktop", Copyright e Descrição).
   - Inclusão dos módulos `apps/`, `packages/`, PySide6 (Qt 6), estilos QSS e traduções i18n.
   - `release_manifest.json` (manifesto canônico de integridade gerado com `ReleaseManifestBuilder`).
 - **Higienização Obrigatória:** exclusão estrita de `.env`, `.db`, `.vault`, `.log`, testes e caches.
@@ -76,7 +76,7 @@ Pipeline implementado em `build_scripts/compile_trading_lab.py`, `build_scripts/
 - **Perfil gravável por usuário:** o build instalado usa `%LOCALAPPDATA%\TradingLab\profiles\default`; nenhum banco, vault ou estado mutável é gravado em `{app}`.
 - **Smoke do artefato:** após gerar e auto-verificar o manifesto, `compile_trading_lab.py` executa o binário empacotado com `--post-update-health-check`. Falha, timeout ou impossibilidade de execução aborta o build.
 - **Gerador de Instalador Inno Setup (`TradingLab_Setup.iss`):**
-  - Gera o instalador executável `dist/TradingLab_Setup_v1.0.0.exe` para Windows 10/11 64 bits.
+  - Gera o instalador executável `dist/TradingLab_Setup_v1.9.11.exe` para Windows 10/11 64 bits.
   - Cria atalhos no Menu Iniciar e na Área de Trabalho com suporte a desinstalação limpa.
   - Executa `TradingLab.exe --post-update-health-check` no fim da instalação e usa `GetCustomSetupExitCode` para devolver código não zero se o pacote instalado não passar na verificação, inclusive em modo silencioso.
   - Mantém `unins*.exe/.dat` em `%LOCALAPPDATA%\TradingLab\uninstall`, fora da raiz imutável `{app}`, para que o desinstalador do Inno não seja confundido com arquivo executável não rastreado pelo manifesto.
@@ -84,7 +84,7 @@ Pipeline implementado em `build_scripts/compile_trading_lab.py`, `build_scripts/
 Build local reproduzível no host Windows com as dependências de desenvolvimento e Inno Setup 6:
 
 ```powershell
-python build_scripts/compile_trading_lab.py --version 1.0.0 --output-dir dist
+python build_scripts/compile_trading_lab.py --version 1.9.11 --output-dir dist
 ISCC.exe /Q build_scripts/TradingLab_Setup.iss
 dist\TradingLab\TradingLab.exe --post-update-health-check
 ```

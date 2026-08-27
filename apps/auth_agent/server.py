@@ -20,7 +20,7 @@ from apps.auth_agent.fake_service import (
 )
 from apps.auth_agent.vault_factory import create_user_scoped_vault
 from packages.identity import OtpCode
-from packages.licensing import AuthorizationReason, LeaseVerifier
+from packages.licensing import AuthorizationReason, LeaseVerifier, SignedLease
 from packages.protocol import (
     PROTOCOL_VERSION,
     AuthCheckAuthorizationRequest,
@@ -46,6 +46,7 @@ from packages.security import SecretValue, UserScopedVaultProtocol
 
 _AGENT_VERSION = "1.0.0"
 _FAKE_KEY_REGISTRY = "identity.fake_lease_verification_keys"
+_SIGNED_LEASE_KEY = "licensing.signed_lease"
 _DEVICE_ID_KEY = "identity.device_id"
 _MAX_VERIFICATION_KEYS = 16
 _MAX_CACHED_RESPONSES = 128
@@ -132,6 +133,17 @@ def _encode_key_registry(keys: dict[str, bytes]) -> SecretValue:
     return SecretValue(json.dumps(document, sort_keys=True, separators=(",", ":")).encode())
 
 
+def _active_lease_key_id(vault: UserScopedVaultProtocol) -> str | None:
+    """Return the only historical verification key that can still be in use."""
+    stored = vault.get_secret(_SIGNED_LEASE_KEY)
+    if stored is None:
+        return None
+    try:
+        return SignedLease.from_bytes(stored.reveal_bytes()).key_id
+    except ValueError:
+        return None
+
+
 class AuthAgentServer:
     """Isolated Auth Agent server; stored authentication material never returns to the Core."""
 
@@ -143,6 +155,7 @@ class AuthAgentServer:
         force_simulation: bool = False,
         test_otp: OtpCode | None = None,
         lease_ttl: timedelta = timedelta(days=7),
+        allow_real_mode: bool = False,
         request_timeout: float = 2.0,
     ) -> None:
         if request_timeout <= 0:
@@ -164,8 +177,19 @@ class AuthAgentServer:
             lease_ttl=lease_ttl,
             signing_key_id=f"fake-{uuid4()}",
             otp_factory=None if test_otp is None else lambda: test_otp,
+            real_mode_allowed=allow_real_mode,
         )
         verification_keys = _decode_key_registry(self._vault.get_secret(_FAKE_KEY_REGISTRY))
+        # A single signed lease is persisted. Retaining every ephemeral fake-service
+        # key makes normal application restarts eventually exhaust the bounded
+        # registry and prevents the whole Auth Agent from starting. Keep only the
+        # key that can verify the currently stored lease, then add this process key.
+        active_key_id = _active_lease_key_id(self._vault)
+        verification_keys = {
+            key_id: public_key
+            for key_id, public_key in verification_keys.items()
+            if key_id == active_key_id
+        }
         for key_id, public_key in service.lease_verification_keys.items():
             if key_id not in verification_keys and len(verification_keys) >= _MAX_VERIFICATION_KEYS:
                 raise AuthAgentServerError()

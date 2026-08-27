@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -369,6 +370,64 @@ def test_normal_shutdown_releases_profile_guard(tmp_path: Path) -> None:
     replacement = CoreRuntime(profile)
     replacement.start()
     replacement.shutdown()
+
+
+def test_arm_refreshes_an_expired_digit_cooldown_without_unrelated_ui_poll(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    profile = tmp_path / "profile"
+    runtime = CoreRuntime(profile)
+    runtime.start()
+    try:
+        config = replace(
+            runtime.risk_ledger.digit_config,
+            max_consecutive_losses=1,
+            cooldown_seconds_after_loss=0.05,
+        )
+        assert runtime.update_digit_risk_config(config) == (True, None)
+        runtime.risk_ledger.apply_digit_realized_pnl(
+            -100,
+            "USD",
+            runtime.health_gate,
+        )
+        assert runtime.health_gate.contains("HG_COOLDOWN_ACTIVE")
+
+        runtime.stop_new_entries()
+        time.sleep(0.06)
+
+        assert runtime.resume_new_entries() is True
+        assert not runtime.health_gate.contains("HG_COOLDOWN_ACTIVE")
+        assert runtime.dispatcher_started is True
+    finally:
+        runtime.shutdown()
+
+
+def test_restart_preserves_operator_martingale_configuration(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from decimal import Decimal
+
+    profile = tmp_path / "profile"
+    runtime = CoreRuntime(profile)
+    runtime.start()
+    config = replace(
+        runtime.risk_ledger.digit_config,
+        martingale_enabled=True,
+        martingale_multiplier=Decimal("2.00"),
+        martingale_max_steps=2,
+        martingale_max_stake_minor_units=400,
+        max_consecutive_losses=3,
+    )
+    assert runtime.update_digit_risk_config(config) == (True, None)
+    runtime.shutdown()
+
+    restarted = CoreRuntime(profile)
+    restarted.start()
+    try:
+        assert restarted.risk_ledger.digit_config == config
+    finally:
+        restarted.shutdown()
 
 
 def test_shutdown_and_restart_preserve_unknown_exposure(tmp_path: Path) -> None:

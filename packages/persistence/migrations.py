@@ -243,11 +243,40 @@ BROKER_ORDER_EVENTS = Migration(
     ),
 )
 
+DIGIT_RISK_RUNTIME = Migration(
+    version=5,
+    name="0005_digit_risk_runtime",
+    statements=(
+        """
+        CREATE TABLE digit_risk_runtime (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            config_fingerprint TEXT NOT NULL,
+            currency TEXT NOT NULL CHECK (length(currency) = 3),
+            martingale_enabled INTEGER NOT NULL CHECK (martingale_enabled IN (0, 1)),
+            martingale_max_steps INTEGER NOT NULL CHECK (martingale_max_steps BETWEEN 1 AND 4),
+            max_consecutive_losses INTEGER NOT NULL CHECK (max_consecutive_losses BETWEEN 1 AND 5),
+            cooldown_seconds TEXT NOT NULL,
+            daily_pnl_minor INTEGER NOT NULL DEFAULT 0,
+            consecutive_losses INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_losses >= 0),
+            martingale_step INTEGER NOT NULL DEFAULT 0 CHECK (martingale_step >= 0),
+            pinned_symbol TEXT,
+            cumulative_sequence_loss_minor INTEGER NOT NULL DEFAULT 0
+                CHECK (cumulative_sequence_loss_minor >= 0),
+            cooldown_started_at TEXT,
+            last_order_id TEXT,
+            last_settlement_id TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """,
+    ),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
     RECONCILIATION,
     BROKER_ORDER_EVENTS,
+    DIGIT_RISK_RUNTIME,
 )
 
 

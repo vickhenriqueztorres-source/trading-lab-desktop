@@ -442,7 +442,7 @@ def test_evt_16_18_20_lost_settlement_survives_core_and_worker_restart(
         restarted.shutdown()
 
 
-def test_evt_17_19_worker_crash_open_keeps_exposure_and_status_is_recoverable(
+def test_evt_17_19_worker_crash_reconnects_and_reconciles_without_rearming(
     tmp_path: Path, order_request: OrderRequest
 ) -> None:
     profile = tmp_path / "worker-crash"
@@ -453,16 +453,20 @@ def test_evt_17_19_worker_crash_open_keeps_exposure_and_status_is_recoverable(
     runtime.start()
     persisted = runtime.submit(runtime_request(order_request, "worker-crash"))
     try:
-        wait_until(
-            lambda: runtime.reader.one("orders", "order_id", persisted.order_id)["state"] == "OPEN"
-        )
-        wait_until(lambda: runtime.worker_supervisor.health_state.value == "DISCONNECTED")
+        deadline = time.monotonic() + 6.0
+        order = runtime.reader.one("orders", "order_id", persisted.order_id)
+        while order is not None and order["state"] != "SETTLED" and time.monotonic() < deadline:
+            time.sleep(0.01)
+            order = runtime.reader.one("orders", "order_id", persisted.order_id)
+        assert order is not None and order["state"] == "SETTLED", order
+        wait_until(lambda: runtime.worker_supervisor.health_state.value == "READY")
         reservation = runtime.reader.reservation_for_intent(persisted.intent_id)
-        assert reservation is not None and reservation["state"] == "ACTIVE"
+        assert reservation is not None and reservation["state"] == "RELEASED"
         assert runtime.reader.financial_effect_counts(persisted.order_id) == {
-            "pnl_application_count": 0,
-            "reservation_release_count": 0,
+            "pnl_application_count": 1,
+            "reservation_release_count": 1,
         }
+        assert runtime.safe_stop_active is True
     finally:
         runtime.shutdown()
 
@@ -478,16 +482,24 @@ def test_worker_crash_mid_settlement_frame_never_applies_partial_event(
     persisted = runtime.submit(runtime_request(order_request, "partial-event-crash"))
     try:
         wait_until(
-            lambda: runtime.reader.one("orders", "order_id", persisted.order_id)["state"] == "OPEN"
+            lambda: (
+                runtime.reader.one("orders", "order_id", persisted.order_id)["state"] == "SETTLED"
+            ),
+            timeout=6.0,
         )
-        wait_until(lambda: runtime.worker_supervisor.health_state.value == "DISCONNECTED")
+        wait_until(lambda: runtime.worker_supervisor.health_state.value == "READY")
         order = runtime.reader.one("orders", "order_id", persisted.order_id)
-        assert order is not None and order["realized_pnl_minor"] is None
-        assert runtime.reader.count("broker_order_events") == 2
+        assert order is not None and order["realized_pnl_minor"] is not None
+        # The truncated settlement frame was never admitted as an event. The
+        # authoritative status query after worker recovery settles it exactly once.
+        pre_crash_events = runtime.reader.broker_events_for_order(persisted.order_id)
+        assert 1 <= len(pre_crash_events) <= 2
+        assert all(event["external_status"] != "SETTLED" for event in pre_crash_events)
         assert runtime.reader.financial_effect_counts(persisted.order_id) == {
-            "pnl_application_count": 0,
-            "reservation_release_count": 0,
+            "pnl_application_count": 1,
+            "reservation_release_count": 1,
         }
+        assert runtime.safe_stop_active is True
     finally:
         runtime.shutdown()
 

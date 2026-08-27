@@ -1,4 +1,8 @@
-# Runbook Operacional — Fase 1 local
+# Runbook Operacional — histórico da Fase 1 local
+
+> Este documento preserva o runbook da fase read-only. Para a operação atual da v1.9.11, use
+> [USER_GUIDE.md](USER_GUIDE.md), [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md) e
+> [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## 1. Escopo e advertência
 
@@ -176,9 +180,12 @@ Sinais: `HG_WORKER_DISCONNECTED`, `WORKER_CRASHED`, circuit open.
 
 Se startup/handshake falhar, confirme cleanup do subprocesso. Não deixe worker órfão.
 
-O Launcher pode reiniciar de forma bounded somente Auth Agent e Deriv read-only. O Simulated Worker
-financeiro permanece degradado após kill; substituir seu cliente sob o Core ativo poderia ignorar a
-reconciliação da geração anterior. Faça safe shutdown e novo startup completo.
+O Simulated Worker usa backoff e circuit breaker com probe HALF_OPEN. A porta financeira do Core
+delega sempre ao cliente atual; após replacement, o Core reconcilia a geração anterior e permanece
+desarmado. Deriv autenticada também substitui worker/OTP/sessão e termina em `READY_TO_ARM`.
+
+Se `DERIV_READY_TO_ARM` estiver fechado, use o reason projetado. Não clique repetidamente em
+Conectar/Ligar: conexão, readiness e ARM são estados distintos.
 
 ## 10. Ordem `UNKNOWN`
 

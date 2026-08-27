@@ -133,6 +133,7 @@ def status_query() -> OrderStatusQuery:
         symbol="EURUSD",
         direction=Direction.CALL,
         amount=Money(1_000, "USD"),
+        submitted_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC),
     )
 
 

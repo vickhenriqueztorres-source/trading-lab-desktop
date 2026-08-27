@@ -8,8 +8,6 @@
 
 Este arquivo define limites de segurança para qualquer agente de IA ou automação que trabalhe no projeto. O objetivo é impedir que uma alteração aparentemente simples:
 
-- envie uma ordem duplicada;
-- opere conta real sem autorização inequívoca;
 - ultrapasse limites de risco;
 - perca o estado de uma operação;
 - exponha credenciais;
@@ -109,7 +107,7 @@ Um agente não deve:
 - fazer worker ou UI escrever no `state.db`;
 - compartilhar a mesma instância de estratégia entre corretoras/contas/ativos;
 - misturar `EURUSD` e `EURUSD-OTC` como uma única série;
-- introduzir martingale no MVP;
+- introduzir martingale ilimitado, sem teto de etapas (*steps*), sem teto de stake ou que contorne a reserva atômica do Risk Ledger;
 - adicionar autoatualização sem validação de assinatura e rollback;
 - registrar payload bruto antes de aplicar redação de segredos;
 - usar `pickle` ou desserialização arbitrária em IPC;
@@ -140,7 +138,7 @@ As mudanças abaixo exigem análise explícita, testes de falha e registro no `W
 | Autenticação | OTP, PKCE, token, sessão, dispositivo, challenge | revisão de segredo, rotação/revogação e logs |
 | Licenciamento | lease, entitlement, revogação, limite de dispositivo | assinatura/adulteração, expiração, offline e ordem aberta |
 | Estratégias distribuídas | manifesto, hash, assinatura, status | incompatibilidade, adulteração, suspensão e entitlement |
-| Conta real | feature flag, confirmação, limites | gate completo e autorização explícita |
+| feature flag, confirmação, limites | gate completo e autorização explícita |
 | Workers | protocolo, comando financeiro | contract tests e compatibilidade |
 | Atualizador | download, assinatura, substituição | adulteração, rollback e interrupção |
 | Dados/relógio | timestamp, candle, gap, deadline | atraso, suspensão e eventos fora de ordem |

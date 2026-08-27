@@ -12,6 +12,7 @@ from packages.domain.models import Broker, require_aware_utc
 class BrokerConnectionMode(StrEnum):
     PUBLIC_READ_ONLY = "PUBLIC_READ_ONLY"
     DEMO_AUTH_READ_ONLY = "DEMO_AUTH_READ_ONLY"
+    REAL_AUTH_READ_ONLY = "REAL_AUTH_READ_ONLY"
 
 
 class MarketDataHealthState(StrEnum):
@@ -452,8 +453,8 @@ class BrokerAccountBalance:
         normalized_currency = self.currency.strip().upper()
         if len(normalized_currency) != 3 or not normalized_currency.isascii():
             raise ValueError("balance currency is invalid")
-        if self.account_type != "DEMO":
-            raise ValueError("only DEMO account balances are accepted")
+        if self.account_type not in {"DEMO", "REAL"}:
+            raise ValueError("account type must be DEMO or REAL")
         object.__setattr__(self, "currency", normalized_currency)
 
     def to_payload(self) -> dict[str, object]:

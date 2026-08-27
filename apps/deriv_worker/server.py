@@ -13,6 +13,7 @@ from apps.deriv_worker.order_session import DerivOrderSession
 from apps.deriv_worker.public_session import PublicDerivSession
 from apps.deriv_worker.reconciliation import DerivReconciliationHandler
 from apps.deriv_worker.schema import DerivErrorCategory, DerivWorkerError
+from apps.deriv_worker.tick_stream import DerivTickStream
 from packages.domain.market import BrokerAccountBalance
 from packages.domain.models import WorkerOutcome
 from packages.protocol.envelope import EndpointRole, Envelope, MessageType
@@ -37,7 +38,7 @@ class DerivWorkerServer:
         session: PublicDerivSession,
         scenario: FakeDerivScenario = FakeDerivScenario.NORMAL,
         connect_timeout: float = 3.0,
-        stream_poll_seconds: float = 0.1,
+        stream_poll_seconds: float = 0.05,
         suspension_gap_seconds: float = 30.0,
         order_session: DerivOrderSession | None = None,
         reconciliation_handler: DerivReconciliationHandler | None = None,
@@ -50,14 +51,26 @@ class DerivWorkerServer:
         self._session = session
         self._scenario = scenario
         capabilities = session.capabilities
+        self._order_session: DerivOrderSession | None
+        self._reconciliation_handler: DerivReconciliationHandler | None
         can_submit_orders = order_session is not None and getattr(
-            order_session, "demo_authenticated", False
+            order_session, "trading_authenticated", False
         )
         if can_submit_orders:
+            assert order_session is not None
             self._capabilities = WorkerCapabilities(
                 broker="DERIV",
-                account_modes=("demo",),
-                products=("DIGITAL_OPTION", "OPTIONS", "MARKET_DATA"),
+                account_modes=(order_session.account_type,),
+                products=(
+                    "DIGITAL_OPTION",
+                    "DIGITDIFF",
+                    "DIGITOVER",
+                    "DIGITUNDER",
+                    "DIGITEVEN",
+                    "DIGITODD",
+                    "OPTIONS",
+                    "MARKET_DATA",
+                ),
                 supports_reconciliation=True,
                 supports_quotes=True,
                 supports_order_status_query=True,
@@ -65,13 +78,11 @@ class DerivWorkerServer:
                 worker_version="0.4.0",
                 can_submit_orders=True,
                 supports_market_data=True,
-                connection_mode="DEMO",
+                connection_mode=order_session.account_type.upper(),
             )
             self._order_session = order_session
             self._reconciliation_handler = reconciliation_handler or (
                 DerivReconciliationHandler(session.transport, order_session)
-                if order_session is not None
-                else None
             )
         else:
             self._capabilities = WorkerCapabilities(
@@ -93,6 +104,13 @@ class DerivWorkerServer:
         self._stream_poll_seconds = stream_poll_seconds
         self._suspension_gap_seconds = suspension_gap_seconds
         self._send_lock = threading.Lock()
+        # The authenticated Deriv transport has a single receive stream. IPC
+        # requests (history, balance, orders) and the live market pump must not
+        # consume websocket frames concurrently or one path can steal the
+        # other's response and force an otherwise healthy session to close.
+        self._session_io_lock = threading.RLock()
+        self._digit_tick_streams: dict[str, DerivTickStream] = {}
+        self._digit_stream_subscription_symbols: dict[str, str] = {}
         self._pump_stop = threading.Event()
         self._pump_thread: threading.Thread | None = None
 
@@ -157,7 +175,8 @@ class DerivWorkerServer:
 
     def _handle(self, transport: FramedSocket, request: Envelope) -> None:
         try:
-            message_type, payload = self._dispatch_read_only(request)
+            with self._session_io_lock:
+                message_type, payload = self._dispatch_read_only(request)
         except (DerivWorkerError, ValueError) as exc:
             reason = (
                 exc.reason_code
@@ -248,14 +267,36 @@ class DerivWorkerServer:
             }
         if message_type is MessageType.MARKET_TICK_SUBSCRIBE:
             symbol = self._required_str(request.payload, "broker_symbol")
+            digit_stream = self._digit_tick_streams.setdefault(
+                symbol,
+                DerivTickStream(self._session.transport),
+            )
+            digit_stream.activate_symbol(symbol)
+            tick = self._session.subscribe_ticks(
+                symbol,
+                correlation_id=request.correlation_id,
+            )
+            try:
+                for historical_tick in self._session.tick_history(symbol, count=500):
+                    digit_stream.ingest_market_tick(historical_tick)
+            except (DerivWorkerError, ValueError):
+                pass
+            frequency = digit_stream.ingest_market_tick(tick)
+            self._digit_stream_subscription_symbols[tick.subscription_id] = symbol
             return MessageType.MARKET_TICK_SUBSCRIBED, {
-                "tick": self._session.subscribe_ticks(
-                    symbol,
-                    correlation_id=request.correlation_id,
-                ).to_payload()
+                "digit_frequency": frequency.to_payload(),
+                "tick": tick.to_payload(),
             }
         if message_type is MessageType.MARKET_TICK_UNSUBSCRIBE:
             subscription_id = self._required_str(request.payload, "subscription_id")
+            unsubscribed_symbol = self._digit_stream_subscription_symbols.get(subscription_id)
+            if unsubscribed_symbol is not None:
+                self._digit_stream_subscription_symbols.pop(subscription_id)
+            if (
+                unsubscribed_symbol is not None
+                and unsubscribed_symbol not in self._digit_stream_subscription_symbols.values()
+            ):
+                self._digit_tick_streams.pop(unsubscribed_symbol, None)
             return MessageType.MARKET_TICK_UNSUBSCRIBED, {
                 "cancelled": self._session.unsubscribe(subscription_id)
             }
@@ -283,10 +324,24 @@ class DerivWorkerServer:
         count = payload.get("count", 100)
         if isinstance(count, bool) or not isinstance(count, int):
             raise ValueError("history count must be an integer")
+        # One IPC frame is capped at 64 KiB. A 500-tick response exceeds that
+        # bound, so callers must page history instead of weakening the protocol.
+        if not 1 <= count <= 100:
+            raise ValueError("history IPC page size is outside bounds")
         if style == "ticks":
+            end_epoch = payload.get("end_epoch")
+            if end_epoch is not None and (
+                isinstance(end_epoch, bool) or not isinstance(end_epoch, int) or end_epoch <= 0
+            ):
+                raise ValueError("tick history end epoch must be a positive integer")
             return {
                 "ticks": [
-                    item.to_payload() for item in self._session.tick_history(symbol, count=count)
+                    item.to_payload()
+                    for item in self._session.tick_history(
+                        symbol,
+                        count=count,
+                        end_epoch=end_epoch,
+                    )
                 ],
                 "candles": [],
             }
@@ -362,37 +417,42 @@ class DerivWorkerServer:
 
     def _market_pump_loop(self, transport: FramedSocket) -> None:
         while not self._pump_stop.wait(self._stream_poll_seconds):
-            self._session.detect_suspension(max_gap_seconds=self._suspension_gap_seconds)
-            if self._order_session is not None:
-                try:
-                    self._order_session.drain_contract_events(timeout=0.0)
-                    order_event = self._order_session.next_queued_event(timeout=0.0)
-                    while order_event is not None:
-                        order_envelope = Envelope(
-                            protocol_version=self._protocol_version,
-                            message_id=str(uuid4()),
-                            correlation_id=order_event.correlation_id,
-                            causation_id=None,
-                            source=EndpointRole.DERIV_WORKER,
-                            target=EndpointRole.CORE,
-                            message_type=MessageType.ORDER_EVENT,
-                            created_at_utc=datetime.now(UTC),
-                            deadline_at=None,
-                            payload=order_event.to_payload(),
-                        )
-                        self._send(transport, order_envelope)
+            with self._session_io_lock:
+                self._session.detect_suspension(max_gap_seconds=self._suspension_gap_seconds)
+                if self._order_session is not None:
+                    try:
+                        self._order_session.drain_contract_events(timeout=0.0)
                         order_event = self._order_session.next_queued_event(timeout=0.0)
-                except Exception:
-                    pass
-            try:
-                tick = self._session.next_queued_tick(timeout=0.0)
-                if tick is None:
-                    self._session.drain_stream_once(timeout=self._stream_poll_seconds)
+                        while order_event is not None:
+                            order_envelope = Envelope(
+                                protocol_version=self._protocol_version,
+                                message_id=str(uuid4()),
+                                correlation_id=order_event.correlation_id,
+                                causation_id=None,
+                                source=EndpointRole.DERIV_WORKER,
+                                target=EndpointRole.CORE,
+                                message_type=MessageType.ORDER_EVENT,
+                                created_at_utc=datetime.now(UTC),
+                                deadline_at=None,
+                                payload=order_event.to_payload(),
+                            )
+                            self._send(transport, order_envelope)
+                            order_event = self._order_session.next_queued_event(timeout=0.0)
+                    except Exception:
+                        pass
+                try:
                     tick = self._session.next_queued_tick(timeout=0.0)
-            except DerivWorkerError:
-                return
+                    if tick is None:
+                        self._session.drain_stream_once(timeout=self._stream_poll_seconds)
+                        tick = self._session.next_queued_tick(timeout=0.0)
+                except DerivWorkerError:
+                    return
             if tick is None:
                 continue
+            digit_stream = self._digit_tick_streams.get(tick.broker_symbol)
+            if digit_stream is None:
+                continue
+            frequency = digit_stream.ingest_market_tick(tick)
             event = Envelope(
                 protocol_version=self._protocol_version,
                 message_id=str(uuid4()),
@@ -403,7 +463,10 @@ class DerivWorkerServer:
                 message_type=MessageType.MARKET_TICK_EVENT,
                 created_at_utc=datetime.now(UTC),
                 deadline_at=None,
-                payload={"tick": tick.to_payload()},
+                payload={
+                    "digit_frequency": frequency.to_payload(),
+                    "tick": tick.to_payload(),
+                },
             )
             try:
                 self._send(transport, event)

@@ -10,7 +10,11 @@ __pycache__/
 
 # Distribution / packaging
 dist/
+dist_*/
 build/
+release_v*/
+artifacts/
+work/
 *.egg-info/
 .installed.cfg
 *.egg

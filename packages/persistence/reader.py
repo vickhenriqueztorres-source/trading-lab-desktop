@@ -24,6 +24,7 @@ class StateReader:
             "reconciliation_attempts",
             "reconciliation_evidence",
             "broker_order_events",
+            "digit_risk_runtime",
             "schema_migrations",
         }
         if table not in allowed:
@@ -97,6 +98,7 @@ class StateReader:
                 """
                 SELECT o.order_id, o.intent_id, o.correlation_id, o.broker,
                        o.account_id, o.broker_order_id, o.state AS order_state,
+                       o.created_at AS order_created_at,
                        ti.product, ti.symbol, ti.direction, ti.amount_minor, ti.currency,
                        ob.message_id, ob.state AS outbox_state, ob.attempt_count,
                        rr.reservation_id, rr.state AS reservation_state
@@ -117,6 +119,7 @@ class StateReader:
                 """
                 SELECT o.order_id, o.intent_id, o.correlation_id, o.broker,
                        o.account_id, o.broker_order_id, o.state AS order_state,
+                       o.created_at AS order_created_at,
                        ti.product, ti.symbol, ti.direction, ti.amount_minor, ti.currency,
                        ob.message_id, ob.state AS outbox_state, ob.attempt_count,
                        rr.reservation_id, rr.state AS reservation_state
@@ -181,6 +184,32 @@ class StateReader:
                 "reservation_release_count": int(row["release_count"]),
             }
 
+    def digit_risk_runtime(self) -> dict[str, Any] | None:
+        """Return the singleton durable Digit Edge progression projection."""
+
+        with closing(open_reader_connection(self._path)) as connection:
+            row = connection.execute(
+                "SELECT * FROM digit_risk_runtime WHERE singleton_id = 1"
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def has_nonterminal_deriv_digit_order(self) -> bool:
+        with closing(open_reader_connection(self._path)) as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                WHERE o.broker = 'DERIV'
+                  AND ti.product IN (
+                      'DIGITDIFF', 'DIGITOVER', 'DIGITUNDER', 'DIGITEVEN', 'DIGITODD'
+                  )
+                  AND o.state NOT IN ('SETTLED', 'REJECTED')
+                LIMIT 1
+                """
+            ).fetchone()
+            return row is not None
+
     def ui_order_summaries(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return a bounded, read-only order projection for the UI service."""
 
@@ -191,7 +220,7 @@ class StateReader:
                 """
                 SELECT o.order_id, o.broker, ti.symbol, ti.direction,
                        ti.amount_minor, ti.currency, o.state, o.created_at,
-                       o.broker_order_id
+                       o.broker_order_id, o.realized_pnl_minor
                 FROM orders o
                 JOIN trade_intents ti ON ti.intent_id = o.intent_id
                 ORDER BY o.created_at DESC, o.order_id DESC
@@ -222,3 +251,61 @@ class StateReader:
                 (since_utc.isoformat(),),
             ).fetchall()
             return {str(row["currency"]): int(row["pnl_minor"]) for row in rows}
+
+    def deriv_strategy_performance(
+        self,
+        strategy_id: str,
+        *,
+        symbol: str,
+        limit: int = 200,
+    ) -> dict[str, int | float | str | None]:
+        """Recent settled evidence for one strategy and synthetic index.
+
+        The circuit breaker is intentionally scoped to an asset: a poor result on R_10 must
+        not suppress independent, warmed signals on R_25/R_50/R_75/R_100.
+        """
+
+        if not strategy_id.strip() or len(strategy_id) > 128:
+            raise ValueError("strategy performance identity is invalid")
+        if not symbol.strip() or len(symbol) > 64:
+            raise ValueError("strategy performance symbol is invalid")
+        if type(limit) is not int or not 30 <= limit <= 1000:
+            raise ValueError("strategy performance limit is outside bounds")
+        with closing(open_reader_connection(self._path)) as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(1) AS settled_count,
+                       SUM(CASE WHEN realized_pnl_minor > 0 THEN 1 ELSE 0 END) AS wins,
+                       SUM(CASE WHEN realized_pnl_minor < 0 THEN 1 ELSE 0 END) AS losses,
+                       SUM(realized_pnl_minor) AS total_pnl_minor,
+                       AVG(CASE WHEN realized_pnl_minor > 0
+                                THEN realized_pnl_minor END) AS avg_win_minor,
+                       AVG(CASE WHEN realized_pnl_minor < 0
+                                THEN -realized_pnl_minor END) AS avg_loss_minor,
+                       MAX(updated_at) AS last_settled_at
+                FROM (
+                    SELECT o.realized_pnl_minor, o.updated_at
+                    FROM orders o
+                    JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                    WHERE o.broker = 'DERIV'
+                      AND o.state = 'SETTLED'
+                      AND o.realized_pnl_minor IS NOT NULL
+                      AND ti.strategy_id = ?
+                      AND ti.symbol = ?
+                    ORDER BY o.updated_at DESC, o.order_id DESC
+                    LIMIT ?
+                )
+                """,
+                (strategy_id, symbol, limit),
+            ).fetchone()
+            if row is None:
+                return {
+                    "settled_count": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "total_pnl_minor": 0,
+                    "avg_win_minor": None,
+                    "avg_loss_minor": None,
+                    "last_settled_at": None,
+                }
+            return dict(row)

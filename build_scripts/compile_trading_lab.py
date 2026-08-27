@@ -38,7 +38,7 @@ EXCLUDE_PATTERNS = (
 def compile_executable(
     project_root: Path,
     output_dir: Path,
-    version: str = "1.0.0",
+    version: str = "1.9.11",
     platform_name: str = "win64",
     skip_pyinstaller: bool = False,
 ) -> Path:
@@ -157,7 +157,7 @@ def compile_executable(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compile Trading Lab Desktop Windows Executable")
-    parser.add_argument("--version", default="1.0.0", help="Release version string")
+    parser.add_argument("--version", default="1.9.11", help="Release version string")
     parser.add_argument(
         "--output-dir",
         type=Path,

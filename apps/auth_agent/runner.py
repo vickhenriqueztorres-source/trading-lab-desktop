@@ -23,7 +23,7 @@ class AuthAgentStartupError(RuntimeError):
 
 def _read_startup(
     stream: TextIO,
-) -> tuple[SecretValue, Path, bool, OtpCode | None, timedelta]:
+) -> tuple[SecretValue, Path, bool, bool, OtpCode | None, timedelta]:
     line = stream.readline(_MAX_STARTUP_BYTES + 1)
     if not line or len(line.encode("utf-8")) > _MAX_STARTUP_BYTES:
         raise AuthAgentStartupError()
@@ -33,6 +33,7 @@ def _read_startup(
         raise AuthAgentStartupError() from exc
     if not isinstance(document, dict) or set(document) != {
         "force_simulation",
+        "allow_real_mode",
         "lease_ttl_seconds",
         "profile_dir",
         "session_token",
@@ -42,6 +43,7 @@ def _read_startup(
     token = document["session_token"]
     profile_dir = document["profile_dir"]
     force_simulation = document["force_simulation"]
+    allow_real_mode = document["allow_real_mode"]
     test_otp = document["test_otp"]
     lease_ttl_seconds = document["lease_ttl_seconds"]
     if (
@@ -50,6 +52,7 @@ def _read_startup(
         or not isinstance(profile_dir, str)
         or not profile_dir.strip()
         or not isinstance(force_simulation, bool)
+        or not isinstance(allow_real_mode, bool)
         or (test_otp is not None and not isinstance(test_otp, str))
         or isinstance(lease_ttl_seconds, bool)
         or not isinstance(lease_ttl_seconds, int | float)
@@ -65,6 +68,7 @@ def _read_startup(
         SecretValue.from_text(token),
         Path(profile_dir),
         force_simulation,
+        allow_real_mode,
         parsed_otp,
         timedelta(seconds=float(lease_ttl_seconds)),
     )
@@ -72,13 +76,21 @@ def _read_startup(
 
 def main() -> int:
     try:
-        session_token, profile_dir, force_simulation, test_otp, lease_ttl = _read_startup(sys.stdin)
+        (
+            session_token,
+            profile_dir,
+            force_simulation,
+            allow_real_mode,
+            test_otp,
+            lease_ttl,
+        ) = _read_startup(sys.stdin)
         server = AuthAgentServer(
             session_token,
             profile_dir,
             force_simulation=force_simulation,
             test_otp=test_otp,
             lease_ttl=lease_ttl,
+            allow_real_mode=allow_real_mode,
         )
     except (AuthAgentStartupError, OSError, RuntimeError, ValueError):
         print("AUTH_AGENT_STARTUP_FAILED", file=sys.stderr, flush=True)

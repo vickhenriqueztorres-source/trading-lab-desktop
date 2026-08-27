@@ -35,6 +35,41 @@ def get_application_stylesheet() -> str:
         font-size: 13px;
         color: {TEXT_PRIMARY};
         background-color: transparent;
+        selection-background-color: rgba(0, 229, 255, 0.30);
+        selection-color: {TEXT_PRIMARY};
+    }}
+
+    QLineEdit, QComboBox, QAbstractSpinBox {{
+        background-color: {BG_CARD};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER_ACCENT};
+        border-radius: 5px;
+        padding: 2px 6px;
+        min-height: 18px;
+    }}
+
+    QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus {{
+        background-color: {BG_CARD};
+        border: 1px solid {ACCENT_CYAN};
+    }}
+
+    QLineEdit:disabled, QComboBox:disabled, QAbstractSpinBox:disabled {{
+        background-color: rgba(14, 19, 31, 0.72);
+        color: {TEXT_MUTED};
+        border: 1px solid {BORDER_COLOR};
+    }}
+
+    QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{
+        background-color: {BG_ELEVATED};
+        border-left: 1px solid {BORDER_ACCENT};
+        width: 18px;
+    }}
+
+    QComboBox QAbstractItemView {{
+        background-color: {BG_SURFACE};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER_ACCENT};
+        selection-background-color: rgba(0, 229, 255, 0.22);
     }}
 
     QScrollArea {{
@@ -62,6 +97,61 @@ def get_application_stylesheet() -> str:
         background-color: {BG_SURFACE};
         border: 1px solid {BORDER_COLOR};
         border-radius: 8px;
+    }}
+
+    QFrame#DerivHero {{
+        background-color: #101827;
+        border: 1px solid #2A3B58;
+        border-left: 3px solid {ACCENT_CYAN};
+        border-radius: 10px;
+    }}
+
+    QFrame#StrategyRail {{
+        background-color: #0B101A;
+        border: 1px solid {BORDER_COLOR};
+        border-radius: 10px;
+    }}
+
+    QLabel#Eyebrow {{
+        color: {ACCENT_CYAN};
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 1.2px;
+    }}
+
+    QLabel#HeroTitle {{
+        color: {TEXT_PRIMARY};
+        font-size: 20px;
+        font-weight: 800;
+    }}
+
+    QLabel#StatusPillOnline {{
+        color: {ACCENT_GREEN};
+        background-color: rgba(0, 245, 155, 0.10);
+        border: 1px solid rgba(0, 245, 155, 0.38);
+        border-radius: 10px;
+        padding: 6px 10px;
+        font-size: 10px;
+        font-weight: 800;
+    }}
+
+    QLabel#StatusPillOffline {{
+        color: {TEXT_SECONDARY};
+        background-color: rgba(100, 116, 139, 0.10);
+        border: 1px solid {BORDER_ACCENT};
+        border-radius: 10px;
+        padding: 6px 10px;
+        font-size: 10px;
+        font-weight: 800;
+    }}
+
+    QLabel#RailNote {{
+        color: {TEXT_MUTED};
+        background-color: rgba(0, 229, 255, 0.05);
+        border: 1px solid rgba(0, 229, 255, 0.12);
+        border-radius: 7px;
+        padding: 10px;
+        font-size: 10px;
     }}
 
     QLabel {{
@@ -185,6 +275,100 @@ def get_application_stylesheet() -> str:
 
     QPushButton#SafeStopButton:pressed {{
         background-color: rgba(255, 51, 102, 0.5);
+    }}
+
+    QPushButton#BotStartButton {{
+        background-color: rgba(0, 245, 155, 0.18);
+        color: {ACCENT_GREEN};
+        border: 1px solid {ACCENT_GREEN};
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 13px;
+        font-weight: bold;
+        letter-spacing: 0.5px;
+    }}
+
+    QPushButton#BotStartButton:hover {{
+        background-color: rgba(0, 245, 155, 0.30);
+    }}
+
+    QFrame#OutcomeCard {{
+        background-color: {BG_SURFACE};
+        border: 1px solid {BORDER_COLOR};
+        border-radius: 8px;
+    }}
+
+    QFrame#RiskSummary {{
+        background-color: rgba(22, 29, 46, 0.78);
+        border: 1px solid {BORDER_COLOR};
+        border-radius: 8px;
+    }}
+
+    QFrame#RiskMetricCard {{
+        background-color: rgba(8, 10, 15, 0.46);
+        border: 1px solid rgba(51, 65, 85, 0.78);
+        border-radius: 7px;
+    }}
+
+    QLabel#MetricCaption {{
+        color: {TEXT_MUTED};
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+    }}
+
+    QLabel#MetricValue {{
+        color: {TEXT_PRIMARY};
+        font-family: {FONT_MONO};
+        font-size: 17px;
+        font-weight: 900;
+    }}
+
+    QLabel#MetricDetail {{
+        color: {TEXT_SECONDARY};
+        font-size: 9px;
+    }}
+
+    QLabel#RiskMetricValue {{
+        color: {TEXT_PRIMARY};
+        font-family: {FONT_MONO};
+        font-size: 15px;
+        font-weight: 900;
+    }}
+
+    QPushButton#StrategyButtonActive {{
+        text-align: left;
+        color: {TEXT_PRIMARY};
+        background-color: rgba(0, 229, 255, 0.12);
+        border: 1px solid rgba(0, 229, 255, 0.42);
+        border-left: 3px solid {ACCENT_CYAN};
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 11px;
+        font-weight: 800;
+    }}
+
+    QPushButton#StrategyButton {{
+        text-align: left;
+        color: {TEXT_MUTED};
+        background-color: rgba(22, 29, 46, 0.50);
+        border: 1px solid {BORDER_COLOR};
+        border-radius: 8px;
+        padding: 11px;
+        font-size: 10px;
+        font-weight: 700;
+    }}
+
+    QPushButton#StrategyButton:disabled {{
+        color: {TEXT_MUTED};
+        background-color: rgba(14, 19, 31, 0.65);
+        border: 1px dashed {BORDER_COLOR};
+    }}
+
+    QTabWidget#StrategyTabs::pane {{
+        border: 1px solid {BORDER_COLOR};
+        border-radius: 8px;
+        background-color: {BG_ROOT};
     }}
 
     /* Language Switcher Button */

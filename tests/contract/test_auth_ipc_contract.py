@@ -44,6 +44,17 @@ def _running_server(
     return server, thread, token, otp
 
 
+def test_auth_agent_key_registry_does_not_exhaust_after_restarts(tmp_path: Path) -> None:
+    profile = tmp_path / "restartable-auth"
+    for _ in range(20):
+        server = AuthAgentServer(
+            SecretValue.from_text(secrets.token_hex(32)),
+            profile,
+            force_simulation=True,
+        )
+        server.stop()
+
+
 def test_auth_ipc_rejects_wrong_session_token_then_accepts_mutual_handshake(
     tmp_path: Path,
 ) -> None:

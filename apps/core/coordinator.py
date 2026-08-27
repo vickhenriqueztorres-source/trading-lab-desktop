@@ -40,6 +40,10 @@ class MultiBrokerSubmissionRouter(OrderSubmissionPort):
         key = broker.value if isinstance(broker, Broker) else str(broker).upper()
         self._workers[key] = worker
 
+    def unregister(self, broker: Broker | str) -> None:
+        key = broker.value if isinstance(broker, Broker) else str(broker).upper()
+        self._workers.pop(key, None)
+
     def submit_order(self, command: OrderCommand) -> WorkerSubmissionResult:
         key = (
             command.broker.value
@@ -178,6 +182,7 @@ class OrderCoordinator:
         self._entry_authorizer = entry_authorizer
 
     def submit(self, request: OrderRequest, *, dispatch: bool = True) -> PersistedOrder:
+        self._risk_ledger.refresh_digit_health_gate(self._health_gate)
         if self._entry_authorizer is not None:
             self._entry_authorizer.ensure_new_entry_allowed(
                 request.broker,
@@ -204,6 +209,9 @@ class OrderCoordinator:
                 direction=request.direction,
                 amount=request.amount,
                 deadline_at=request.deadline_at,
+                duration=request.duration,
+                duration_unit=request.duration_unit,
+                prediction_digit=request.prediction_digit,
             )
             try:
                 self._uow.persist(

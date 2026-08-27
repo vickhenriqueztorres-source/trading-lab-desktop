@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -9,9 +10,9 @@ import pytest
 # Ensure offscreen Qt platform before importing PySide6
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea
 
-from apps.ui.app import TradingLabMainWindow
+from apps.ui.app import APP_VERSION, TradingLabMainWindow
 from apps.ui.i18n import I18nManager
 from packages.protocol.ui_messages import (
     BrokerCardStatus,
@@ -78,13 +79,20 @@ def test_trading_lab_main_window_headless(qapp: QApplication) -> None:
     window._refresh_projection()
 
     assert window._lbl_ipc_status.text() != ""
+    assert window._lbl_version.text() == f"v{APP_VERSION}  ·  DIGIT EDGE"
+    assert f"v{APP_VERSION}" in window.windowTitle()
     assert window._lbl_pnl_val.text() == "+USD 45.00"
-    assert window._btn_safe_stop.isEnabled() is True
-    assert window._btn_resume.isEnabled() is False
+    assert window._btn_bot.isEnabled() is True
+    assert "BOT" in window._btn_bot.text()
     assert window._main_tabs.count() == 5
     assert window._main_tabs.tabText(window._TAB_DERIV) == "Deriv — PRÁCTICA"
     assert window._main_tabs.tabText(window._TAB_IQ_OPTION) == "IQ Option — PRÁCTICA"
-    assert window._deriv_workspace.tabs.count() == 2
+    assert window._deriv_workspace.tabs.count() == 4
+    assert not isinstance(window._deriv_workspace.tabs.widget(0), QScrollArea)
+    assert not isinstance(window._deriv_workspace.tabs.widget(1), QScrollArea)
+    assert isinstance(window._deriv_workspace.tabs.widget(2), QScrollArea)
+    assert window._deriv_workspace._deriv_connect_button is not None
+    assert not window._deriv_workspace._deriv_connect_button.isHidden()
     assert window._iqoption_workspace.tabs.count() == 2
     assert window._deriv_workspace.orders.order_count == 1
     assert window._iqoption_workspace.orders.order_count == 1
@@ -93,9 +101,19 @@ def test_trading_lab_main_window_headless(qapp: QApplication) -> None:
     assert window._settings_workspace.tabs.count() == 4
     assert "modo real" in window._deriv_workspace._real_mode_notice.text().lower()
 
-    # Simulate Safe Stop click
-    window._btn_safe_stop.click()
+    # One bot toggle turns entries off when the Core currently projects them as enabled.
+    window._btn_bot.click()
     mock_controller.safe_stop.assert_called_once()
+
+    mock_controller.snapshot = replace(
+        snapshot,
+        global_state=UiGlobalState.SAFE_STOPPED,
+        safe_stop_active=True,
+    )
+    window._refresh_projection()
+    assert "ENCENDER" in window._btn_bot.text()
+    window._btn_bot.click()
+    mock_controller.resume.assert_called_once()
 
     # Simulate Language change
     I18nManager.set_language("en")

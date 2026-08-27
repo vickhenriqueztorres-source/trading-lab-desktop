@@ -55,6 +55,8 @@ Exemplos:
 - `HG_SETTLEMENT_UNKNOWN` — liquidação não comprovada;
 - `HG_RECONCILIATION_REQUIRED` — estado não terminal exige consulta;
 - `HG_RECONCILIATION_CONFLICT` — evidências inconsistentes;
+- `DERIV_RECONCILIATION_AMBIGUOUS_MATCH` — mais de um contrato externo coincide com a janela e os
+  campos financeiros; a reserva permanece ativa para revisão segura;
 - `HG_WORKER_DISCONNECTED` — worker indisponível;
 - `HG_WORKER_CIRCUIT_OPEN` — restart rápido suspenso;
 - `HG_ORDER_EVENT_GAP` — sequência financeira incompleta;
@@ -66,7 +68,7 @@ Esses gates não devem ser limpos por tempo decorrido. A reabertura exige recove
 
 O `HealthGate` opera em dois níveis estritamente isolados:
 1. **Nível Global**: Bloqueios que afetam o ecossistema inteiro (`HG_SAFE_STOP`, `DB_WRITE_FAILED`, `HG_AUTH_AGENT_UNAVAILABLE`, `HG_LEASE_EXPIRED`, `HG_DAILY_STOP_REACHED`, `HG_COOLDOWN_ACTIVE`). Qualquer falha neste nível bloqueia novas entradas em todas as corretoras simultaneamente.
-2. **Nível Escopado `(broker, account_id)`**: Bloqueios restritos a uma corretora e conta específica (`HG_WORKER_DISCONNECTED`, `HG_WORKER_NOT_READY`, `HG_ORDER_UNKNOWN`, `MD_CLOCK_UNTRUSTED`).
+2. **Nível Escopado `(broker, account_id)`**: Bloqueios restritos a uma corretora e conta específica (`HG_WORKER_DISCONNECTED`, `HG_WORKER_NOT_READY`, `HG_ORDER_UNKNOWN`). O escopo especial `(broker, market-data)` é broker-wide e participa do gate de todas as contas financeiras desse broker, sem contaminar outro broker.
    - A degradação, desconexão ou timeout na IQ Option bloqueia novas entradas **apenas** na IQ Option (`HG_WORKER_DISCONNECTED`), mantendo a Deriv aberta.
    - A degradação na Deriv bloqueia apenas a Deriv, mantendo a IQ Option aberta.
    - O Core avalia `can_enter_order(broker, account_id)` exigindo que tanto o gate global quanto o gate do escopo estejam abertos.
@@ -76,7 +78,22 @@ O `HealthGate` opera em dois níveis estritamente isolados:
 - `HG_GLOBAL_EXPOSURE_EXCEEDED` — a soma das reservas ativas e ordens abertas cross-broker excede o teto global;
 - `HG_SYMBOL_EXPOSURE_LIMIT_EXCEEDED` — a exposição somada em um mesmo ativo canônico cross-broker (ex: EURUSD) excede o teto do ativo;
 - `HG_DAILY_STOP_REACHED` — o P&L realizado diário consolidado de todas as corretoras atingiu o stop loss máximo, bloqueando novas entradas globalmente (`RISK_LOCKED`);
-- `HG_COOLDOWN_ACTIVE` — sequência máxima de perdas consecutivas consolidadas atingida, ativando período de pausa (`COOLDOWN`).
+- `HG_DAILY_TAKE_PROFIT_REACHED` — a meta diária configurada para `DIGITDIFF` foi atingida; novas entradas ficam bloqueadas para preservar o lucro já realizado;
+- `HG_COOLDOWN_ACTIVE` — sequência máxima de perdas consecutivas atingida, ativando pausa. A origem UTC e a duração ficam em `state.db`; após restart o Core reconstrói o restante e usa `time.monotonic()` somente para a espera dentro do processo atual.
+
+`DERIV_READY_TO_ARM` é uma projeção explicativa da UI, não um blocker financeiro novo. Pode exibir
+`BROKER_PROCESS_NOT_READY`, `BROKER_NOT_AUTHENTICATED`, `RECONCILIATION_INCOMPLETE`,
+`RISK_NOT_READY`, `CLOCK_NOT_TRUSTED`, `MARKET_NOT_HEALTHY` ou `WARMUP_INCOMPLETE`.
+
+Os blockers de Stop Loss e Take Profit não são limpos por edição da configuração durante o mesmo
+dia. O reset diário explícito zera P&L/contadores e limpa as travas. O cooldown não cancela nem
+interrompe a liquidação de contratos abertos.
+
+Validação de configuração de dígitos pode responder com os códigos estáveis
+`DIGIT_RISK_STAKE_BELOW_MINIMUM`, `DIGIT_RISK_STOP_LOSS_INVALID`,
+`DIGIT_RISK_TAKE_PROFIT_INVALID`, `DIGIT_RISK_CONSECUTIVE_LOSSES_INVALID`,
+`DIGIT_RISK_COOLDOWN_INVALID`, `DIGIT_RISK_CONFIDENCE_INVALID`,
+`DIGIT_RISK_SYMBOL_NOT_ALLOWED` e `DIGIT_RISK_CURRENCY_NOT_SUPPORTED`.
 
 ## 5. Identidade/licença
 
@@ -195,7 +212,7 @@ Exemplos:
 
 Somente `MD_HEALTHY` permite delivery shadow; isso não autoriza dispatch financeiro.
 
-## 10. Deriv read-only
+## 10. Deriv market data e execução Demo
 
 Exemplos:
 
@@ -207,6 +224,11 @@ Exemplos:
 - `DERIV_DEMO_OTP_MISSING`;
 - `DERIV_DEMO_AUTH_REQUIRED`;
 - `DERIV_DEMO_REAUTH_REQUIRED`;
+- `DERIV_TELEMETRY_UNAVAILABLE`;
+- `DERIV_TICK_STREAM_DISCONNECTED`;
+- `DERIV_SUBSCRIPTION_DISCONNECTED`;
+- `DERIV_DIGIT_BARRIER_REQUIRED`;
+- `DERIV_DIGIT_CONTRACT_UNSUPPORTED`;
 - `DERIV_BALANCE_UNAVAILABLE`;
 - `DERIV_BALANCE_PRECISION_UNSUPPORTED`;
 - `DERIV_ACCOUNT_EVENT_BACKPRESSURE`;

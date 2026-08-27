@@ -28,6 +28,8 @@ a = Analysis(
         "apps.core.runner",
         "apps.deriv_worker",
         "apps.deriv_worker.server",
+        "apps.deriv_login_helper",
+        "apps.deriv_login_helper.__main__",
         "apps.iqoption_worker",
         "apps.simulated_worker",
         "apps.simulated_worker.runner",
@@ -56,6 +58,17 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+# The bundled workspace also exposes Poppler on PATH. Its ICU 78 libraries use
+# version-suffixed exports, while Qt 6 on supported Windows 10/11 imports the
+# unversioned system ICU API. PyInstaller's recursive dependency scan can pick
+# the Poppler DLLs accidentally, causing QtCore to fail with a missing procedure.
+FOREIGN_ICU_DLLS = {"icuuc.dll", "icudt78.dll"}
+a.binaries = [
+    binary
+    for binary in a.binaries
+    if Path(binary[0]).name.lower() not in FOREIGN_ICU_DLLS
+]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

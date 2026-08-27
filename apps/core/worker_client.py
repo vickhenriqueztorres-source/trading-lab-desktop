@@ -4,7 +4,7 @@ import hashlib
 import queue
 import threading
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -22,6 +22,7 @@ from packages.domain.market import (
     MarketTick,
 )
 from packages.domain.models import BrokerOrderEvent, OrderCommand, OrderStatusQuery
+from packages.market_data import DigitFrequencySnapshot
 from packages.observability.events import EventSink, NullEventSink
 from packages.protocol.codec import encode_envelope
 from packages.protocol.envelope import EndpointRole, Envelope, MessageType
@@ -136,7 +137,8 @@ class SocketWorkerClient:
         self._pending_lock = threading.Lock()
         self._pending: dict[str, queue.Queue[Envelope | BaseException]] = {}
         self._pending_slots = threading.BoundedSemaphore(max_pending_requests)
-        self._events: queue.Queue[Envelope] = queue.Queue(maxsize=event_queue_size)
+        self._order_events: queue.Queue[Envelope] = queue.Queue(maxsize=event_queue_size)
+        self._market_events: queue.Queue[Envelope] = queue.Queue(maxsize=event_queue_size)
         self._replay = MessageReplayGuard()
         self._ready = True
         self._closing = threading.Event()
@@ -268,8 +270,20 @@ class SocketWorkerClient:
                             ) from exc
                         routed = True
                 if not routed:
+                    if envelope.message_type is MessageType.MARKET_TICK_EVENT:
+                        event_queue = self._market_events
+                    elif envelope.message_type is MessageType.ORDER_EVENT:
+                        event_queue = self._order_events
+                    else:
+                        self._event_sink.emit(
+                            "late_worker_response_ignored",
+                            message_id=envelope.message_id,
+                            correlation_id=envelope.correlation_id,
+                            message_type=envelope.message_type.value,
+                        )
+                        continue
                     try:
-                        self._events.put(envelope, timeout=0.1)
+                        event_queue.put(envelope, timeout=0.1)
                     except queue.Full as exc:
                         raise ProtocolError(
                             ProtocolErrorCode.IPC_BACKPRESSURE,
@@ -400,7 +414,7 @@ class SocketWorkerClient:
         if timeout <= 0:
             raise ValueError("event receive timeout must be positive")
         try:
-            envelope = self._events.get(timeout=timeout)
+            envelope = self._order_events.get(timeout=timeout)
         except queue.Empty:
             return None
         try:
@@ -419,7 +433,7 @@ class SocketWorkerClient:
     def pending_order_event_count(self) -> int:
         """Bounded queue depth used only by the Core's safe-shutdown drain."""
 
-        return self._events.qsize()
+        return self._order_events.qsize()
 
     def query_order_status(
         self,
@@ -498,13 +512,24 @@ class SocketWorkerClient:
         return parse_market_contracts_response(response)
 
     def subscribe_market_ticks(self, symbol: str) -> MarketTick:
+        return self.subscribe_market_tick_snapshot(symbol)[0]
+
+    def subscribe_market_tick_snapshot(
+        self, symbol: str
+    ) -> tuple[MarketTick, DigitFrequencySnapshot | None]:
         if not symbol:
             raise ValueError("market symbol is required")
         response = self._read_only_request(
             MessageType.MARKET_TICK_SUBSCRIBE,
             {"broker_symbol": symbol},
         )
-        return parse_market_tick(response)
+        raw_frequency = response.payload.get("digit_frequency")
+        frequency = (
+            DigitFrequencySnapshot.from_payload(raw_frequency)
+            if isinstance(raw_frequency, Mapping)
+            else None
+        )
+        return parse_market_tick(response), frequency
 
     def unsubscribe_market_ticks(self, subscription_id: str) -> bool:
         if not subscription_id:
@@ -593,13 +618,33 @@ class SocketWorkerClient:
         return parse_broker_balance_response(response)
 
     def receive_market_tick(self, timeout: float) -> MarketTick | None:
+        item = self.receive_market_tick_snapshot(timeout)
+        return None if item is None else item[0]
+
+    def receive_market_tick_snapshot(
+        self, timeout: float
+    ) -> tuple[MarketTick, DigitFrequencySnapshot | None] | None:
         if timeout <= 0:
             raise ValueError("market event timeout must be positive")
         try:
-            envelope = self._events.get(timeout=timeout)
+            envelope = self._market_events.get(timeout=timeout)
         except queue.Empty:
             return None
-        return parse_market_tick(envelope)
+        raw_frequency = envelope.payload.get("digit_frequency")
+        try:
+            frequency = (
+                None
+                if raw_frequency is None
+                else DigitFrequencySnapshot.from_payload(raw_frequency)
+                if isinstance(raw_frequency, Mapping)
+                else None
+            )
+        except ValueError as exc:
+            raise ProtocolError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                "invalid digit frequency snapshot",
+            ) from exc
+        return parse_market_tick(envelope), frequency
 
     def _read_only_request(
         self,
@@ -718,7 +763,7 @@ class SocketWorkerClient:
             self.close()
 
     def receive_event(self, timeout: float = 0.0) -> Envelope:
-        return self._events.get(timeout=timeout)
+        return self._order_events.get(timeout=timeout)
 
     def close(self) -> None:
         self._closing.set()

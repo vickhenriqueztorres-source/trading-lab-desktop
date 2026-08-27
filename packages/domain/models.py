@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -108,6 +109,30 @@ class Money:
         object.__setattr__(self, "currency", normalized_currency)
 
 
+_DIGIT_BARRIER_PRODUCTS = frozenset({"DIGITDIFF", "DIGITOVER", "DIGITUNDER"})
+_DIGIT_PARITY_PRODUCTS = frozenset({"DIGITEVEN", "DIGITODD"})
+_DIGIT_PRODUCTS = _DIGIT_BARRIER_PRODUCTS | _DIGIT_PARITY_PRODUCTS
+
+
+def _validate_digit_contract(
+    product: str,
+    prediction_digit: int | None,
+    duration: int,
+    duration_unit: str,
+    *,
+    require_barrier: bool = True,
+) -> None:
+    normalized = product.strip().upper()
+    if normalized not in _DIGIT_PRODUCTS:
+        return
+    if duration != 1 or duration_unit != "t":
+        raise ValueError(f"{normalized} requires one-tick duration")
+    if require_barrier and normalized in _DIGIT_BARRIER_PRODUCTS and prediction_digit is None:
+        raise ValueError(f"{normalized} requires a prediction digit")
+    if normalized in _DIGIT_PARITY_PRODUCTS and prediction_digit is not None:
+        raise ValueError(f"{normalized} does not accept a prediction digit")
+
+
 @dataclass(frozen=True, slots=True)
 class OrderRequest:
     correlation_id: str
@@ -120,6 +145,9 @@ class OrderRequest:
     strategy_id: str
     strategy_version: str
     deadline_at: datetime
+    duration: int = 1
+    duration_unit: str = "m"
+    prediction_digit: int | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.deadline_at, "deadline_at")
@@ -135,6 +163,22 @@ class OrderRequest:
                 raise ValueError(f"{field_name} cannot be empty")
         if self.amount.minor_units <= 0:
             raise ValueError("order amount must be positive")
+        if isinstance(self.duration, bool) or not isinstance(self.duration, int):
+            raise TypeError("duration must be an integer")
+        if self.duration <= 0:
+            raise ValueError("duration must be positive")
+        if self.duration_unit not in {"m", "s", "t"}:
+            raise ValueError("duration_unit must be 'm', 's' or 't'")
+        if self.prediction_digit is not None and (
+            type(self.prediction_digit) is not int or not 0 <= self.prediction_digit <= 9
+        ):
+            raise ValueError("prediction_digit must be between zero and nine")
+        _validate_digit_contract(
+            self.product,
+            self.prediction_digit,
+            self.duration,
+            self.duration_unit,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +194,9 @@ class OrderCommand:
     direction: Direction
     amount: Money
     deadline_at: datetime
+    duration: int = 1
+    duration_unit: str = "m"
+    prediction_digit: int | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.deadline_at, "deadline_at")
@@ -166,9 +213,26 @@ class OrderCommand:
                 raise ValueError(f"{field_name} cannot be empty")
         if self.amount.minor_units <= 0:
             raise ValueError("order amount must be positive")
+        if isinstance(self.duration, bool) or not isinstance(self.duration, int):
+            raise TypeError("duration must be an integer")
+        if self.duration <= 0:
+            raise ValueError("duration must be positive")
+        if self.duration_unit not in {"m", "s", "t"}:
+            raise ValueError("duration_unit must be 'm', 's' or 't'")
+        if self.prediction_digit is not None and (
+            type(self.prediction_digit) is not int or not 0 <= self.prediction_digit <= 9
+        ):
+            raise ValueError("prediction_digit must be between zero and nine")
+        _validate_digit_contract(
+            self.product,
+            self.prediction_digit,
+            self.duration,
+            self.duration_unit,
+            require_barrier=False,
+        )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "message_id": self.message_id,
             "correlation_id": self.correlation_id,
             "intent_id": self.intent_id,
@@ -181,7 +245,12 @@ class OrderCommand:
             "amount_minor": self.amount.minor_units,
             "currency": self.amount.currency,
             "deadline_at": self.deadline_at.isoformat(),
+            "duration": self.duration,
+            "duration_unit": self.duration_unit,
         }
+        if self.prediction_digit is not None:
+            payload["prediction_digit"] = self.prediction_digit
+        return payload
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> OrderCommand:
@@ -203,6 +272,17 @@ class OrderCommand:
             value = payload.get(name)
             if isinstance(value, bool) or not isinstance(value, expected_type):
                 raise ValueError(f"invalid external payload field: {name}")
+        duration = payload.get("duration", 1)
+        duration_unit = payload.get("duration_unit", "m")
+        if isinstance(duration, bool) or not isinstance(duration, int):
+            raise ValueError("invalid external payload field: duration")
+        if not isinstance(duration_unit, str):
+            raise ValueError("invalid external payload field: duration_unit")
+        prediction_digit = payload.get("prediction_digit")
+        if prediction_digit is not None and (
+            type(prediction_digit) is not int or not 0 <= prediction_digit <= 9
+        ):
+            raise ValueError("invalid external payload field: prediction_digit")
         deadline_at = datetime.fromisoformat(payload["deadline_at"])
         require_aware_utc(deadline_at, "deadline_at")
         return cls(
@@ -217,6 +297,9 @@ class OrderCommand:
             direction=Direction(payload["direction"]),
             amount=Money(payload["amount_minor"], payload["currency"]),
             deadline_at=deadline_at,
+            duration=duration,
+            duration_unit=duration_unit,
+            prediction_digit=prediction_digit,
         )
 
 
@@ -259,6 +342,8 @@ class BrokerOrderEvent:
     result_minor: int | None
     result_currency: str | None
     evidence_hash: str
+    seconds_remaining: int | None = None
+    current_spot: str | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.occurred_at, "occurred_at")
@@ -303,11 +388,22 @@ class BrokerOrderEvent:
             object.__setattr__(self, "result_currency", normalized)
         if self.external_status is ExternalOrderStatus.EXTERNAL_UNKNOWN:
             raise ValueError("EXTERNAL_UNKNOWN is not a lifecycle event")
+        if self.seconds_remaining is not None and (
+            isinstance(self.seconds_remaining, bool)
+            or not isinstance(self.seconds_remaining, int)
+            or self.seconds_remaining < 0
+        ):
+            raise ValueError("seconds_remaining must be a non-negative integer or null")
+        if self.current_spot is not None:
+            try:
+                Decimal(self.current_spot)
+            except Exception as exc:
+                raise ValueError("current_spot must be a decimal string or null") from exc
         if self.evidence_hash != self.expected_evidence_hash():
             raise ValueError("broker event evidence_hash does not match canonical payload")
 
     def canonical_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "event_id": self.event_id,
             "event_version": self.event_version,
             "broker": self.broker.value,
@@ -327,6 +423,11 @@ class BrokerOrderEvent:
             "result_minor": self.result_minor,
             "result_currency": self.result_currency,
         }
+        if self.seconds_remaining is not None:
+            payload["seconds_remaining"] = self.seconds_remaining
+        if self.current_spot is not None:
+            payload["current_spot"] = self.current_spot
+        return payload
 
     def expected_evidence_hash(self) -> str:
         return self.evidence_hash_for_payload(self.canonical_payload())
@@ -366,6 +467,8 @@ class BrokerOrderEvent:
         external_sequence = payload.get("external_sequence")
         result_minor = payload.get("result_minor")
         result_currency = payload.get("result_currency")
+        seconds_remaining = payload.get("seconds_remaining")
+        current_spot = payload.get("current_spot")
         if external_sequence is not None and (
             isinstance(external_sequence, bool) or not isinstance(external_sequence, int)
         ):
@@ -376,6 +479,12 @@ class BrokerOrderEvent:
             raise ValueError("invalid broker event field: result_minor")
         if result_currency is not None and not isinstance(result_currency, str):
             raise ValueError("invalid broker event field: result_currency")
+        if seconds_remaining is not None and (
+            isinstance(seconds_remaining, bool) or not isinstance(seconds_remaining, int)
+        ):
+            raise ValueError("invalid broker event field: seconds_remaining")
+        if current_spot is not None and not isinstance(current_spot, str):
+            raise ValueError("invalid broker event field: current_spot")
         return cls(
             event_id=payload["event_id"],
             event_version=payload["event_version"],
@@ -395,6 +504,8 @@ class BrokerOrderEvent:
             result_minor=result_minor,
             result_currency=result_currency,
             evidence_hash=payload["evidence_hash"],
+            seconds_remaining=seconds_remaining,
+            current_spot=current_spot,
         )
 
 
@@ -411,6 +522,7 @@ class OrderStatusQuery:
     direction: Direction
     amount: Money
     broker_order_id: str | None = None
+    submitted_at: datetime | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -426,6 +538,8 @@ class OrderStatusQuery:
                 raise ValueError(f"{field_name} cannot be empty")
         if self.broker_order_id is not None and not self.broker_order_id.strip():
             raise ValueError("broker_order_id cannot be blank")
+        if self.submitted_at is not None:
+            require_aware_utc(self.submitted_at, "submitted_at")
         if self.amount.minor_units <= 0:
             raise ValueError("order amount must be positive")
 
@@ -442,6 +556,7 @@ class OrderStatusQuery:
             "amount_minor": self.amount.minor_units,
             "currency": self.amount.currency,
             "broker_order_id": self.broker_order_id,
+            "submitted_at": (None if self.submitted_at is None else self.submitted_at.isoformat()),
         }
 
     @classmethod
@@ -463,8 +578,11 @@ class OrderStatusQuery:
             if isinstance(value, bool) or not isinstance(value, expected_type):
                 raise ValueError(f"invalid status query field: {name}")
         broker_order_id = payload.get("broker_order_id")
+        submitted_at_raw = payload.get("submitted_at")
         if broker_order_id is not None and not isinstance(broker_order_id, str):
             raise ValueError("invalid status query field: broker_order_id")
+        if submitted_at_raw is not None and not isinstance(submitted_at_raw, str):
+            raise ValueError("invalid status query field: submitted_at")
         return cls(
             correlation_id=correlation_id,
             intent_id=payload["intent_id"],
@@ -477,6 +595,9 @@ class OrderStatusQuery:
             direction=Direction(payload["direction"]),
             amount=Money(payload["amount_minor"], payload["currency"]),
             broker_order_id=broker_order_id,
+            submitted_at=(
+                None if submitted_at_raw is None else datetime.fromisoformat(submitted_at_raw)
+            ),
         )
 
 
