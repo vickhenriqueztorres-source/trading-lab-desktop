@@ -24,6 +24,7 @@ from packages.protocol.ui_messages import (
     BrokerCardStatus,
     OrderSummary,
     UiAccountMode,
+    UiBotWaitingStatus,
     UiDerivStrategyStatus,
     UiDigitRiskConfig,
 )
@@ -43,6 +44,11 @@ _STRATEGIES = {
         "Parity Regime Edge",
         "Even/Odd condicional para procurar dependência estável de paridade.",
         "ESTRATÉGIA 3  ·  EVEN / ODD",
+    ),
+    "payout-routed-differs-session": (
+        "Sessão Differs",
+        "Digit Differs com proposal fresca, barreira fixa e piso de payout de segurança.",
+        "SESSÃO 4  ·  DIGIT DIFFERS",
     ),
 }
 
@@ -138,6 +144,12 @@ class DerivWorkspaceWidget(QWidget):
         self._automation_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._automation_pill.setObjectName("StatusPillOffline")
         layout.addWidget(self._automation_pill)
+
+        self._automation_detail = QLabel()
+        self._automation_detail.setObjectName("Subtitle")
+        self._automation_detail.setWordWrap(True)
+        self._automation_detail.setMinimumWidth(250)
+        layout.addWidget(self._automation_detail, 2)
 
         self._deriv_connect_button = QPushButton()
         self._deriv_connect_button.setObjectName("PrimaryButton")
@@ -294,6 +306,7 @@ class DerivWorkspaceWidget(QWidget):
         connected: bool,
         real_mode: bool,
         reason: str = "",
+        waiting_status: UiBotWaitingStatus | None = None,
     ) -> None:
         if real_mode:
             self._automation_pill.setText("○ CONTA REAL SOMENTE LEITURA")
@@ -316,6 +329,14 @@ class DerivWorkspaceWidget(QWidget):
         self._automation_pill.style().unpolish(self._automation_pill)
         self._automation_pill.style().polish(self._automation_pill)
         self._automation_pill.setToolTip(reason)
+        if waiting_status is None:
+            self._automation_detail.setText("")
+            self._automation_detail.setVisible(False)
+        else:
+            duration = f"Esperando há {waiting_status.waiting_since_seconds}s."
+            self._automation_detail.setText(f"{waiting_status.description} {duration}")
+            self._automation_detail.setToolTip(waiting_status.reason_code)
+            self._automation_detail.setVisible(True)
 
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
         self._orders = tuple(item for item in orders if item.broker == self.broker_key)

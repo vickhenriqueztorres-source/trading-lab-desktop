@@ -12,6 +12,11 @@ from apps.core.deriv_telemetry import (
     DerivTelemetryMonitor,
     DerivTelemetrySource,
 )
+from apps.core.payout_routed_differs import (
+    PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
+    PayoutRoutedDiffersProposalCache,
+    PayoutRoutedDiffersQuoteFeeder,
+)
 from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSpec, ReadOnlyWorkerSupervisor
 from apps.core.runtime import CoreRuntime
 from apps.core.ui_service import CoreUiProjectionBuilder, CoreUiProjectionService
@@ -30,6 +35,15 @@ class CoreServiceState(StrEnum):
     STOPPING = "STOPPING"
     STOPPED = "STOPPED"
     FAILED = "FAILED"
+
+
+_DEMO_TEST_SESSION_BLOCKERS = frozenset(
+    {
+        "HG_DAILY_STOP_REACHED",
+        "HG_DAILY_TAKE_PROFIT_REACHED",
+        "HG_COOLDOWN_ACTIVE",
+    }
+)
 
 
 class CoreLifecycleService:
@@ -72,6 +86,7 @@ class CoreLifecycleService:
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
         self._deriv_auto_trader: DerivDigitAutoTrader | None = None
+        self._payout_differs_feeder: PayoutRoutedDiffersQuoteFeeder | None = None
         self._ui_session_token = ui_session_token
         self._ui_service: CoreUiProjectionService | None = None
         self._ui_shutdown_requested = False
@@ -173,6 +188,11 @@ class CoreLifecycleService:
                         if self._deriv_auto_trader is None
                         else self._deriv_auto_trader.last_reason
                     ),
+                    deriv_bot_waiting_status=lambda: (
+                        None
+                        if self._deriv_auto_trader is None
+                        else self._deriv_auto_trader.waiting_status
+                    ),
                 )
                 ui_service = CoreUiProjectionService(
                     self._ui_session_token,
@@ -182,6 +202,7 @@ class CoreLifecycleService:
                     self._request_ui_shutdown,
                     deriv_demo_connect=self.connect_deriv_selected_account,
                     digit_risk_config_update=runtime.update_digit_risk_config,
+                    digit_test_session_reset=self.reset_digit_test_session,
                 )
                 ui_service.start()
                 self._ui_service = ui_service
@@ -201,14 +222,30 @@ class CoreLifecycleService:
             str(item.get("broker")) == Broker.DERIV.value
             for item in runtime.reader.list_reconciliation_candidates()
         )
-        if has_deriv_recovery and self._deriv_transport not in {"live-demo", "live-real"}:
-            try:
-                saved = DerivCredentialVault(self._profile_dir / "broker_credentials").load()
-            except (OSError, RuntimeError, ValueError):
-                saved = None
-            if saved is not None and saved.account_type in {"demo", "real"}:
-                self._deriv_transport = "live-real" if saved.account_type == "real" else "live-demo"
-                self._request_deriv_recovery("DERIV_STARTUP_RECONCILIATION_REQUIRED")
+        self._schedule_saved_deriv_startup(has_deriv_recovery=has_deriv_recovery)
+
+    def _schedule_saved_deriv_startup(self, *, has_deriv_recovery: bool) -> None:
+        """Reconnect a saved Demo account without ever rearming or auto-selecting Real."""
+
+        if "deriv_read_only" not in self._workers or self._deriv_transport in {
+            "live-demo",
+            "live-real",
+        }:
+            return
+        try:
+            saved = DerivCredentialVault(self._profile_dir / "broker_credentials").load()
+        except (OSError, RuntimeError, ValueError):
+            return
+        if saved is None:
+            return
+        if saved.account_type == "demo":
+            self._deriv_transport = "live-demo"
+            self._request_deriv_recovery("DERIV_SAVED_DEMO_AUTO_CONNECT")
+        elif saved.account_type == "real" and has_deriv_recovery:
+            # Real remains read-only. It is selected automatically only when an
+            # existing durable order needs reconciliation, never for new entries.
+            self._deriv_transport = "live-real"
+            self._request_deriv_recovery("DERIV_STARTUP_RECONCILIATION_REQUIRED")
 
     def safe_stop(self) -> None:
         runtime = self._require_runtime()
@@ -226,9 +263,38 @@ class CoreLifecycleService:
         if trader is not None:
             trader.begin_new_run()
         accepted = runtime.resume_new_entries()
+        if not accepted and self._should_reset_demo_session_before_rearm(runtime):
+            reset_accepted, _reason = self.reset_digit_test_session()
+            if reset_accepted:
+                if trader is not None:
+                    trader.begin_new_run()
+                accepted = runtime.resume_new_entries()
         self._safe_stop = not accepted
         self._state = CoreServiceState.READY
         return accepted
+
+    def _should_reset_demo_session_before_rearm(self, runtime: CoreRuntime) -> bool:
+        if self._deriv_transport != "live-demo" or not self._safe_stop:
+            return False
+        snapshot = runtime.health_gate.get_snapshot()
+        active = set(snapshot.active_blockers)
+        return bool(active & _DEMO_TEST_SESSION_BLOCKERS)
+
+    def reset_digit_test_session(self) -> tuple[bool, str]:
+        """Allow an operator reset only for a disarmed authenticated Demo session."""
+
+        if self._deriv_transport != "live-demo":
+            return False, "DERIV_DEMO_REQUIRED"
+        runtime = self._require_runtime()
+        runtime_safe_stop = bool(getattr(runtime, "safe_stop_active", False))
+        if not (self._safe_stop or runtime_safe_stop):
+            return False, "SAFE_STOP_REQUIRED"
+        accepted, reason = runtime.reset_digit_test_session()
+        if accepted and self._deriv_auto_trader is not None:
+            self._deriv_auto_trader.reload_runtime_caches()
+        if accepted:
+            self._safe_stop = True
+        return accepted, "DIGIT_TEST_SESSION_RESET" if accepted else reason or "RESET_REJECTED"
 
     def _request_ui_shutdown(self) -> None:
         self._ui_shutdown_requested = True
@@ -675,6 +741,9 @@ class CoreLifecycleService:
             source,
             symbol_provider=lambda: runtime.risk_ledger.digit_config.selected_symbol,
             disconnect_notifier=self._request_deriv_recovery,
+            reconciliation_notifier=lambda _reason: runtime.reconcile_deriv_worker(
+                supervisor.client
+            ),
             generation_is_current=lambda: generation == self._deriv_generation,
         )
         self._deriv_telemetry = monitor
@@ -696,21 +765,55 @@ class CoreLifecycleService:
         telemetry = self._deriv_telemetry
         if telemetry is None:
             raise RuntimeError("DERIV_TELEMETRY_UNAVAILABLE")
+
+        def emit_budget_event(name: str, fields: dict[str, object]) -> None:
+            safe_fields: dict[str, str | int | bool | None] = {}
+            for key, value in fields.items():
+                if isinstance(value, (str, int, bool)) or value is None:
+                    safe_fields[key] = value
+                else:
+                    safe_fields[key] = str(value)
+            raw_reason = safe_fields.pop("reason_code", None)
+            reason_code = raw_reason if isinstance(raw_reason, str) or raw_reason is None else None
+            runtime.event_sink.emit(name, reason_code=reason_code, **safe_fields)
+
+        proposal_cache = PayoutRoutedDiffersProposalCache(
+            event_sink=emit_budget_event,
+            symbol_provider=lambda: runtime.risk_ledger.digit_config.selected_symbol,
+        )
+        proposal_feeder = PayoutRoutedDiffersQuoteFeeder(
+            proposal_cache,
+            supervisor.client.quote_digit_contract_details,
+            enabled=lambda: (
+                PAYOUT_ROUTED_DIFFERS_STRATEGY_ID
+                in runtime.risk_ledger.digit_config.enabled_strategy_ids
+            ),
+        )
+        proposal_feeder.start()
+        self._payout_differs_feeder = proposal_feeder
         trader = DerivDigitAutoTrader(
             runtime,
             credentials.account_id,
             lambda: None if self._deriv_telemetry is None else self._deriv_telemetry.snapshot,
             operator_armed=lambda: not self._safe_stop,
+            quote_provider=supervisor.client.quote_digit_contract,
+            proposal_cache=proposal_cache,
+            arbitration_notifier=telemetry.record_arbitration,
         )
         runtime.attach_deriv_worker(
             supervisor.client,
             on_order_event=trader.notify_order_event,
+            on_reconciliation_completed=trader.reload_runtime_caches,
         )
         telemetry.set_tick_notifier(trader.notify_tick)
         trader.start()
         self._deriv_auto_trader = trader
 
     def _stop_deriv_financial_runtime(self, runtime: CoreRuntime) -> None:
+        proposal_feeder = self._payout_differs_feeder
+        self._payout_differs_feeder = None
+        if proposal_feeder is not None:
+            proposal_feeder.stop()
         trader = self._deriv_auto_trader
         self._deriv_auto_trader = None
         if trader is not None:

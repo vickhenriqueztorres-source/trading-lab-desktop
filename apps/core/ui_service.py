@@ -27,6 +27,7 @@ from packages.protocol import (
     ProtocolError,
     ProtocolErrorCode,
     UiAccountMode,
+    UiBotWaitingStatus,
     UiCommandAck,
     UiDerivAssetRank,
     UiDerivStrategyStatus,
@@ -37,6 +38,7 @@ from packages.protocol import (
     UiHandshakeRequest,
     UiHandshakeResponse,
     UiHandshakeStatus,
+    UiMultiStrategyMetrics,
     UiProjectionSnapshot,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
@@ -101,6 +103,8 @@ def _to_ui_digit_config(config: DigitRiskConfig) -> UiDigitRiskConfig:
         currency=config.currency,
         auto_select_symbol=config.auto_select_symbol,
         active_strategy_id=config.active_strategy_id,
+        enabled_strategy_ids=config.enabled_strategy_ids,
+        stress_test_all_strategies_enabled=config.stress_test_all_strategies_enabled,
         martingale_enabled=config.martingale_enabled,
         martingale_multiplier=config.martingale_multiplier,
         martingale_max_steps=config.martingale_max_steps,
@@ -120,6 +124,8 @@ def _from_ui_digit_config(config: UiDigitRiskConfig) -> DigitRiskConfig:
         currency=config.currency,
         auto_select_symbol=config.auto_select_symbol,
         active_strategy_id=config.active_strategy_id,
+        enabled_strategy_ids=config.enabled_strategy_ids,
+        stress_test_all_strategies_enabled=config.stress_test_all_strategies_enabled,
         martingale_enabled=config.martingale_enabled,
         martingale_multiplier=config.martingale_multiplier,
         martingale_max_steps=config.martingale_max_steps,
@@ -160,12 +166,14 @@ class CoreUiProjectionBuilder:
         deriv_health: Callable[[], WorkerHealthState | None],
         deriv_telemetry: Callable[[], DerivTelemetrySnapshot | None] = lambda: None,
         deriv_bot_reason: Callable[[], str] = lambda: "BOT_WAITING_FOR_LIVE_DERIV",
+        deriv_bot_waiting_status: Callable[[], UiBotWaitingStatus | None] = lambda: None,
         iqoption_health: Callable[[], WorkerHealthState | None] = lambda: None,
     ) -> None:
         self._runtime = runtime
         self._deriv_health = deriv_health
         self._deriv_telemetry = deriv_telemetry
         self._deriv_bot_reason = deriv_bot_reason
+        self._deriv_bot_waiting_status = deriv_bot_waiting_status
         self._iqoption_health = iqoption_health
 
     def trading_readiness(self) -> TradingReadinessSnapshot:
@@ -240,9 +248,10 @@ class CoreUiProjectionBuilder:
 
     def snapshot(self) -> UiProjectionSnapshot:
         self._runtime.risk_ledger.refresh_digit_health_gate(self._runtime.health_gate)
+        session_started_at = self._runtime.reader.digit_test_session_started_at()
         gate_snapshot = self._runtime.health_gate.get_snapshot()
         global_gate = gate_snapshot.global_state
-        orders = tuple(self._orders())
+        orders = tuple(self._orders(since_utc=session_started_at))
         safe_stop = self._runtime.safe_stop_active
         global_state = self._global_state(
             gate_open=global_gate.is_open,
@@ -250,8 +259,9 @@ class CoreUiProjectionBuilder:
             safe_stop=safe_stop,
             orders=orders,
         )
+        day_started_at = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         pnl_by_currency = self._runtime.reader.daily_realized_pnl_by_currency(
-            since_utc=datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            since_utc=max(day_started_at, session_started_at or day_started_at)
         )
         if len(pnl_by_currency) == 1:
             pnl_currency, pnl_minor = next(iter(pnl_by_currency.items()))
@@ -431,7 +441,7 @@ class CoreUiProjectionBuilder:
                 if deriv is None
                 else tuple(
                     UiDerivStrategyStatus(
-                        strategy_id=item.strategy_id.value,
+                        strategy_id=str(item.strategy_id),
                         display_name=item.display_name,
                         markets=item.markets,
                         lifecycle_status=item.lifecycle_status,
@@ -455,8 +465,13 @@ class CoreUiProjectionBuilder:
                             else str(item.required_probability_pct)
                         ),
                         analysis_latency_microseconds=item.analysis_latency_microseconds,
+                        signals_emitted_total=item.signals_emitted_total,
+                        signals_executed_total=item.signals_executed_total,
+                        signals_lost_to_arbitration_total=(item.signals_lost_to_arbitration_total),
+                        analysis_latency_microseconds_p95=(item.analysis_latency_microseconds_p95),
+                        conditional_sample=item.conditional_sample,
                     )
-                    for item in deriv.synthetic_strategies
+                    for item in (deriv.strategy_matrix or deriv.synthetic_strategies)
                 )
             ),
             deriv_asset_ranking=(
@@ -470,7 +485,7 @@ class CoreUiProjectionBuilder:
                         warmup_current=item.warmup_current,
                         warmup_required=item.warmup_required,
                         selected=item.selected,
-                        strategy_id=(None if item.strategy_id is None else item.strategy_id.value),
+                        strategy_id=(None if item.strategy_id is None else str(item.strategy_id)),
                         contract_type=item.contract_type,
                         barrier=item.barrier,
                         estimated_probability_pct=(
@@ -497,11 +512,34 @@ class CoreUiProjectionBuilder:
             digit_next_stake_minor_units=next_stake_minor_units,
             digit_projected_sequence_loss_minor_units=(projected_sequence_loss_minor_units),
             deriv_bot_reason=self._deriv_bot_reason(),
+            deriv_bot_waiting_status=self._deriv_bot_waiting_status(),
+            multi_strategy_metrics=(
+                None
+                if deriv is None or deriv.multi_strategy_metrics is None
+                else UiMultiStrategyMetrics(
+                    evaluations_per_second=(deriv.multi_strategy_metrics.evaluations_per_second),
+                    active_engines=deriv.multi_strategy_metrics.active_engines,
+                    enabled_strategies=(
+                        len(digit_config.enabled_strategy_ids)
+                        if digit_config is not None
+                        else deriv.multi_strategy_metrics.enabled_strategies
+                    ),
+                    arbitration_candidates_p95=(
+                        deriv.multi_strategy_metrics.arbitration_candidates_p95
+                    ),
+                    evaluation_cycle_duration_microseconds_p95=(
+                        deriv.multi_strategy_metrics.evaluation_cycle_duration_microseconds_p95
+                    ),
+                )
+            ),
         )
 
-    def _orders(self) -> list[OrderSummary]:
+    def _orders(self, *, since_utc: datetime | None = None) -> list[OrderSummary]:
         result: list[OrderSummary] = []
-        for row in self._runtime.reader.ui_order_summaries(limit=50):
+        for row in self._runtime.reader.ui_order_summaries(
+            limit=50,
+            since_utc=since_utc,
+        ):
             broker_order_id = row.get("broker_order_id")
             result.append(
                 OrderSummary(
@@ -556,6 +594,7 @@ class CoreUiProjectionService:
         digit_risk_config_update: (
             Callable[[DigitRiskConfig], tuple[bool, str | None]] | None
         ) = None,
+        digit_test_session_reset: Callable[[], tuple[bool, str]] | None = None,
         *,
         request_timeout: float = 2.0,
     ) -> None:
@@ -571,6 +610,7 @@ class CoreUiProjectionService:
         self._diagnostic_provider = diagnostic_provider
         self._deriv_demo_connect = deriv_demo_connect
         self._digit_risk_config_update = digit_risk_config_update
+        self._digit_test_session_reset = digit_test_session_reset
         self._request_timeout = request_timeout
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -724,9 +764,18 @@ class CoreUiProjectionService:
         if request.message_type is MessageType.UI_RESUME_COMMAND:
             require_empty_payload(request.payload)
             accepted = self._resume()
+            snapshot = self._snapshot_provider()
+            blocker = next(
+                (
+                    item.reason_code
+                    for item in snapshot.health_gates
+                    if item.gate_name == "DERIV_READY_TO_ARM" and not item.is_open
+                ),
+                None,
+            )
             ack = UiCommandAck(
                 accepted,
-                "ENTRIES_RESUMED" if accepted else "OTHER_HEALTH_BLOCKER_ACTIVE",
+                "ENTRIES_RESUMED" if accepted else blocker or "OTHER_HEALTH_BLOCKER_ACTIVE",
                 False,
             )
             return _response(request, MessageType.UI_RESUME_ACK, ack.to_payload())
@@ -801,6 +850,22 @@ class CoreUiProjectionService:
                 request,
                 MessageType.UI_UPDATE_DIGIT_RISK_CONFIG_ACK,
                 digit_ack.to_payload(),
+            )
+        if request.message_type is MessageType.UI_RESET_DIGIT_TEST_SESSION_COMMAND:
+            require_empty_payload(request.payload)
+            if self._digit_test_session_reset is None:
+                ack = UiCommandAck(
+                    False,
+                    "DIGIT_TEST_SESSION_RESET_UNAVAILABLE",
+                    self._safe_stop_state(),
+                )
+            else:
+                accepted, reason = self._digit_test_session_reset()
+                ack = UiCommandAck(accepted, reason, self._safe_stop_state())
+            return _response(
+                request,
+                MessageType.UI_RESET_DIGIT_TEST_SESSION_ACK,
+                ack.to_payload(),
             )
         raise ProtocolError(
             ProtocolErrorCode.UI_IPC_INVALID_MESSAGE, "UI message type is unsupported"

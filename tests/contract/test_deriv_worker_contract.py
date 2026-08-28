@@ -53,6 +53,12 @@ def test_deriv_contract_01_to_03_handshake_and_public_capabilities(
     assert capabilities.authenticated is False
     assert capabilities.can_trade is False
     assert capabilities.connection_mode.value == "PUBLIC_READ_ONLY"
+    health = client.request_health_snapshot()
+    assert health["contract_events_overflow_total"] == 0
+    assert health["reconciliation_required"] is False
+    assert health["pings_sent_total"] == 0
+    assert health["heartbeat_kills_total"] == 0
+    assert health["last_kill_reason"] is None
 
 
 def test_deriv_contract_04_core_and_worker_reject_order_submit(

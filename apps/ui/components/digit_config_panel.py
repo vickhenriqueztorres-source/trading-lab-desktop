@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation
 
 from PySide6.QtCore import QRegularExpression, Qt, QTimer, Signal
 from PySide6.QtGui import QRegularExpressionValidator
@@ -36,6 +36,8 @@ _SYMBOLS = (
     "1HZ100V",
 )
 _MONEY_PATTERN = QRegularExpression(r"^\d{0,7}(?:[\.,]\d{0,2})?$")
+_DIFFERS_SESSION_ID = "payout-routed-differs-session"
+_DIFFERS_SESSION_EXPECTED_EV_RATIO = Decimal("-0.019")
 
 
 def _minor_units(text: str) -> int | None:
@@ -53,10 +55,16 @@ def _money_text(minor_units: int) -> str:
     return f"{Decimal(minor_units) / Decimal(100):.2f}"
 
 
+def _expected_differs_session_toll_minor_units(stake_minor_units: int) -> int:
+    toll = Decimal(stake_minor_units) * abs(_DIFFERS_SESSION_EXPECTED_EV_RATIO)
+    return int(toll.to_integral_value(rounding=ROUND_CEILING))
+
+
 class DigitConfigPanelWidget(QFrame):
     """Validated DIGITDIFF risk editor; persistence remains exclusively in the Core."""
 
     config_apply_requested = Signal(object)
+    test_session_reset_requested = Signal()
 
     def __init__(self, parent: QFrame | None = None) -> None:
         super().__init__(parent)
@@ -66,10 +74,16 @@ class DigitConfigPanelWidget(QFrame):
         self._dirty = False
         self._loading = False
         self._active_strategy_id = "tail-probability-edge"
+        self._enabled_strategy_ids = {
+            "tail-probability-edge",
+            "selective-differs-edge",
+            "parity-regime-edge",
+            _DIFFERS_SESSION_ID,
+        }
         # These are Core-owned safety bounds.  They remain part of the persisted
         # configuration, but are intentionally not editable in the operator UI.
         self._martingale_max_steps = 2
-        self._martingale_max_stake_minor_units = 400
+        self._martingale_max_stake_minor_units = 5000
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 10, 14, 10)
@@ -95,6 +109,30 @@ class DigitConfigPanelWidget(QFrame):
         heading.addWidget(self.disclaimer, 1)
         heading.addWidget(self.auto_symbol_input)
         root.addLayout(heading)
+
+        strategy_row = QHBoxLayout()
+        strategy_row.setSpacing(12)
+        self.stress_mode_input = QCheckBox("Modo estresse Demo · todas")
+        self.stress_mode_input.setChecked(True)
+        self.stress_mode_input.setToolTip(
+            "Avalia todas as estratégias, mas mantém no máximo uma ordem em voo."
+        )
+        self.stress_mode_input.toggled.connect(self._stress_mode_changed)
+        strategy_row.addWidget(self.stress_mode_input)
+        self._strategy_inputs: dict[str, QCheckBox] = {}
+        for strategy_id, display_label in (
+            ("tail-probability-edge", "Over / Under"),
+            ("selective-differs-edge", "Digit Differs"),
+            ("parity-regime-edge", "Par / Ímpar"),
+            (_DIFFERS_SESSION_ID, "Sessão Differs"),
+        ):
+            checkbox = QCheckBox(display_label)
+            checkbox.setChecked(True)
+            checkbox.toggled.connect(self._strategy_selection_changed)
+            self._strategy_inputs[strategy_id] = checkbox
+            strategy_row.addWidget(checkbox)
+        strategy_row.addStretch()
+        root.addLayout(strategy_row)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
@@ -189,9 +227,8 @@ class DigitConfigPanelWidget(QFrame):
         martingale_grid.addWidget(self.martingale_enabled_input, 0, 0)
 
         self.martingale_multiplier_input = QComboBox()
-        for multiplier in ("1.25", "1.50", "2.00", "2.50", "3.00"):
-            self.martingale_multiplier_input.addItem(f"{multiplier}×", multiplier)
-        self.martingale_multiplier_input.setCurrentIndex(2)
+        self.martingale_multiplier_input.addItem("Automático pela cotação Deriv", "2.00")
+        self.martingale_multiplier_input.setEnabled(False)
         self.martingale_multiplier_input.currentIndexChanged.connect(self._mark_dirty_and_validate)
 
         self._martingale_labels = [QLabel()]
@@ -241,6 +278,9 @@ class DigitConfigPanelWidget(QFrame):
         self.apply_button = QPushButton()
         self.apply_button.setObjectName("PrimaryButton")
         self.apply_button.clicked.connect(self._apply)
+        self.reset_session_button = QPushButton()
+        self.reset_session_button.setObjectName("SecondaryButton")
+        self.reset_session_button.clicked.connect(self.test_session_reset_requested.emit)
         footer = QHBoxLayout()
         footer.setSpacing(14)
         projection = QVBoxLayout()
@@ -250,6 +290,7 @@ class DigitConfigPanelWidget(QFrame):
         projection.addWidget(self.cooldown_status)
         footer.addLayout(projection, 1)
         footer.addWidget(self.validation_status, 1)
+        footer.addWidget(self.reset_session_button)
         footer.addWidget(self.apply_button)
         root.addLayout(footer)
         root.addStretch()
@@ -278,10 +319,14 @@ class DigitConfigPanelWidget(QFrame):
                 currency="USD",
                 auto_select_symbol=self.auto_symbol_input.isChecked(),
                 active_strategy_id=self._active_strategy_id,
+                enabled_strategy_ids=frozenset(self._enabled_strategy_ids),
+                stress_test_all_strategies_enabled=self.stress_mode_input.isChecked(),
                 martingale_enabled=self.martingale_enabled_input.isChecked(),
                 martingale_multiplier=Decimal(str(self.martingale_multiplier_input.currentData())),
                 martingale_max_steps=self._martingale_max_steps,
-                martingale_max_stake_minor_units=self._martingale_max_stake_minor_units,
+                # The hidden cap follows the operator-visible daily stop.  The Core
+                # still applies global/per-symbol exposure and remaining-loss limits.
+                martingale_max_stake_minor_units=stop,
             )
         except ValueError:
             return None
@@ -291,10 +336,14 @@ class DigitConfigPanelWidget(QFrame):
             return
         self._loading = True
         self._active_strategy_id = config.active_strategy_id
+        self._enabled_strategy_ids = set(config.enabled_strategy_ids)
+        self.stress_mode_input.setChecked(config.stress_test_all_strategies_enabled)
+        for strategy_id, checkbox in self._strategy_inputs.items():
+            checkbox.setChecked(strategy_id in self._enabled_strategy_ids)
         self.stake_input.setText(_money_text(config.stake_minor_units))
         self.stop_loss_input.setText(_money_text(config.daily_stop_loss_minor_units))
         self.take_profit_input.setText(_money_text(config.daily_take_profit_minor_units))
-        self._martingale_max_stake_minor_units = config.martingale_max_stake_minor_units
+        self._martingale_max_stake_minor_units = config.daily_stop_loss_minor_units
         self._martingale_max_steps = config.martingale_max_steps
         self.max_losses_input.setValue(config.max_consecutive_losses)
         self.symbol_input.setCurrentText(config.selected_symbol)
@@ -321,6 +370,7 @@ class DigitConfigPanelWidget(QFrame):
                 "tail-probability-edge",
                 "selective-differs-edge",
                 "parity-regime-edge",
+                _DIFFERS_SESSION_ID,
             }
             or strategy_id == self._active_strategy_id
         ):
@@ -338,6 +388,31 @@ class DigitConfigPanelWidget(QFrame):
             if seconds > 0
             else t("DIGIT_COOLDOWN_READY")
         )
+
+    def _stress_mode_changed(self, checked: bool) -> None:
+        if self._loading:
+            return
+        if checked:
+            self._enabled_strategy_ids = set(self._strategy_inputs)
+            self._loading = True
+            for checkbox in self._strategy_inputs.values():
+                checkbox.setChecked(True)
+            self._loading = False
+        self._mark_dirty_and_validate()
+
+    def _strategy_selection_changed(self) -> None:
+        if self._loading:
+            return
+        self._enabled_strategy_ids = {
+            strategy_id
+            for strategy_id, checkbox in self._strategy_inputs.items()
+            if checkbox.isChecked()
+        }
+        all_enabled = len(self._enabled_strategy_ids) == len(self._strategy_inputs)
+        self._loading = True
+        self.stress_mode_input.setChecked(all_enabled)
+        self._loading = False
+        self._mark_dirty_and_validate()
 
     def set_apply_result(self, accepted: bool, reason: str | None = None) -> None:
         self.validation_status.setText(
@@ -377,6 +452,7 @@ class DigitConfigPanelWidget(QFrame):
         ):
             label.setText(t(key))
         self.apply_button.setText(t("APPLY_CONFIG_BTN"))
+        self.reset_session_button.setText(t("RESET_DEMO_SESSION_BTN"))
         self._validate()
 
     def _confidence_changed(self, value: int) -> None:
@@ -395,7 +471,7 @@ class DigitConfigPanelWidget(QFrame):
 
     def _martingale_changed(self) -> None:
         enabled = self.martingale_enabled_input.isChecked()
-        self.martingale_multiplier_input.setEnabled(enabled)
+        self.martingale_multiplier_input.setEnabled(False)
         if enabled:
             minimum_losses = self._martingale_max_steps + 1
             if self.max_losses_input.value() < minimum_losses:
@@ -415,7 +491,18 @@ class DigitConfigPanelWidget(QFrame):
             field_valid = (_minor_units(field.text()) or 0) >= minimum
             field.setStyleSheet(f"border: 1px solid {ACCENT_GREEN if field_valid else ACCENT_RED};")
         if config is None:
-            self.validation_status.setText(t("DIGIT_CONFIG_INVALID"))
+            stake = _minor_units(self.stake_input.text())
+            stop = _minor_units(self.stop_loss_input.text())
+            take = _minor_units(self.take_profit_input.text())
+            if stake is None or stake < 35:
+                reason = t("DIGIT_CONFIG_STAKE_INVALID")
+            elif stop is None or stop <= 0:
+                reason = t("DIGIT_CONFIG_STOP_INVALID")
+            elif take is None or take <= 0:
+                reason = t("DIGIT_CONFIG_TAKE_INVALID")
+            else:
+                reason = t("DIGIT_CONFIG_INVALID")
+            self.validation_status.setText(reason)
             self.validation_status.setStyleSheet(f"color: {ACCENT_RED}; font-weight: 700;")
             self.risk_projection.setText(t("DIGIT_RISK_PROJECTION_UNAVAILABLE"))
             self.martingale_projection.setText(t("MARTINGALE_PROJECTION_UNAVAILABLE"))
@@ -425,27 +512,40 @@ class DigitConfigPanelWidget(QFrame):
         )
         self.validation_status.setText(t("DIGIT_CONFIG_VALID"))
         self.validation_status.setStyleSheet(f"color: {border}; font-weight: 700;")
-        self.risk_projection.setText(t("DIGIT_RISK_PROJECTION", ratio=f"{ratio:.2f}"))
+        risk_projection = t("DIGIT_RISK_PROJECTION", ratio=f"{ratio:.2f}")
+        if _DIFFERS_SESSION_ID in config.enabled_strategy_ids:
+            risk_projection = (
+                risk_projection
+                + " · "
+                + t(
+                    "DIFFERS_SESSION_EXPECTED_TOLL",
+                    amount=_money_text(
+                        _expected_differs_session_toll_minor_units(config.stake_minor_units)
+                    ),
+                )
+            )
+        self.risk_projection.setText(risk_projection)
         if not config.martingale_enabled:
             self.martingale_projection.setText(t("MARTINGALE_DISABLED_STATUS"))
             return
-        stakes = tuple(
-            min(
-                int(
-                    (
-                        Decimal(config.stake_minor_units) * (config.martingale_multiplier**step)
-                    ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-                ),
-                config.martingale_max_stake_minor_units,
-            )
-            for step in range(config.martingale_max_steps + 1)
+        example_ratio = (
+            Decimal("0.10")
+            if config.active_strategy_id == "selective-differs-edge"
+            else Decimal("0.90")
         )
-        stake_text = " → ".join(_money_text(value) for value in stakes)
+        recovery = int(
+            (Decimal(config.stake_minor_units) / example_ratio).quantize(
+                Decimal("1"),
+                rounding=ROUND_HALF_UP,
+            )
+        )
+        remaining_stop = max(0, config.daily_stop_loss_minor_units - config.stake_minor_units)
         self.martingale_projection.setText(
             t(
                 "MARTINGALE_PROJECTION",
-                sequence=stake_text,
-                loss=_money_text(sum(stakes)),
+                recovery=_money_text(recovery),
+                ratio=f"{example_ratio * 100:.0f}",
+                remaining=_money_text(remaining_stop),
             )
         )
 

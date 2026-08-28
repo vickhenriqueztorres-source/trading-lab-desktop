@@ -25,6 +25,7 @@ class DerivOperation(StrEnum):
     PROPOSAL_OPEN_CONTRACT = "proposal_open_contract"
     STATEMENT = "statement"
     PROFIT_TABLE = "profit_table"
+    PORTFOLIO = "portfolio"
 
 
 PUBLIC_READ_ONLY_OPERATIONS = frozenset(
@@ -36,6 +37,7 @@ PUBLIC_READ_ONLY_OPERATIONS = frozenset(
         DerivOperation.CONTRACTS_FOR,
         DerivOperation.TICKS,
         DerivOperation.TICKS_HISTORY,
+        DerivOperation.PROPOSAL,
         DerivOperation.FORGET,
         DerivOperation.FORGET_ALL,
     }
@@ -48,9 +50,13 @@ DEMO_OPERATIONS = PUBLIC_READ_ONLY_OPERATIONS | {
     DerivOperation.PROPOSAL_OPEN_CONTRACT,
     DerivOperation.STATEMENT,
     DerivOperation.PROFIT_TABLE,
+    DerivOperation.PORTFOLIO,
 }
 
-DEMO_READ_ONLY_OPERATIONS = PUBLIC_READ_ONLY_OPERATIONS | {DerivOperation.BALANCE}
+DEMO_READ_ONLY_OPERATIONS = PUBLIC_READ_ONLY_OPERATIONS | {
+    DerivOperation.BALANCE,
+    DerivOperation.PROPOSAL,
+}
 
 
 def validate_read_only_request(

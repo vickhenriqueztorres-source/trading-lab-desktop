@@ -90,6 +90,36 @@ def test_authenticated_telemetry_failure_requests_supervised_reauthentication() 
     assert reasons == ["DERIV_TELEMETRY_UNAVAILABLE"]
 
 
+def test_contract_event_overflow_requests_reconciliation_without_health_gate() -> None:
+    observed = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+
+    class HealthClient(_ClockClient):
+        def __init__(self) -> None:
+            super().__init__(BrokerClockSnapshot(1_700_000_100, observed, 0.010, Decimal("0.100")))
+            self.overflow = 1
+
+        def request_health_snapshot(self) -> dict[str, object]:
+            return {"contract_events_overflow_total": self.overflow}
+
+    client = HealthClient()
+    gate = HealthGate()
+    reasons: list[str] = []
+    monitor = DerivTelemetryMonitor(
+        cast(ReadOnlyWorkerSupervisor, _Supervisor(client)),
+        gate,
+        DerivTelemetrySource.PUBLIC_LIVE,
+        reconciliation_notifier=reasons.append,
+    )
+
+    monitor.probe_once()
+    monitor.probe_once()
+    client.overflow = 2
+    monitor.probe_once()
+
+    assert reasons == ["DERIV_CONTRACT_EVENT_OVERFLOW", "DERIV_CONTRACT_EVENT_OVERFLOW"]
+    assert not gate.contains("HG_BROKER_EVENT_BACKPRESSURE")
+
+
 def test_retired_telemetry_generation_cannot_reblock_or_clear_current_health() -> None:
     class ForbiddenClient:
         @property

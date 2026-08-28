@@ -171,6 +171,12 @@ class UiIpcClient:
         )
         return UiUpdateDigitRiskConfigAck.from_payload(response.payload)
 
+    def reset_digit_test_session(self) -> UiCommandAck:
+        return self._command(
+            MessageType.UI_RESET_DIGIT_TEST_SESSION_COMMAND,
+            MessageType.UI_RESET_DIGIT_TEST_SESSION_ACK,
+        )
+
     def close(self) -> None:
         with self._lock:
             if self._ready:

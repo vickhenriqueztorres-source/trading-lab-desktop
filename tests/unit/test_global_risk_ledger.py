@@ -7,7 +7,9 @@ import pytest
 
 from apps.core.health import HealthGate
 from apps.core.risk import (
+    ActiveExposurePort,
     GlobalRiskConfig,
+    RestoredExposure,
     RiskLedger,
     RiskLimitExceededError,
     RiskState,
@@ -35,6 +37,24 @@ def _make_request(
         amount=Money(amount_minor, "USD"),
         deadline_at=utc_now() + timedelta(seconds=10),
     )
+
+
+class MutableExposurePort(ActiveExposurePort):
+    def __init__(self) -> None:
+        self.exposures: list[RestoredExposure] = []
+
+    def active_reservations(self) -> tuple[RestoredExposure, ...]:
+        return tuple(self.exposures)
+
+    def add(
+        self,
+        reservation_id: str,
+        broker: str,
+        account_id: str,
+        symbol: str,
+        amount: Money,
+    ) -> None:
+        self.exposures.append(RestoredExposure(reservation_id, broker, account_id, amount, symbol))
 
 
 def test_canonicalize_symbol() -> None:
@@ -67,7 +87,8 @@ def test_global_exposure_ceiling_cross_broker() -> None:
         global_max_exposure_minor_units=5000,
         max_exposure_per_symbol_minor_units=5000,
     )
-    ledger = RiskLedger(config)
+    port = MutableExposurePort()
+    ledger = RiskLedger(config, active_exposure_port=port)
     health_gate = HealthGate()
 
     req_deriv = _make_request(Broker.DERIV, "VRTC1001", "R_100", 3000)
@@ -76,6 +97,7 @@ def test_global_exposure_ceiling_cross_broker() -> None:
     ledger.register_active_reservation(
         "res_1", Broker.DERIV.value, "VRTC1001", "R_100", Money(3000, "USD")
     )
+    port.add("res_1", Broker.DERIV.value, "VRTC1001", "R_100", Money(3000, "USD"))
 
     req_iq = _make_request(Broker.IQ_OPTION, "PRACTICE_01", "EURUSD", 2500)
     with pytest.raises(RiskLimitExceededError) as exc_info:
@@ -88,6 +110,7 @@ def test_global_exposure_ceiling_cross_broker() -> None:
     ledger.register_active_reservation(
         "res_2", Broker.IQ_OPTION.value, "PRACTICE_01", "EURUSD", Money(2000, "USD")
     )
+    port.add("res_2", Broker.IQ_OPTION.value, "PRACTICE_01", "EURUSD", Money(2000, "USD"))
 
     assert ledger.active_exposure_minor_units == 5000
 
@@ -97,7 +120,8 @@ def test_symbol_exposure_ceiling_cross_broker() -> None:
         global_max_exposure_minor_units=10000,
         max_exposure_per_symbol_minor_units=3000,
     )
-    ledger = RiskLedger(config)
+    port = MutableExposurePort()
+    ledger = RiskLedger(config, active_exposure_port=port)
     health_gate = HealthGate()
 
     req_deriv = _make_request(Broker.DERIV, "VRTC1001", "frxEURUSD", 2000)
@@ -105,6 +129,7 @@ def test_symbol_exposure_ceiling_cross_broker() -> None:
     ledger.register_active_reservation(
         "res_1", Broker.DERIV.value, "VRTC1001", "frxEURUSD", Money(2000, "USD")
     )
+    port.add("res_1", Broker.DERIV.value, "VRTC1001", "frxEURUSD", Money(2000, "USD"))
 
     req_iq = _make_request(Broker.IQ_OPTION, "PRACTICE_01", "EURUSD", 1500)
     with pytest.raises(RiskLimitExceededError) as exc_info:
@@ -120,7 +145,7 @@ def test_consolidated_daily_stop_loss() -> None:
     config = GlobalRiskConfig(
         consolidated_daily_stop_loss_minor_units=5000,
     )
-    ledger = RiskLedger(config)
+    ledger = RiskLedger(config, active_exposure_port=MutableExposurePort())
     health_gate = HealthGate()
 
     ledger.apply_realized_pnl(Broker.DERIV.value, "VRTC1001", -3000, "USD", health_gate)
@@ -148,7 +173,7 @@ def test_consecutive_loss_cooldown() -> None:
         max_consecutive_losses=2,
         consolidated_daily_stop_loss_minor_units=50000,
     )
-    ledger = RiskLedger(config)
+    ledger = RiskLedger(config, active_exposure_port=MutableExposurePort())
     health_gate = HealthGate()
 
     ledger.apply_realized_pnl(Broker.DERIV.value, "VRTC1001", -1000, "USD", health_gate)
@@ -171,7 +196,8 @@ def test_consecutive_loss_cooldown() -> None:
 
 def test_restore_reservations_and_metrics() -> None:
     config = GlobalRiskConfig(global_max_exposure_minor_units=20000)
-    ledger = RiskLedger(config)
+    port = MutableExposurePort()
+    ledger = RiskLedger(config, active_exposure_port=port)
 
     reservations = [
         {
@@ -192,6 +218,7 @@ def test_restore_reservations_and_metrics() -> None:
         },
     ]
     ledger.restore(reservations)
+    port.exposures.extend(RiskLedger.validate_restored_exposures(reservations))
     assert len(ledger.restored_exposure) == 2
     assert ledger.active_exposure_minor_units == 10000
     assert ledger.active_symbol_exposure_minor_units("EURUSD") == 10000

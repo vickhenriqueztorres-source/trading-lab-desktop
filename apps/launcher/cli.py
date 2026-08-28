@@ -10,6 +10,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import IO, Any
 
+from apps.launcher.models import LauncherLifecycleState
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="DualTrade local process-tree launcher")
@@ -157,6 +159,14 @@ def _distribution_integrity_paths(
     return root, manifest
 
 
+def _exit_code_after_snapshot_state(state: LauncherLifecycleState) -> int | None:
+    if state is LauncherLifecycleState.FAILED:
+        return 1
+    if state is LauncherLifecycleState.STOPPED:
+        return 0
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # Handle frozen executable sub-process dispatch (-m <module>)
     effective_argv = list(sys.argv[1:]) if argv is None else list(argv)
@@ -217,8 +227,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         while not stop_requested.wait(0.2):
             snapshot = supervisor.poll_health()
-            if snapshot.overall_state.value == "FAILED":
-                exit_code = 1
+            state_exit = _exit_code_after_snapshot_state(snapshot.overall_state)
+            if state_exit is not None:
+                exit_code = state_exit
                 break
             if duration is not None and time.monotonic() - started >= duration:
                 break

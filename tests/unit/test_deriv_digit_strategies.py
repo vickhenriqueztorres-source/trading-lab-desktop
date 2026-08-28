@@ -82,16 +82,17 @@ def test_uniform_random_ticks_do_not_invent_a_conservative_advantage() -> None:
     assert all(item.state is ShadowSignalState.MONITORING for item in decisions)
 
 
-def test_shadow_engine_exposes_three_digit_strategies_and_measured_latency() -> None:
+def test_shadow_engine_exposes_digit_strategies_and_measured_latency() -> None:
     times = iter((1_000, 10_000))
     engine = DerivDigitShadowEngine(monotonic_ns=lambda: next(times))
 
     engine.ingest_history("R_100", ticks=_ticks([digit for _ in range(250) for digit in (9, 0)]))
     projections = engine.projections()
 
-    assert len(projections) == 3
+    assert len(projections) == 4
     assert {item.lifecycle_status for item in projections} == {"RESEARCH_SHADOW"}
-    assert {item.signal_state for item in projections} == {ShadowSignalState.SHADOW_SIGNAL}
+    assert sum(item.signal_state is ShadowSignalState.SHADOW_SIGNAL for item in projections) == 3
+    assert sum(item.reason_code == "SESSION_NO_FRESH_PROPOSAL" for item in projections) == 1
     assert {item.analysis_latency_microseconds for item in projections} == {9}
 
 

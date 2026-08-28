@@ -19,8 +19,10 @@ from packages.protocol.ui_messages import (
     HealthGateStatus,
     OrderSummary,
     UiAccountMode,
+    UiDigitRiskConfigStatus,
     UiGlobalState,
     UiProjectionSnapshot,
+    UiUpdateDigitRiskConfigAck,
 )
 
 
@@ -123,4 +125,47 @@ def test_trading_lab_main_window_headless(qapp: QApplication) -> None:
     I18nManager.set_language("es")
     assert window._lbl_badge.text() == "MODO PRÁCTICA"
 
+    window.close()
+
+
+def test_applying_digit_risk_config_disarms_running_bot_first(qapp: QApplication) -> None:
+    mock_controller = MagicMock()
+    mock_controller.connected = True
+    mock_controller.update_digit_risk_config.return_value = UiUpdateDigitRiskConfigAck(
+        UiDigitRiskConfigStatus.OK,
+        None,
+    )
+    mock_controller.snapshot = UiProjectionSnapshot(
+        global_state=UiGlobalState.READY,
+        safe_stop_active=False,
+        health_gates=(HealthGateStatus("HG_GLOBAL", True, None, "Operational"),),
+        broker_cards=(
+            BrokerCardStatus(
+                "DERIV",
+                UiAccountMode.PRACTICE,
+                True,
+                1000000,
+                "USD",
+                True,
+                "Demo",
+                0,
+            ),
+        ),
+        active_orders=(),
+        daily_pnl_minor_units=0,
+        daily_pnl_currency="USD",
+        global_exposure_minor_units=0,
+        global_max_exposure_minor_units=50000,
+        consecutive_losses=0,
+        risk_state="NORMAL",
+    )
+    window = TradingLabMainWindow(mock_controller)
+    window._bot_enabled = True
+    window._synthetic_config_panel.set_apply_result = MagicMock()  # type: ignore[method-assign]
+
+    config = MagicMock()
+    window._on_digit_risk_config_apply(config)
+
+    mock_controller.safe_stop.assert_called_once()
+    mock_controller.update_digit_risk_config.assert_called_once_with(config)
     window.close()

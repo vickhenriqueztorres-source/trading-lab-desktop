@@ -55,6 +55,10 @@ def test_ui_ipc_authentication_projection_and_commands_are_bounded() -> None:
             events.append("deriv_demo_connect") or True,
             "DERIV_DEMO_CONNECTED",
         ),
+        digit_test_session_reset=lambda: (
+            events.append("digit_test_session_reset") or True,
+            "DIGIT_TEST_SESSION_RESET",
+        ),
     )
     service.start()
     try:
@@ -72,11 +76,13 @@ def test_ui_ipc_authentication_projection_and_commands_are_bounded() -> None:
             assert client.resume().accepted is True
             assert safe_stop is False
             assert client.connect_deriv_demo().reason_code == "DERIV_DEMO_CONNECTED"
+            assert client.reset_digit_test_session().reason_code == "DIGIT_TEST_SESSION_RESET"
             assert client.request_shutdown().reason_code == "SAFE_SHUTDOWN_REQUESTED"
             assert events == [
                 "safe_stop",
                 "resume",
                 "deriv_demo_connect",
+                "digit_test_session_reset",
                 "safe_stop",
                 "shutdown_requested",
             ]
@@ -112,6 +118,47 @@ def test_ui_ipc_reconnect_replays_same_command_without_duplicate_side_effect() -
         finally:
             client.close()
     finally:
+        service.stop()
+
+
+def test_rejected_arm_reports_daily_stop_and_remains_disarmed() -> None:
+    token = SecretValue.from_text(secrets.token_hex(32))
+
+    def blocked_snapshot() -> UiProjectionSnapshot:
+        return UiProjectionSnapshot(
+            UiGlobalState.RISK_LOCKED,
+            True,
+            (
+                HealthGateStatus("GLOBAL_ENTRY_GATE", False, "HG_SAFE_STOP", "Stopped"),
+                HealthGateStatus(
+                    "DERIV_READY_TO_ARM",
+                    False,
+                    "HG_DAILY_STOP_REACHED",
+                    "Daily stop reached",
+                ),
+            ),
+            (BrokerCardStatus("DERIV", UiAccountMode.PRACTICE, True, None, None, True),),
+            (),
+            -5000,
+            "USD",
+        )
+
+    service = CoreUiProjectionService(
+        token,
+        blocked_snapshot,
+        lambda: None,
+        lambda: False,
+        lambda: None,
+    )
+    service.start()
+    client = UiIpcClient.connect(service.port, token)
+    try:
+        ack = client.resume()
+        assert ack.accepted is False
+        assert ack.reason_code == "HG_DAILY_STOP_REACHED"
+        assert client.projection().safe_stop_active is True
+    finally:
+        client.close()
         service.stop()
 
 

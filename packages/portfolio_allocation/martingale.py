@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from packages.domain.models import Money
 
@@ -56,6 +56,79 @@ class BoundedMartingaleProjection:
 
 class BoundedMartingaleAllocator:
     """Pure progression math; every returned stake remains subject to the Risk Ledger."""
+
+    @staticmethod
+    def recovery_stake(
+        config: BoundedMartingaleConfig,
+        state: BoundedMartingaleState,
+        *,
+        outstanding_loss_minor_units: int,
+        net_profit_ratio: Decimal,
+        remaining_loss_budget_minor_units: int,
+    ) -> Money:
+        """Return a quote-aware stake that recovers the outstanding sequence loss.
+
+        A full recovery is preferred.  When it does not fit, the outstanding loss is
+        divided over the remaining configured recovery attempts.  No result is ever
+        silently clamped: an unaffordable recovery is rejected before reservation.
+        """
+
+        if state.step <= 0 or outstanding_loss_minor_units <= 0:
+            return config.base_stake
+        if state.step > config.max_steps:
+            raise ValueError("martingale state exceeds configured max steps")
+        if type(outstanding_loss_minor_units) is not int:
+            raise TypeError("outstanding martingale loss must use integer minor units")
+        if type(remaining_loss_budget_minor_units) is not int:
+            raise TypeError("remaining martingale budget must use integer minor units")
+        if (
+            not isinstance(net_profit_ratio, Decimal)
+            or not net_profit_ratio.is_finite()
+            or net_profit_ratio <= 0
+        ):
+            raise ValueError("martingale quote net profit ratio must be positive")
+
+        hard_cap = min(
+            config.max_stake.minor_units,
+            remaining_loss_budget_minor_units,
+        )
+        if hard_cap <= 0:
+            raise ValueError("martingale recovery has no remaining loss budget")
+
+        def required_stake(target_profit_minor_units: int) -> int:
+            return int(
+                (Decimal(target_profit_minor_units) / net_profit_ratio).quantize(
+                    Decimal("1"),
+                    rounding=ROUND_CEILING,
+                )
+            )
+
+        # A recovery entry must never become smaller than the configured base
+        # stake.  Besides preserving the bounded progression semantics, the
+        # base stake is already validated against the broker minimum.  Without
+        # this floor, a tiny residual loss (for example USD 0.03 at a 9% net
+        # return) produced an invalid USD 0.34 order and caused a rejection loop.
+        full_recovery = max(
+            config.base_stake.minor_units,
+            required_stake(outstanding_loss_minor_units),
+        )
+        if full_recovery <= hard_cap:
+            return Money(full_recovery, config.base_stake.currency)
+
+        remaining_attempts = config.max_steps - state.step + 1
+        target_slice = int(
+            (Decimal(outstanding_loss_minor_units) / Decimal(remaining_attempts)).quantize(
+                Decimal("1"),
+                rounding=ROUND_CEILING,
+            )
+        )
+        divided_recovery = max(
+            config.base_stake.minor_units,
+            required_stake(target_slice),
+        )
+        if divided_recovery <= hard_cap:
+            return Money(divided_recovery, config.base_stake.currency)
+        raise ValueError("martingale recovery exceeds configured safety limits")
 
     @staticmethod
     def stake_for_step(

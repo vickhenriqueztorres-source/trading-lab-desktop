@@ -327,7 +327,7 @@ def test_each_digit_strategy_uses_next_martingale_stake_after_demo_loss(
         martingale_enabled=True,
         martingale_multiplier=Decimal("2.00"),
         martingale_max_steps=2,
-        martingale_max_stake_minor_units=400,
+        martingale_max_stake_minor_units=1000,
         max_consecutive_losses=3,
         daily_stop_loss_minor_units=1000,
         auto_select_symbol=False,
@@ -345,12 +345,13 @@ def test_each_digit_strategy_uses_next_martingale_stake_after_demo_loss(
     assert first.evaluate_once() is True
     _settle_queued_events(session, processor)
     assert ledger.get_digit_metrics().martingale_step == 1
-    assert ledger.get_digit_metrics().next_stake_minor_units == 200
+    assert ledger.get_digit_metrics().cumulative_sequence_loss_minor_units == 100
 
     second = DerivDigitAutoTrader(runtime, "VRTC123456", lambda: snapshot)  # type: ignore[arg-type]
     assert second.evaluate_once() is True
     amounts = [int(item["amount_minor"]) for item in reversed(reader.ui_order_summaries(limit=10))]
-    assert amounts == [100, 200]
+    expected_recovery = 500 if strategy_id is DerivDigitStrategyId.SELECTIVE_DIFFERS_EDGE else 112
+    assert amounts == [100, expected_recovery]
 
 
 def test_martingale_progression_is_durable_idempotent_and_asset_pinned(
@@ -363,9 +364,9 @@ def test_martingale_progression_is_durable_idempotent_and_asset_pinned(
         martingale_enabled=True,
         martingale_multiplier=Decimal("2.00"),
         martingale_max_steps=2,
-        martingale_max_stake_minor_units=400,
+        martingale_max_stake_minor_units=20000,
         max_consecutive_losses=3,
-        daily_stop_loss_minor_units=1000,
+        daily_stop_loss_minor_units=20000,
         auto_select_symbol=False,
     )
     assert ledger.update_digit_risk_config(config, gate) == (True, None)
@@ -450,9 +451,10 @@ def test_martingale_progression_is_durable_idempotent_and_asset_pinned(
     processor2 = BrokerEventProcessor(writer2, reader2, gate2, ledger2)
     restored = ledger2.get_digit_metrics()
     assert restored.martingale_step == 1
-    assert restored.next_stake_minor_units == 200
     assert restored.recovery_symbol == "R_100"
     assert restored.daily_pnl_minor_units == -100
+    second_stake = ledger2.digit_entry_stake(net_profit_ratio=Decimal("0.10"))
+    assert second_stake == Money(1000, "USD")
 
     # A second natural loss must advance the durable sequence from step 1 to
     # step 2 using the restored stake, without losing the pinned asset.
@@ -471,16 +473,15 @@ def test_martingale_progression_is_durable_idempotent_and_asset_pinned(
         replace(
             request,
             correlation_id=str(uuid4()),
-            amount=Money(200, "USD"),
+            amount=second_stake,
             deadline_at=datetime.now(UTC) + timedelta(seconds=30),
         )
     )
     _settle_queued_events(second_loss_session, processor2)
     after_second_loss = ledger2.get_digit_metrics()
     assert after_second_loss.martingale_step == 2
-    assert after_second_loss.next_stake_minor_units == 400
     assert after_second_loss.recovery_symbol == "R_100"
-    assert after_second_loss.cumulative_sequence_loss_minor_units == 300
+    assert after_second_loss.cumulative_sequence_loss_minor_units == 1100
     writer2.close()
 
     # A second complete Core restart restores step 2. A subsequent win then
@@ -492,9 +493,10 @@ def test_martingale_progression_is_durable_idempotent_and_asset_pinned(
     processor3 = BrokerEventProcessor(writer3, reader3, gate3, ledger3)
     restored_again = ledger3.get_digit_metrics()
     assert restored_again.martingale_step == 2
-    assert restored_again.next_stake_minor_units == 400
     assert restored_again.recovery_symbol == "R_100"
-    assert restored_again.cumulative_sequence_loss_minor_units == 300
+    assert restored_again.cumulative_sequence_loss_minor_units == 1100
+    final_stake = ledger3.digit_entry_stake(net_profit_ratio=Decimal("0.10"))
+    assert final_stake == Money(11000, "USD")
 
     win_transport = FakeDerivTransport(
         FakeDerivScenario.BUY_SETTLE_WIN,
@@ -506,7 +508,7 @@ def test_martingale_progression_is_durable_idempotent_and_asset_pinned(
         replace(
             request,
             correlation_id=str(uuid4()),
-            amount=Money(400, "USD"),
+            amount=final_stake,
             deadline_at=datetime.now(UTC) + timedelta(seconds=30),
         )
     )

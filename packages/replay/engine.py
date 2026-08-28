@@ -10,7 +10,7 @@ from typing import Protocol
 
 from apps.core.candle_pipeline import CoreCandlePipeline, market_candle_from_closed
 from apps.core.coordinator import PersistedOrder
-from apps.core.risk import RiskLedger
+from apps.core.risk import RiskLedger, StaticActiveExposurePort
 from apps.core.strategy_pipeline import EntryPlan, StrategyEntryPipeline
 from packages.audit import DecisionEventType, DecisionJournal, DecisionRecord
 from packages.domain.models import OrderRequest
@@ -189,7 +189,7 @@ class ReplaySession:
             self._restore(checkpoint, ingress_store)
         self._sink = _ReplayOrderIntentSink(
             request.run_id,
-            RiskLedger(),
+            RiskLedger(active_exposure_port=StaticActiveExposurePort()),
             self._clock,
             seen_correlations=seen_correlations,
         )

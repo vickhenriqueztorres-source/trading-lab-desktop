@@ -112,6 +112,81 @@ class DerivLiveOrderSession:
 
         return self._submit_buy_order(command, client)
 
+    def quote_digit_contract(
+        self,
+        *,
+        product: str,
+        symbol: str,
+        amount_minor_units: int,
+        currency: str,
+        prediction_digit: int | None,
+    ) -> dict[str, object]:
+        """Fetch a proposal without buying and expose only recovery-safe quote data."""
+
+        contract_type = product.strip().upper()
+        supported = {"DIGITDIFF", "DIGITOVER", "DIGITUNDER", "DIGITEVEN", "DIGITODD"}
+        if contract_type not in supported or amount_minor_units <= 0 or currency != "USD":
+            raise DerivWorkerError(DerivErrorCategory.INVALID_REQUEST, "DERIV_QUOTE_INVALID")
+        barrier_required = contract_type in {"DIGITDIFF", "DIGITOVER", "DIGITUNDER"}
+        if barrier_required and prediction_digit is None:
+            raise DerivWorkerError(
+                DerivErrorCategory.INVALID_REQUEST,
+                "DERIV_DIGIT_BARRIER_REQUIRED",
+            )
+        amount = Decimal(amount_minor_units) / Decimal(100)
+        payload: dict[str, object] = {
+            "proposal": 1,
+            "amount": amount,
+            "basis": "stake",
+            "contract_type": contract_type,
+            "currency": currency,
+            "duration": 1,
+            "duration_unit": "t",
+            "underlying_symbol": symbol,
+        }
+        if barrier_required:
+            payload["barrier"] = str(prediction_digit)
+        response = self._transport.request(
+            DerivOperation.PROPOSAL,
+            payload,
+            timeout=self._timeout_seconds,
+        )
+        proposal = response.get("proposal")
+        if not isinstance(proposal, Mapping):
+            raise DerivWorkerError(
+                DerivErrorCategory.SCHEMA_INCOMPATIBLE,
+                "DERIV_PROPOSAL_INVALID",
+            )
+        try:
+            proposal_id = str(proposal["id"])
+            ask = Decimal(str(proposal["ask_price"]))
+            payout = Decimal(str(proposal["payout"]))
+        except (KeyError, ArithmeticError, ValueError) as exc:
+            raise DerivWorkerError(
+                DerivErrorCategory.SCHEMA_INCOMPATIBLE,
+                "DERIV_PROPOSAL_INVALID",
+            ) from exc
+        if not proposal_id.strip():
+            raise DerivWorkerError(
+                DerivErrorCategory.SCHEMA_INCOMPATIBLE,
+                "DERIV_PROPOSAL_INVALID",
+            )
+        if not ask.is_finite() or not payout.is_finite() or ask <= 0 or payout <= ask:
+            raise DerivWorkerError(
+                DerivErrorCategory.SCHEMA_INCOMPATIBLE,
+                "DERIV_PROPOSAL_NON_POSITIVE_RETURN",
+            )
+        return {
+            "broker_symbol": symbol,
+            "contract_type": contract_type,
+            "barrier": prediction_digit if barrier_required else None,
+            "proposal_id": proposal_id,
+            "currency": currency,
+            "ask_price": str(ask),
+            "payout": str(payout),
+            "net_profit_ratio": str((payout - ask) / ask),
+        }
+
     def _submit_buy_order(
         self,
         command: OrderCommand,

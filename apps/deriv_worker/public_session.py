@@ -17,6 +17,7 @@ from apps.deriv_worker.mapper import (
 from apps.deriv_worker.request_allowlist import DerivOperation
 from apps.deriv_worker.schema import DerivErrorCategory, DerivWorkerError, validate_response
 from apps.deriv_worker.subscriptions import SubscriptionManager
+from apps.deriv_worker.suspension import monotonic_gap_exceeds
 from apps.deriv_worker.websocket_client import DerivReadTransport, ReadOnlyRetryPolicy
 from packages.domain.market import (
     BrokerCapabilities,
@@ -200,9 +201,13 @@ class PublicDerivSession:
         if max_gap_seconds <= 0:
             raise ValueError("suspension gap threshold must be positive")
         now = self._monotonic()
-        elapsed = now - self._last_monotonic_observation
+        suspended = monotonic_gap_exceeds(
+            now,
+            self._last_monotonic_observation,
+            max_gap_seconds=max_gap_seconds,
+        )
         self._last_monotonic_observation = now
-        if elapsed <= max_gap_seconds:
+        if not suspended:
             return False
         self.subscriptions.mark_restoring()
         self.health = MarketDataHealthState.STALE

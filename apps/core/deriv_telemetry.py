@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from apps.core.health import HealthGate
+from apps.core.payout_routed_differs import PAYOUT_ROUTED_DIFFERS_STRATEGY_ID
 from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSupervisor
 from apps.core.worker_client import SocketWorkerClient, WorkerDispatchError
 from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot, MarketTick
@@ -17,6 +18,7 @@ from packages.strategies.deriv_digits import (
     DerivDigitShadowEngine,
     DerivMultiAssetShadowRadar,
     DigitAssetShadowProjection,
+    DigitEnginePoolMetrics,
     DigitStrategyProjection,
 )
 
@@ -32,6 +34,14 @@ _SHADOW_SYMBOL_ALLOWLIST = frozenset(
 _SHADOW_DIGIT_CONTRACTS = frozenset(
     {"DIGITOVER", "DIGITUNDER", "DIGITDIFF", "DIGITEVEN", "DIGITODD"}
 )
+
+
+def _history_based_digit_projections(
+    projections: tuple[DigitStrategyProjection, ...],
+) -> tuple[DigitStrategyProjection, ...]:
+    return tuple(
+        item for item in projections if str(item.strategy_id) != PAYOUT_ROUTED_DIFFERS_STRATEGY_ID
+    )
 
 
 class DerivTelemetrySource(StrEnum):
@@ -52,6 +62,8 @@ class DerivTelemetrySnapshot:
     digit_frequency: DigitFrequencySnapshot | None = None
     synthetic_strategies: tuple[DigitStrategyProjection, ...] = ()
     asset_ranking: tuple[DigitAssetShadowProjection, ...] = ()
+    strategy_matrix: tuple[DigitStrategyProjection, ...] = ()
+    multi_strategy_metrics: DigitEnginePoolMetrics | None = None
 
 
 class DerivTelemetryMonitor:
@@ -69,6 +81,7 @@ class DerivTelemetryMonitor:
         symbol_provider: Callable[[], str] = lambda: "R_100",
         tick_notifier: Callable[[], None] | None = None,
         disconnect_notifier: Callable[[str], None] | None = None,
+        reconciliation_notifier: Callable[[str], None] | None = None,
         synthetic_engine: DerivDigitShadowEngine | None = None,
         universe_refresh_seconds: float = 300.0,
         generation_is_current: Callable[[], bool] = lambda: True,
@@ -84,7 +97,9 @@ class DerivTelemetryMonitor:
         self._symbol_provider = symbol_provider
         self._tick_notifier = tick_notifier
         self._disconnect_notifier = disconnect_notifier
+        self._reconciliation_notifier = reconciliation_notifier
         self._generation_is_current = generation_is_current
+        self._last_contract_events_overflow_total = 0
         selected_symbol = self._symbol_provider().strip()
         if synthetic_engine is None:
             self._radar = DerivMultiAssetShadowRadar((selected_symbol,) if selected_symbol else ())
@@ -116,6 +131,10 @@ class DerivTelemetryMonitor:
             "NOT_PROBED",
             synthetic_strategies=self._strategy_projections(),
             asset_ranking=self._radar.asset_ranking(),
+            strategy_matrix=_history_based_digit_projections(
+                self._radar.all_strategy_projections()
+            ),
+            multi_strategy_metrics=self._radar.metrics,
         )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -152,6 +171,17 @@ class DerivTelemetryMonitor:
         with self._lock:
             self._tick_notifier = notifier
 
+    def record_arbitration(
+        self,
+        winner_signal_id: str | None,
+        rejected_signal_ids: tuple[str, ...],
+    ) -> None:
+        with self._engine_lock:
+            self._radar.record_arbitration(winner_signal_id, rejected_signal_ids)
+            matrix = _history_based_digit_projections(self._radar.all_strategy_projections())
+        with self._lock:
+            self._snapshot = replace(self._snapshot, strategy_matrix=matrix)
+
     def probe_once(self) -> DerivTelemetrySnapshot:
         if not self._is_current():
             return self.snapshot
@@ -159,8 +189,20 @@ class DerivTelemetryMonitor:
         with self._engine_lock:
             strategy_projections = self._strategy_projections()
             asset_ranking = self._radar.asset_ranking()
+            strategy_matrix = _history_based_digit_projections(
+                self._radar.all_strategy_projections()
+            )
+            multi_strategy_metrics = self._radar.metrics
         try:
             client = self._supervisor.client
+            health_request = getattr(client, "request_health_snapshot", None)
+            if callable(health_request):
+                try:
+                    transport_health = health_request()
+                except (RuntimeError, WorkerDispatchError, ValueError):
+                    transport_health = None
+                if isinstance(transport_health, dict):
+                    self._handle_transport_health(transport_health)
             clock = client.broker_clock()
             if not self._is_current():
                 return self.snapshot
@@ -190,6 +232,8 @@ class DerivTelemetryMonitor:
                 current_frequency,
                 strategy_projections,
                 asset_ranking,
+                strategy_matrix,
+                multi_strategy_metrics,
             )
         except (RuntimeError, WorkerDispatchError, ValueError):
             if not self._is_current():
@@ -205,6 +249,8 @@ class DerivTelemetryMonitor:
                 current_frequency,
                 strategy_projections,
                 asset_ranking,
+                strategy_matrix,
+                multi_strategy_metrics,
             )
         if not self._is_current():
             return self.snapshot
@@ -232,6 +278,10 @@ class DerivTelemetryMonitor:
                     self._radar.ingest_tick(tick)
                     strategy_projections = self._strategy_projections()
                     asset_ranking = self._radar.asset_ranking()
+                    strategy_matrix = _history_based_digit_projections(
+                        self._radar.all_strategy_projections()
+                    )
+                    multi_strategy_metrics = self._radar.metrics
                 digit_symbol = self._symbol_provider().strip()
                 with self._lock:
                     current = self._snapshot
@@ -249,6 +299,8 @@ class DerivTelemetryMonitor:
                         ),
                         strategy_projections,
                         asset_ranking,
+                        strategy_matrix,
+                        multi_strategy_metrics,
                     )
                     notifier = self._tick_notifier
                 if notifier is not None and tick.broker_symbol == digit_symbol:
@@ -287,6 +339,10 @@ class DerivTelemetryMonitor:
                     self._radar.ingest_tick(tick)
                     strategy_projections = self._strategy_projections()
                     asset_ranking = self._radar.asset_ranking()
+                    strategy_matrix = _history_based_digit_projections(
+                        self._radar.all_strategy_projections()
+                    )
+                    multi_strategy_metrics = self._radar.metrics
                 with self._lock:
                     current = self._snapshot
                     self._snapshot = DerivTelemetrySnapshot(
@@ -299,6 +355,8 @@ class DerivTelemetryMonitor:
                         frequency if symbol == digit_symbol else current.digit_frequency,
                         strategy_projections,
                         asset_ranking,
+                        strategy_matrix,
+                        multi_strategy_metrics,
                     )
             except (RuntimeError, WorkerDispatchError, ValueError):
                 self._subscriptions.pop(symbol, None)
@@ -345,11 +403,17 @@ class DerivTelemetryMonitor:
             self._radar.set_symbols(tuple(sorted(discovered)))
             ranking = self._radar.asset_ranking()
             strategies = self._strategy_projections()
+            strategy_matrix = _history_based_digit_projections(
+                self._radar.all_strategy_projections()
+            )
+            multi_strategy_metrics = self._radar.metrics
         with self._lock:
             self._snapshot = replace(
                 self._snapshot,
                 synthetic_strategies=strategies,
                 asset_ranking=ranking,
+                strategy_matrix=strategy_matrix,
+                multi_strategy_metrics=multi_strategy_metrics,
             )
 
     @staticmethod
@@ -414,11 +478,28 @@ class DerivTelemetryMonitor:
         if notifier is not None and not self._stop.is_set():
             notifier(reason_code)
 
+    def _handle_transport_health(self, health: dict[str, object]) -> None:
+        if not self._is_current():
+            return
+        overflow = health.get("contract_events_overflow_total")
+        if isinstance(overflow, bool) or not isinstance(overflow, int) or overflow < 0:
+            return
+        with self._lock:
+            if overflow <= self._last_contract_events_overflow_total:
+                return
+            self._last_contract_events_overflow_total = overflow
+        notifier = self._reconciliation_notifier
+        if notifier is not None and not self._stop.is_set() and self._is_current():
+            with contextlib.suppress(RuntimeError, WorkerDispatchError, ValueError):
+                notifier("DERIV_CONTRACT_EVENT_OVERFLOW")
+
     def _is_current(self) -> bool:
         return not self._stop.is_set() and self._generation_is_current()
 
     def _strategy_projections(self) -> tuple[DigitStrategyProjection, ...]:
-        projections = self._radar.strategy_projections(self._symbol_provider().strip())
+        projections = _history_based_digit_projections(
+            self._radar.strategy_projections(self._symbol_provider().strip())
+        )
         if self._source is not DerivTelemetrySource.DEMO_LIVE:
             return projections
         return tuple(replace(item, lifecycle_status="PRACTICE_VALIDATION") for item in projections)

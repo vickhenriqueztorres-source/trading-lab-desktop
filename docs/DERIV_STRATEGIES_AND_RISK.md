@@ -6,6 +6,29 @@ Este documento descreve exatamente as três estratégias de dígitos implementad
 os filtros de execução e a gestão de risco usada pelo Core. As estratégias são experimentais e não
 representam promessa de rentabilidade.
 
+Desde a Fase 1 multi-estratégia da v1.9.11, as implementações são descobertas por um registry local
+de manifests no `strategy_catalog`. O enum dos três IDs históricos continua preservado como
+contrato de persistência, mas o motor não contém mais uma tupla literal: uma quarta implementação
+empacotada pode ser registrada com manifest e factory sem editar o engine.
+
+Cada símbolo possui sua própria instância do motor e seu próprio warm-up. O `EnginePool` aceita no
+máximo 12 símbolos, cria a engine quando os primeiros dados chegam e a descarta ao encerrar a
+subscrição. Ticks de outro símbolo são erro de roteamento; nunca apagam silenciosamente o buffer.
+
+Na conta Demo, o operador pode habilitar uma ou várias estratégias. Todas continuam produzindo
+`SHADOW_SIGNAL`; somente as habilitadas viram candidatas executáveis. O Signal Arbiter escolhe uma
+única candidata por maior margem conservadora, depois maior amostra condicional e, no empate final,
+ID lexicográfico. Os descartes ficam no journal. A conta permanece limitada a uma ordem em voo.
+Seleção vazia bloqueia com `BOT_NO_STRATEGY_SELECTED`. O modo estresse com todas habilitadas é
+exclusivo da Demo.
+
+Registros históricos não são reescritos, inclusive os que já possuem
+`entry_mode=EXECUTABLE_DEMO` ou `entry_mode=SHADOW_ONLY`. A partir da correção pós-Fase 1 de
+27/08/2026 na v1.9.11, a trilha operacional separa os conceitos: usa
+`entry_mode=EXECUTABLE_SIGNAL` para a vencedora, `entry_mode=SHADOW_ONLY` para as demais e grava o
+ambiente em `execution_environment` (`DEMO` ou `REAL`). O auto trader financeiro permanece restrito
+à Demo, portanto seus eventos atuais registram `execution_environment=DEMO`.
+
 ## 2. Dados utilizados
 
 Cada estratégia recebe uma sequência ordenada de `MarketTick` da Deriv. O último dígito é extraído
@@ -309,40 +332,62 @@ O P&L de dígitos é atualizado somente a partir de settlement confirmado.
 - P&L maior ou igual ao Take Profit bloqueia com `HG_DAILY_TAKE_PROFIT_REACHED`.
 - Cada perda incrementa perdas consecutivas.
 - Ao atingir o limite, começa o cooldown monotônico e bloqueia com `HG_COOLDOWN_ACTIVE`.
-- Quando o cooldown expira, perdas consecutivas e passo do martingale são resetados.
+- Quando o cooldown expira, o próximo tick atualiza o Health Gate, persiste a expiração, reseta
+  perdas consecutivas/passo do Martingale e retoma a análise automaticamente.
 - Um ganho reseta perdas consecutivas.
 
-## 13. Bounded Martingale
+Existe ainda uma pausa de desempenho independente: depois de pelo menos 10 liquidações de uma
+estratégia/ativo com resultado líquido não positivo, esse escopo aguarda até 10 minutos e então
+libera um lote limitado de novas tentativas. Essa pausa não é `HG_COOLDOWN_ACTIVE`, não desarma o
+bot e não impede outras estratégias/ativos elegíveis.
 
-A stake do passo `n` é:
+## 13. Bounded Martingale por retorno líquido
+
+O multiplicador geométrico deixou de determinar a stake. Antes de cada recuperação, o Core pede
+uma proposta somente de leitura ao worker Deriv e calcula o retorno líquido real:
 
 ```text
-round_half_up(stake_base × multiplicadorⁿ)
+retorno_líquido = (payout - ask_price) / ask_price
+stake_recuperação = ceil(prejuízo_pendente / retorno_líquido)
+stake_final = max(stake_base_válida, stake_recuperação)
 ```
 
-O resultado é limitado pelo teto absoluto configurado.
+Exemplo: uma perda de USD 1 em `DIGITDIFF` requer USD 10 quando a proposta paga 10% líquidos, ou
+USD 11,12 quando paga 9%. A cotação não compra o contrato. A ordem só é criada depois que a stake
+calculada passa pelo Risk Ledger.
+
+A stake de recuperação nunca fica abaixo da stake base já validada para o broker. Isso cobre o
+caso de uma recuperação parcial deixar poucos centavos pendentes: o sistema usa a base válida em
+vez de gerar uma ordem abaixo do mínimo da Deriv e entrar em ciclo de rejeições.
+
+O Core prefere recuperar todo o prejuízo pendente. Se isso não couber, divide o prejuízo entre as
+tentativas restantes e calcula a stake de cada parcela pela mesma cotação. Se nem a parcela couber,
+a recuperação falha fechada com `DIGIT_MARTINGALE_RECOVERY_UNAFFORDABLE`; nunca existe clamp
+silencioso.
 
 Restrições:
 
-- multiplicador entre 1,10 e 3,00;
 - 1 a 4 passos;
 - teto de stake não pode ser menor que a base;
 - teto não pode ultrapassar o Stop Loss diário;
-- soma projetada dos passos não pode ultrapassar o Stop Loss;
 - limite de perdas precisa acomodar toda a sequência;
 - próxima stake precisa caber no orçamento de perda restante;
+- proposta precisa possuir `payout > ask_price` e retorno líquido finito e positivo;
+- restart exige cotação nova; payout anterior não é reutilizado;
 - configuração não pode mudar no meio de uma sequência ativa.
 
 Transição:
 
 ```text
-settlement com perda e passo < máximo → passo + 1
-settlement com ganho ou zero           → passo 0
-settlement no passo máximo             → passo 0
+settlement com perda e passo < máximo                  → prejuízo pendente + perda; passo + 1
+ganho menor que o prejuízo pendente e tentativa livre  → reduz prejuízo; passo + 1
+ganho que cobre o prejuízo pendente                     → passo 0 e prejuízo 0
+settlement no passo máximo                              → encerra sequência delimitada
 ```
 
 O martingale não é uma estratégia e não aumenta a probabilidade de acerto. Ele somente altera a
-stake depois de uma liquidação confirmada, sob limites explícitos.
+stake depois de uma liquidação confirmada, sob limites explícitos. Ele não garante recuperação:
+uma cotação ou orçamento inviável bloqueia a entrada.
 
 ## 14. Persistência da configuração
 

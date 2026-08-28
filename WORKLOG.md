@@ -2857,3 +2857,645 @@ processos residuais.
 `2B23642D80EC7C2617762FCFB84382D6113C044E93BB232B6E1214B2B006AC26`. O recurso ZIP incorporado
 foi comparado byte a byte por SHA-256 com o payload externo. A instância anterior em uso pelo
 operador não foi interrompida; nenhum teste externo nem ordem Demo/Real foi executado.
+
+### WL-2026-08-27-01 — Transporte Deriv tolerante a backpressure e mensagens futuras
+
+**Defeito:** o reader WebSocket encerrava toda a conexão quando as filas de tick, saldo ou contrato
+enchiam, quando recebia um `msg_type` ainda não conhecido, uma resposta duplicada, um frame binário
+isolado ou um único JSON inválido. A fila de contratos também não recebia a notificação fatal do
+reader, deixando seu consumidor depender apenas de timeout.
+**Correção:** ticks e saldos agora usam drop-oldest com contadores; mensagens não assinadas,
+`ping`/`pong`, erros não pareados e tipos futuros são tratados sem derrubar o socket. A fila de
+contratos foi ampliada para 256, aguarda por até um segundo quando cheia e, persistindo o overflow,
+preserva a conexão e publica evidência para o Core solicitar reconciliação financeira. Somente erro
+real de `recv` ou cinco frames inválidos/binários consecutivos falham o reader. O snapshot imutável
+de saúde é propagado por IPC, com generation fencing e sem criar
+`HG_BROKER_EVENT_BACKPRESSURE`. A notificação fatal agora substitui o backlog nas três filas,
+incluindo contratos.
+**Segurança:** allowlist read-only, encoder sem `float`, envio de ordens, risco, ledger, Martingale e
+máquina de estados permaneceram inalterados. Overflow financeiro não gera retry nem descarte
+silencioso: ele aciona reconciliação pela verdade persistida do broker. Logs contêm apenas
+`msg_type`/`error.code` sanitizados. Nenhuma credencial foi lida e nenhuma ordem externa foi enviada.
+**Validação:** 11 regressões novas, incluindo 10.000 ticks com consumidor lento; suíte completa
+**630 passed, 4 skipped, 0 failed**. Ruff check/format, mypy, compileall e `git diff --check`
+aprovados.
+
+### WL-2026-08-27-02 — Watchdog WebSocket contra conexão half-open
+
+**Defeito:** ausência indefinida de frames era tratada como conexão válida, pois `recv(timeout)`
+apenas repetia o polling. Wi-Fi interrompido, NAT expirado ou suspensão do Windows podiam deixar o
+socket half-open, sem ticks e sem erro capaz de iniciar a recuperação supervisionada.
+**Correção:** cada frame agora renova a prova monotônica de vida. Uma thread daemon dedicada avalia
+a conexão a cada segundo, envia ping read-only após 15 segundos ociosos, exige nova prova de vida
+em 10 segundos, encerra stall de RX após 30 segundos e invalida imediatamente o socket quando o
+utilitário compartilhado detecta gap de suspensão superior a 10 segundos. Kills são idempotentes,
+abortam o socket sem handshake bloqueante, propagam `DERIV_HEARTBEAT_TIMEOUT` às três filas e
+publicam motivo/contadores no snapshot Worker/Core. `close()` continua silencioso e encerra reader
+e watchdog.
+**Segurança:** o ping cru `{\"ping\": 1}` passa pela allowlist read-only já existente; nenhuma
+permissão foi ampliada. O watchdog nunca chama `request()`, nunca reenvia operação, não toca ordem,
+risco, ledger, Martingale, reconciliação ou estado financeiro e não cria blocker por contagem de
+reconexões. Logs contêm apenas motivo sanitizado e idade de RX. Todos os prazos usam monotonic.
+**Validação:** 12 regressões de heartbeat com relógio controlado, incluindo half-open, pong,
+suspensão, send failure, concorrência, filas e término da thread. Suíte completa: **642 passed, 4
+skipped, 0 failed**; Ruff, mypy, compileall, scanner de segredos e `git diff --check` aprovados.
+Nenhum teste externo ou ordem Demo/Real foi executado.
+
+### WL-2026-08-27-03 — Reconciliação auto-recuperável e NOT_FOUND comprovado
+
+**Defeitos:** o coordenador usava timeout de 0,5 segundo, uma única repetição após 0,05 segundo e
+nenhum ciclo periódico; uma indisponibilidade transitória deixava
+`HG_RECONCILIATION_UNAVAILABLE` bloqueado para sempre. `NOT_FOUND` permanecia inconclusivo
+indefinidamente, `HG_SETTLEMENT_UNKNOWN` não possuía limpeza positiva e um ciclo vazio podia limpar
+gates sem ter realizado prova. O timeout escalado do Core também não chegava ao transporte Deriv,
+que continuava limitado internamente a três segundos.
+**Correção:** consultas usam quatro tentativas com timeouts 8/12/16/20 segundos e backoff
+exponencial 1/2/4 segundos, teto de 15 segundos e jitter de 25%, com prazos monotônicos. O novo
+`ReconciliationScheduler` executa em thread daemon serializada, reage a startup/reconexão e tenta
+periodicamente enquanto houver candidato ou gate transitório, com ciclos 5/10/20/30 segundos e
+shutdown limpo. Falhas de transporte, IPC e `WORKER_NOT_READY` são transitórias; inconsistências de
+protocolo/evidência vão para revisão humana e saem do ciclo automático.
+**NOT_FOUND:** o Worker consulta somente fontes read-only e só produz prova negativa quando
+`portfolio` e `statement` foram ambos verificados. Depois de 90 segundos de carência e duas provas
+distintas separadas por pelo menos 10 segundos, o `SingleDatabaseWriter` faz, numa única transação,
+`UNKNOWN → RECONCILING → REJECTED`, reconcilia a outbox e libera a reserva exatamente uma vez. Uma
+fonte, carência incompleta ou falha de consulta preserva `UNKNOWN` e a exposição. A progressão
+comprovada `SETTLEMENT_UNKNOWN → SETTLED` foi permitida sem aceitar regressões ou contradições.
+**Invariantes:** nenhuma rota de submissão foi acrescentada; o scheduler conhece apenas
+`OrderStatusPort`. Não existe retry de `ORDER_SUBMIT`, buy, proposal ou operação financeira. Core
+continua único escritor; gates só são limpos após ciclo positivo e releitura persistente; conflito
+continua exclusivamente humano. Nenhum token ou credencial foi usado.
+**Validação:** **658 passed, 4 skipped, 0 failed**. Ruff check/format, mypy em 213 arquivos-fonte,
+compileall e `git diff --check` aprovados. Regressões cobrem timeout de 3 segundos, três falhas e
+sucesso, worker ainda não pronto, seis ciclos do scheduler, idle sem polling de reconciliação,
+reentrância, daemon/shutdown, dupla prova NOT_FOUND, carência, fonte única, idempotência, limpeza de
+settlement, ciclo vazio, conflito fora do auto-loop, jitter/teto e execução fora do caminho quente.
+**Limitação:** testes externos Deriv permaneceram opt-in e não foram executados; a validação usou
+somente SQLite temporário, workers simulados e transporte fake. Nenhuma ordem Demo ou Real foi
+enviada.
+
+### WL-2026-08-27-04 — Exposição de risco com fonte única persistente
+
+**Defeito:** o `RiskLedger` mantinha reservas ativas em memória ao mesmo tempo em que o SQLite
+mantinha `risk_reservations.state = 'ACTIVE'`. Release, restart, restore parcial ou falha entre a
+transação e a atualização do dicionário podiam produzir exposição fantasma ou subcontagem.
+**Correção:** foi introduzido `ActiveExposurePort`; no runtime financeiro ele lê, a cada decisão,
+somente as reservas `ACTIVE` persistidas e vinculadas ao símbolo do `trade_intent`. Ausência ou
+falha dessa leitura bloqueia com `HG_EXPOSURE_UNKNOWN`. `restore`, `register_active_reservation` e
+`release_reservation` permanecem apenas como compatibilidade validada e não participam mais dos
+cálculos ou limites. O coordenador deixou de registrar uma segunda cópia após o commit.
+**Atomicidade e símbolos:** o writer preserva `BEGIN IMMEDIATE` e repete o check-and-insert na mesma
+transação que cria intent, reserva e outbox. A exposição global é agregada no SQLite; a exposição
+por símbolo é agregada em Python com a mesma canonicalização compartilhada para `frx`, `OTC_` e
+símbolos Deriv. A unicidade parcial por broker/conta continua garantida pelo banco.
+**Moeda:** foi adotada uma única moeda de referência configurada, em minor units inteiros. Pedido
+ou reserva ativa em outra moeda falha com `HG_EXPOSURE_CURRENCY_MISMATCH`; não existe soma entre
+moedas nem conversão implícita. Nenhum cache de exposição foi adicionado.
+**Regressões:** 14 testes novos cobrem leitura direta do banco, release sem atualização de memória,
+20 ciclos sem exposição fantasma, canonicalização, fail-closed e recuperação do gate, port ausente,
+restore validate-before-swap, registro idempotente/divergente, unicidade persistida, moeda mista,
+minor units, limites global/por símbolo e ausência de envio em falha de risco. O conjunto focal
+terminou com **36 passed, 0 failed**; o replay por queda passou **2/2** após receber uma fonte vazia
+explícita de simulação. Ruff check/format, mypy em 214 arquivos, compileall e `git diff --check`
+foram aprovados; 382 arquivos versionados/novos foram examinados pelo scanner, com zero achados.
+**Limitação do host:** a execução ampla independente do cofre terminou com **647 passed, 3 skipped,
+1 deselected** e uma falha do scanner causada por fixtures secretas intencionais deixadas em
+diretórios `work/test-tmp-risk-*` ignorados pelo Git e protegidos por ACL de execução anterior. Os
+testes DPAPI/Auth/Launcher dependentes do contexto de usuário também não puderam rodar neste sandbox
+(`VAULT_ENCRYPTION_FAILED`). As proteções não foram relaxadas nem ocultadas para obter resultado
+verde. Nenhuma credencial foi usada e nenhuma ordem Demo ou Real foi enviada.
+
+### WL-2026-08-27-05 — Auto trader sem leitura de banco no caminho quente e espera visível
+
+**Defeitos:** o loop Deriv fazia leitura SQLite a cada avaliação para descobrir se havia ordem em
+voo e também consultava desempenho recente durante a decisão. Em rajadas de ticks, isso disputava o
+writer pelo lock do banco justamente no fluxo de intenção/liquidação. A espera correta após
+`begin_new_run()` também permanecia invisível: o operador via o bot ligado e parado, religava ou
+trocava estratégia, e reiniciava a janela de sinal novo.
+**Correção:** `DerivDigitAutoTrader` agora mantém cache em memória de ordens Deriv não terminais e
+amostras recentes de desempenho, sem chamar `reader` em `notify_tick()`, `evaluate_once()` ou
+`_execution_candidates()`. O cache é semeado na inicialização, atualizado por eventos de ordem,
+recarregado depois de reconciliação/reconexão e falha fechado: cache ausente, erro de leitura ou
+conflito de evento bloqueia nova entrada com motivo explícito. Divergências entre cache e banco em
+reload emitem `autotrader_inflight_cache_divergence`.
+**Loop e UI:** os checks baratos agora ocorrem antes da telemetria completa. Notificações de tick
+são coalescidas por geração, com piso monotônico de 0,25 segundo e sem atraso quando os ticks chegam
+em cadence normal de aproximadamente 2 segundos. O estado exposto para a UI recebeu
+`UiBotWaitingStatus` com `reason_code`, `description`, `waiting_since_seconds`, `symbol`,
+`armed_epoch` e `rearm_notice`; a aba Deriv mostra o motivo legível e há quanto tempo aguarda.
+`begin_new_run()` continua descartando sinais antigos e apenas passou a reportar que o rearme
+reiniciou a espera.
+**Regressões:** foram adicionados testes unitários explícitos para zero leitura de banco em 1.000
+avaliações, cache semeado no startup, atualização por eventos, reload pós-reconciliação, bloqueio
+fail-closed, divergência observável, curto-circuito antes da telemetria, coalescing de rajada,
+cadência de 2 segundos sem atraso, exposição do motivo com duração, rearme reportado, semântica de
+`begin_new_run()` preservada, ausência de envio nos caminhos de falha e carga de 10.000 ticks sem
+submissão.
+**Validação:** antes do ajuste final de nomenclatura, a suíte completa desta etapa havia terminado
+com **679 passed, 4 skipped, 0 failed**. Após padronizar o campo como `waiting_since_seconds`, este
+host não expôs um Python de desenvolvimento com `pytest`, `ruff` ou `mypy`; o único Python
+disponível era um runtime embutido sem dependências. Foram executados `py_compile` nos arquivos
+afetados e `git diff --check`, ambos aprovados. Nenhuma credencial foi usada e nenhuma ordem Demo ou
+Real foi enviada.
+
+### WL-2026-08-27-06 — Martingale por payout real, recuperação dividida e stake de UI
+
+**Defeitos:** a progressão 2× ignorava o retorno líquido do contrato. Em `DIGITDIFF`, uma perda de
+USD 1 podia gerar stake USD 2 mesmo quando o lucro líquido era aproximadamente 9%–10%. A UI também
+mantinha um teto oculto de USD 4, fazendo uma entrada válida de USD 10 aparecer como se estivesse
+abaixo do mínimo.
+**Correção:** o worker Deriv ganhou uma rota de cotação somente de leitura. O Core usa
+`(payout - ask_price) / ask_price` e calcula `ceil(prejuízo_pendente / retorno_líquido)`, preferindo
+recuperação integral e dividindo o alvo entre as tentativas restantes quando necessário. Restart
+exige cotação nova. Recuperação sem orçamento falha fechado com
+`DIGIT_MARTINGALE_RECOVERY_UNAFFORDABLE`; não há clamp, retry financeiro nem alteração das regras
+de conta Real. Ganhos parciais reduzem o prejuízo pendente e a sequência só reseta quando ele é
+coberto ou quando termina o limite de passos.
+**UI:** o teto interno acompanha o Stop Loss informado, eliminando o bloqueio fixo de USD 4. O
+campo USD 10 passa a ser aceito quando é válido para o broker e para os limites gerais. A mensagem
+de validação agora distingue stake, Stop Loss e Take Profit. O multiplicador visual foi substituído
+por cálculo automático pela cotação.
+**Validação:** 89 testes matemáticos passaram, incluindo 80 combinações de estresse com retornos de
+5% a 95%, quatro níveis de prejuízo e quatro passos. O caminho IPC de proposta sem compra passou.
+A suíte ampla terminou com **766 passed, 4 skipped** e duas falhas de limpeza de arquivo SQLite
+temporário no Windows; após retry delimitado da limpeza, os dois testes foram repetidos e passaram.
+Ruff check/format e mypy em 214 arquivos passaram. Nenhuma credencial foi usada e nenhuma ordem
+Demo ou Real foi enviada.
+**Build:** o pipeline canônico v1.9.11 gerou onedir com 450 arquivos, scanner com zero achados,
+manifesto lógico `e614d1cb60a4fc4fb6502513f42a81448cbc5be15f86af77eb20f7b11feadf53` e health
+check aprovado. O portátil de arquivo único possui 57.069.568 bytes, versão `1.9.11.0`, SHA-256
+`321CC75C271FE65A92D15D96086B296EFD8B33D77E4D5C558F2F8916E85CA617` e também terminou seu
+health check com código 0. Inno Setup não estava disponível e nenhum installer foi declarado.
+
+### WL-2026-08-27-07 — Reset controlado da gestão de risco para testes Demo
+
+**Defeito:** depois de uma perda, a sequência persistida impedia qualquer alteração nos parâmetros
+com `DIGIT_MARTINGALE_SEQUENCE_ACTIVE`, mesmo sem ordem aberta. Isso deixava o operador sem como
+iniciar uma nova rodada de teste com outra stake.
+**Correção:** o comando existente `Aplicar Parâmetros` agora funciona como fronteira explícita de
+uma nova rodada. Quando não existe ordem Deriv de dígitos não terminal, o Core limpa passo do Gale,
+ativo fixado, prejuízo de recuperação, perdas consecutivas e cooldown, tanto em memória quanto no
+`state.db`, e então salva a configuração. O P&L diário não é apagado. Ordem aberta continua
+bloqueando a alteração, assim como Stop Loss, Take Profit e limites global/por símbolo.
+**Validação:** 13 testes focais e 53 testes de risco/UI/persistência/fluxo Deriv passaram. A
+regressão inclui sequência ativa persistida no SQLite e confirma reset exatamente no botão Aplicar,
+preservando o P&L diário. Ruff e mypy passaram. O onedir v1.9.11 passou scanner de segredos,
+manifesto de 450 arquivos e health check; o portátil atualizado também retornou código 0 no health
+check executado diretamente. Artefato final: 57.070.080 bytes, versão `1.9.11.0`, SHA-256
+`0C18003FED43DCBC4B4457F25999311AC41875D5BDC09CE147F5AC7C7FE7C90A`. Nenhuma ordem Demo ou
+Real foi enviada.
+
+### WL-2026-08-27-08 — Nova sessão Demo e ARM fail-closed visível
+
+**Defeito reproduzido:** o perfil do operador acumulou P&L da sessão de dígitos em USD -51,57 com
+Stop Loss de USD 50,00. O Core recusava corretamente o ARM com `HG_DAILY_STOP_REACHED`, porém não
+havia uma ação explícita na UI para começar outra rodada Demo. Além disso, uma tentativa de ARM
+recusada removia `HG_SAFE_STOP`; a UI podia então projetar o bot como ligado apesar de todas as
+ordens continuarem bloqueadas.
+**Correção:** a aba de parâmetros ganhou `Nueva Sesión Demo`. Com confirmação humana, Safe Stop,
+transporte `live-demo`, zero ordem Deriv de dígitos não terminal e zero reserva ativa, o Core zera
+atomicamente no `state.db` apenas o baseline de P&L e a progressão da sessão de teste. Ordens e
+resultados históricos permanecem. Conta Real, bot armado ou exposição pendente falham fechado. Uma
+tentativa de ARM recusada agora restaura `HG_SAFE_STOP`, mantém o botão desligado e devolve à UI o
+motivo específico, inclusive `HG_DAILY_STOP_REACHED`.
+O startup também passou a reconectar automaticamente a credencial Demo já salva, sempre mantendo
+Safe Stop; conta Real não é auto-selecionada sem necessidade de reconciliação.
+**Validação:** suíte completa final com **774 passed, 4 skipped, 0 failed**; Ruff check/format, mypy em
+214 arquivos, compileall e `git diff --check` aprovados. O onedir v1.9.11 passou scanner com zero
+achados, manifesto de 450 arquivos (`4e4479929ba00d3a109447a0ecbbe8b8bf9150d08c56b04a491d44ccef32a10c`)
+e health check. O portátil retornou código 0 e deixou zero processos residuais. Artefato:
+`TradingLab-Desktop-v1.9.11-BOT-START-FIXED.exe`, 57.077.760 bytes, versão 1.9.11.0,
+SHA-256 `703E7F60155804EA9AD6E586980168C00B696C89C55FC2D7665A9457B5326D31`. Nenhuma ordem Demo ou
+Real foi enviada.
+
+### WL-2026-08-27-09 — Reset persistente dos resultados da rodada Demo
+
+**Pedido:** permitir reiniciar os testes depois da trava por três losses sem apagar o histórico
+financeiro auditável.
+**Implementação:** a ação foi renomeada para `Reiniciar Resultados del Bot`. A migration append-only
+`0006_digit_test_session` adiciona um marco UTC persistente à rodada. O reset continua exigindo
+Safe Stop, conta Demo, zero ordem não terminal e zero reserva ativa; ele zera P&L de risco, losses,
+Stop/Take da rodada, cooldown, Gale, pin e prejuízo de recuperação. Dashboard, operações visíveis e
+cache de desempenho do auto trader passam a ler apenas settlements posteriores ao marco. As linhas
+históricas continuam intactas no SQLite e podem ser auditadas; conta Real permanece sem essa rota.
+**Validação:** regressões provam persistência após restart, exclusão visual dos resultados antigos,
+P&L corrente zerado, cache estatístico recarregado e histórico bruto preservado. Conjunto focado:
+67 testes aprovados. Suíte completa: **776 passed, 4 skipped, 0 failed**. Ruff check/format, mypy,
+compileall e `git diff --check` aprovados. O onedir passou scanner com zero achados, manifesto de
+450 arquivos (`311a4022346eac50195d76dcc04397b80a8cedcd332f2c69ab980fda11dbfa54`) e health
+check. O portátil `TradingLab-Desktop-v1.9.11-RESET-RESULTADOS.exe` tem 57.084.416 bytes, versão
+1.9.11.0 e SHA-256 `CC38167C899F85B6941E91DE28EFAE41B71B5E2094126D2AA141FECF395B0F9C`; health
+check terminou em código 0 e deixou zero processos. Nenhuma ordem externa foi enviada.
+
+### WL-2026-08-27-10 — Fase 1: catálogo Digit, EnginePool e seleção multi-estratégia
+
+**Defeitos confirmados:** o motor Digit instanciava as três estratégias em uma tupla literal; uma
+engine aceitava símbolo estrangeiro apagando silenciosamente seu deque e reiniciando o warm-up; e
+o executor tratava `SHADOW_SIGNAL` como filtro de execução, embora a evidência declarasse
+`entry_mode=SHADOW_ONLY`.
+
+**Implementação:** foi criado um registry local tipado sobre `strategy_catalog`, com manifest,
+factory, IDs estáveis, nome pt-BR, contratos, parâmetros, risco, lifecycle e warm-up. As três
+classes matemáticas existentes são injetadas pelo registry; uma quarta estratégia empacotada de
+teste é descoberta sem editar o engine. `DerivDigitEnginePool` mantém uma engine por símbolo,
+criada sob demanda, descartada no unsubscribe, limitada a 12 e com erro explícito para roteamento
+estrangeiro. O conjunto persistido `enabled_strategy_ids` controla elegibilidade, enquanto todas
+continuam em shadow. A UI ganhou seleção compacta das três e modo estresse Demo, habilitado por
+padrão; seleção vazia bloqueia com `BOT_NO_STRATEGY_SELECTED` e Real recusa o estresse com
+`BOT_STRESS_MODE_REQUIRES_DEMO`.
+
+**Arbitragem e auditoria:** o `SignalArbiter` existente recebeu arbitragem ranqueada de N candidatos
+por maior margem conservadora, maior amostra condicional, ID de estratégia e símbolo, sem
+aleatoriedade. Um ciclo consome vencedor e perdedores, grava motivos individuais e mantém o slot
+único de ordem do Risk Ledger. Mudança de seleção não altera ordem em voo. O journal registra
+`EXECUTABLE_DEMO` apenas para a vencedora e `SHADOW_ONLY` para as descartadas. Evidência histórica
+com `SHADOW_ONLY` não foi reescrita; esta semântica vale a partir da v1.9.11 em 27/08/2026.
+
+**Telemetria e saturação:** projeções por estratégia e símbolo incluem sinais emitidos, executados,
+perdidos na arbitragem, amostra, warm-up e p95 de latência. O canal da UI recebeu métricas agregadas
+de taxa, engines ativas, estratégias habilitadas, candidatos e p95 do ciclo. Ciclo acima do budget
+de 20.000 µs emite evidência de saturação e reduz gradualmente a cadência de cálculo, mantendo
+todos os ticks no buffer e sem descartar decisão persistida. O hot path não acessa SQLite.
+
+**Validação:** comportamento das três estratégias foi comparado contra as próprias implementações
+originais sem alteração das fórmulas, janelas, Wilson, limiares ou `_conditional_outcomes`. A carga
+local de 10 símbolos × 3 estratégias × 10.000 ticks terminou com `p95=206 µs`, pico de memória de
+`2.172.862 bytes`, 10 engines e zero leituras de banco. Suíte completa: **793 passed, 4 skipped, 0
+failed**. Ruff check/format, mypy em 215 arquivos, compileall e `git diff --check` aprovados. Testes
+externos não foram executados e nenhuma ordem Demo ou Real foi enviada.
+
+### WL-2026-08-27-11 — Correção pós-Fase 1: estado executável independente do ambiente
+
+**Versão:** v1.9.11, preservada conforme a política vigente do projeto.
+
+**Correção de evidência:** novos eventos de arbitragem deixam de combinar elegibilidade e ambiente
+no valor `entry_mode=EXECUTABLE_DEMO`. A vencedora passa a registrar
+`entry_mode=EXECUTABLE_SIGNAL`, enquanto o ambiente ocupa o campo próprio
+`execution_environment`. O auto trader financeiro continua restrito à conta Demo e, por isso,
+registra `execution_environment=DEMO`; as descartadas continuam `entry_mode=SHADOW_ONLY` e também
+recebem o campo explícito de ambiente. Nenhum registro histórico foi migrado ou reescrito:
+ocorrências anteriores de `EXECUTABLE_DEMO` e `SHADOW_ONLY` permanecem auditáveis como foram
+gravadas.
+
+**Estrutura de pacotes:** a verificação física e dos imports confirmou que existe somente
+`packages/strategy_catalog/`. O caminho `packages/strategies/strategy_catalog/` não existe e nenhum
+consumidor o importa, portanto não havia dois pacotes para consolidar nem API pública a mover.
+
+**Equivalência matemática:** o teste de regressão compara, byte a byte em serialização canônica e
+também por igualdade integral do dataclass, as decisões das três classes instanciadas diretamente
+com as mesmas estratégias descobertas pelo registry. Foram cobertas quatro séries determinísticas
+(499 ticks de warm-up, 500 alternando 9/0, 500 alternando 1/2 e 500 em ciclos uniformes 0–9), num
+total de 12 comparações. Estado, motivo, contrato, direção, barreira, probabilidades e toda a tupla
+de evidência são comparados sem modificar fórmula, limiar, janela, Wilson ou amostra mínima.
+
+**Validação:** 12/12 comparações de equivalência foram idênticas. Suíte completa com **793 passed,
+4 skipped, 0 failed**; Ruff check/format e mypy em 215 arquivos aprovados. Os testes externos
+permaneceram opt-in/ignorados, nenhuma credencial foi usada e nenhuma ordem Demo ou Real foi
+enviada.
+
+### WL-2026-08-27-12 — Fronteiras Wilson no teste de equivalência das 3 estratégias
+
+**Versão:** v1.9.11, preservada.
+
+**Escopo:** foram acrescentadas séries determinísticas de fronteira ao teste de regressão
+`test_digit_strategy_phase1_regressions.py`, sem alterar fórmula, limiar, janela, Wilson,
+amostra mínima ou código de execução financeira. A cobertura agora prova os pontos imediatamente
+acima e abaixo dos limiares para DIGITOVER, DIGITUNDER, DIGITDIFF, DIGITEVEN e DIGITODD; amostra
+condicional exatamente 70 aceita e 69 retorna `CONTEXT_INSUFFICIENT`; divergência de janelas no
+Digit Differs retorna `DIFFERS_EDGE_WINDOWS_DISAGREE`; e há séries com `p_hat` realista
+aproximado de 0,70, 0,90 e 0,50.
+
+**Evidência numérica:** acima do limiar: Over/Under `Wilson=52.000832`, margem `+0.000832pp`;
+Differs `Wilson=92.286830`, margem `+0.036830pp`; Even/Odd `Wilson=52.003746`, margem
+`+0.003746pp`. Abaixo do limiar: Over/Under `Wilson=51.999930`, margem `-0.000070pp`; Differs
+`Wilson=92.248471`, margem `-0.001529pp`; Even/Odd `Wilson=51.999440`, margem `-0.000560pp`.
+Séries realistas: Tail `p_hat=0.699399`, Differs `p_hat=0.900000`, Parity `p_hat=0.500000`.
+
+**Validação:** regressão focada: **21 passed**. Suíte completa: **808 passed, 4 skipped, 0
+failed**. Ruff check aprovado, Ruff format check aprovado e mypy em 215 arquivos aprovado.
+Nenhuma credencial foi usada e nenhuma ordem Demo ou Real foi enviada.
+
+### WL-2026-08-28-13 — Fase 2 revisada: proposal subscription, payout probe e sessão Differs dimensionada
+
+**Versão:** v1.9.11, preservada.
+
+**Etapa A — proposal subscription:** a documentação oficial da Deriv confirma que `proposal`
+aceita `subscribe: 1` e que a linha de limite compartilhada por `proposal`,
+`proposal_open_contract`, `buy` e `sell` é de 360 requests/minuto e 14.400 requests/hora. A sonda
+externa pública, sem token e sem `buy`, abriu 5 subscriptions simultâneas de `proposal` para
+R_10/R_25/R_50/R_75/R_100 com barreira 0; todas foram aceitas e removidas com `forget_all:
+proposal`. Como a página oficial contabiliza requests, não updates empurrados pelo WebSocket, o
+escopo aprovado usa 5 subscriptions iniciais e reserva margem explícita de 60 requests/minuto e
+2.400 requests/hora para `buy`, `proposal_open_contract` e reconciliação.
+
+**Etapa B — payout por barreira:** a sonda pública de 50 proposals pontuais
+(5 símbolos × 10 barreiras), executada sequencialmente e sem autenticação, retornou
+`payout_return_ratio=0.090000` para todas as barreiras em todos os símbolos. A divergência por
+barreira foi `0.000000pp`; portanto, a rotação de barreira foi removida do escopo operacional e a
+estratégia usa barreira fixa 0, configurável por parâmetro. A escolha permanece invariante ao
+histórico de dígitos.
+
+**Implementação:** foi adicionado o modelo imutável `BrokerProposalQuote` com `Money` e `Decimal`,
+sem payload bruto, login, token ou conta. O transporte Deriv agora possui fila própria para updates
+assinados de `proposal`, impedindo que subscriptions de proposal caiam como `msg_type`
+desconhecido. O worker continua sem caminho novo de `buy`; `quote_digit_contract` só normaliza
+evidence de cotação e preserva o método antigo de razão para Martingale. O Core recebeu
+`PayoutRoutedDiffersProposalCache`, `SlidingWindowBrokerMessageBudget`, cálculo exato
+`EV = 0.9 * W - 0.1`, TTL fail-closed, seleção determinística por maior payout entre símbolos e
+barreira fixa. O orçamento nomeado é 300 requests/minuto e 12.000 requests/hora para proposal,
+com evento `broker_message_budget_pressure` ao aproximar-se do teto. Como o IPC ainda não expõe
+um comando de subscription de proposal até o Core, o feeder operacional inicial usa polling bounded
+fora do caminho quente: 5 cotações por rodada, somente quando a estratégia está habilitada,
+equivalente a 150 requests/minuto com TTL de 2s, dentro do orçamento reservado.
+
+**Catálogo e execução:** a nova estratégia empacotada `payout-routed-differs-session` foi
+registrada com nome pt-BR “Sessão Differs por Melhor Payout”, contrato `DIGITDIFF`, warmup zero e
+status `PRACTICE_VALIDATED`. Ela não usa previsão de dígito e não emite sinal por histórico; o
+auto trader só cria candidato executável quando recebe proposal fresca do cache, em Demo, e passa
+pelo mesmo Signal Arbiter/Risk Ledger/slot único das estratégias existentes. A telemetria de
+histórico filtra essa estratégia para não contaminar o radar estatístico das três estratégias
+sniper. Martingale permanece não suportado nessa sessão.
+
+**Validação:** sonda externa pública: 5/5 subscriptions aceitas; 50/50 proposals pontuais
+coletadas; nenhuma credencial usada; nenhuma ordem Demo ou Real enviada. Testes focados:
+**79 passed**. Suíte completa: **820 passed, 4 skipped, 0 failed**. Ruff check global aprovado,
+Ruff format global aprovado, mypy em 216 arquivos aprovado, compileall em `apps` e `packages`
+aprovado e `git diff --check` aprovado.
+
+**Limitação residual:** esta etapa implementa o escopo dimensionado e os guardrails centrais da
+sessão, mas não promove conta Real, não cria retry financeiro, não promete expectativa positiva e
+não transforma subscription de proposal em requisito de teste unitário externo. A troca futura do
+feeder bounded por subscription streaming no IPC deve preservar a mesma fila de proposal, o mesmo
+orçamento de mensagens e os mesmos testes fail-closed.
+
+### WL-2026-08-28-14 — Correção pós-sonda: payout fixo, gate destravado e Sessão Differs mínima
+
+**Versão:** v1.9.11, preservada.
+
+**Correção crítica:** a sonda de payout confirmou `payout_return_ratio=0.090000` constante em todos
+os 5 símbolos e 10 barreiras testadas. O gate `min_payout_return_ratio` deixou de atuar como
+otimizador e passou a ser somente piso de segurança contra degradação: default `0.088`, aceitando o
+payout vigente `0.090000` e rejeitando cotações abaixo do piso. Foi adicionado teste com o payout
+real observado `0.090000`, provando que a entrada retorna `EXECUTABLE_SIGNAL`.
+
+**Escopo operacional revisado:** rotação por payout foi removida. A barreira permanece fixa em 0 e
+a cotação passa a usar apenas o símbolo ativo selecionado pelo cliente ou pelo ranking existente do
+sistema; nenhum novo seletor foi criado. O ID persistido permanece
+`payout-routed-differs-session`; apenas o nome exibível foi alterado para “Sessão Differs”.
+
+**Orçamento de mensagens:** o feeder agora faz somente verificação do símbolo em uso com TTL de 2s:
+1 cotação por rodada, equivalente a **30 requests/minuto** e **1.800 requests/hora**. Isso reduz o
+consumo anterior de 150 requests/minuto e mantém ampla margem da linha oficial compartilhada de
+360 requests/minuto para `buy`, `proposal_open_contract` e reconciliação.
+
+**Telemetria:** foi adicionado o evento `broker_payout_changed` quando a cotação DIGITDIFF da
+barreira fixa diverge do baseline observado `0.090000`, sem repetir o mesmo alerta para o mesmo
+símbolo/valor.
+
+**UI:** a tela de parâmetros aceita a Sessão Differs como estratégia configurável e exibe antes do
+início o custo esperado da sessão com EV exato negativo: `0.9 × 0.09 - 0.1 = -1,9%` por entrada,
+em valor absoluto conforme o stake configurado. O texto não sugere lucro garantido.
+
+**Validação:** testes focados da sessão Differs: **15 passed**. Testes focados de UI/protocolo/risco:
+**37 passed**. Suíte completa: **823 passed, 4 skipped, 0 failed**. Ruff check aprovado, Ruff format
+check aprovado, mypy em 216 arquivos aprovado, compileall em `apps` e `packages` aprovado e
+`git diff --check` aprovado. Nenhuma credencial foi usada e nenhuma ordem Demo ou Real foi enviada.
+
+### WL-2026-08-28-15 — Sonda diagnóstica de EV por contrato Deriv public proposal
+
+**Versão:** v1.9.11, preservada.
+
+**Coleta:** executada em 2026-08-27 22:27:40 -03:00 (2026-08-28 01:27:40 UTC) via WebSocket público
+Deriv, sem token, sem `authorize`, sem `loginid`, sem conta e sem `buy`. Foram planejadas e
+executadas 65 chamadas `proposal` read-only (13 combinações × 5 símbolos), sequenciais e com pausa
+entre requisições. O plano cabia no orçamento de 300 requests/minuto, portanto não houve redução
+para 2 símbolos.
+
+**Implementação diagnóstica:** adicionada a sonda `apps.core.contract_ev_probe`, reutilizando
+`DerivWebSocketClient`, `DerivOperation.PROPOSAL` e `SlidingWindowBrokerMessageBudget`. A allowlist
+pública passou a aceitar somente `proposal` estritamente read-only, com tipos de contrato
+necessários à sonda (`CALL`, `PUT`, `DIGITEVEN`, `DIGITODD`, `DIGITOVER`, `DIGITUNDER`,
+`DIGITMATCH`, `DIGITDIFF`) e sem `passthrough`, `buy`, `sell`, autenticação ou campos de conta. A
+sonda não registra estratégia, não toca catálogo, não cria migração e não persiste dado de domínio.
+
+**Tabela completa — payout e EV por contrato:**
+
+| Símbolo | Contrato | Barreira | Duração | Payout return | EV | Distância justo (pp) | Status |
+|---|---|---:|---:|---:|---:|---:|---|
+| R_10 | DIGITEVEN | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | DIGITODD | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | DIGITOVER | 4 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | DIGITUNDER | 5 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | DIGITOVER | 2 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_10 | DIGITUNDER | 7 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_10 | CALL | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | PUT | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | CALL | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | PUT | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | CALL | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | PUT | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_10 | DIGITMATCH | 0 | 1 | 7.930000 | -0.107000 | -107.000000 | OK |
+| R_25 | DIGITEVEN | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | DIGITODD | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | DIGITOVER | 4 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | DIGITUNDER | 5 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | DIGITOVER | 2 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_25 | DIGITUNDER | 7 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_25 | CALL | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | PUT | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | CALL | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | PUT | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | CALL | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | PUT | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_25 | DIGITMATCH | 0 | 1 | 7.930000 | -0.107000 | -107.000000 | OK |
+| R_50 | DIGITEVEN | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | DIGITODD | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | DIGITOVER | 4 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | DIGITUNDER | 5 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | DIGITOVER | 2 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_50 | DIGITUNDER | 7 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_50 | CALL | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | PUT | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | CALL | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | PUT | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | CALL | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | PUT | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_50 | DIGITMATCH | 0 | 1 | 7.930000 | -0.107000 | -107.000000 | OK |
+| R_75 | DIGITEVEN | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | DIGITODD | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | DIGITOVER | 4 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | DIGITUNDER | 5 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | DIGITOVER | 2 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_75 | DIGITUNDER | 7 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_75 | CALL | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | PUT | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | CALL | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | PUT | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | CALL | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | PUT | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_75 | DIGITMATCH | 0 | 1 | 7.930000 | -0.107000 | -107.000000 | OK |
+| R_100 | DIGITEVEN | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | DIGITODD | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | DIGITOVER | 4 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | DIGITUNDER | 5 | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | DIGITOVER | 2 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_100 | DIGITUNDER | 7 | 1 | 0.400000 | -0.020000 | -2.857143 | OK |
+| R_100 | CALL | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | PUT | — | 1 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | CALL | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | PUT | — | 5 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | CALL | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | PUT | — | 10 | 0.950000 | -0.025000 | -5.000000 | OK |
+| R_100 | DIGITMATCH | 0 | 1 | 7.930000 | -0.107000 | -107.000000 | OK |
+
+**Ranking por EV:** melhor grupo medido: `DIGITOVER` barreira 2 e `DIGITUNDER` barreira 7, nos 5
+símbolos, payout `0.400000`, EV `-0.020000` e distância do justo `-2.857143pp`. Referência
+anterior: `DIGITDIFF` barreira 0, payout `0.090000`, EV `-0.019000`. Portanto nenhum contrato
+medido superou o DIGITDIFF.
+
+**Respostas objetivas:** payout constante entre os 5 símbolos: sim, para todas as combinações
+medidas. EVEN e ODD pagam igual entre si: sim, `0.950000`. OVER 4 e UNDER 5 pagam igual a EVEN/ODD:
+sim, `0.950000`. Rise/Fall por duração 1/5/10 ticks: não melhorou nem piorou nesta coleta, todos
+`0.950000`; o EV reportado usa `p=0,5` aproximado e o EV real dependeria de drift/spread do índice,
+não medido nesta sonda. Contrato com EV menos negativo que DIGITDIFF: não.
+
+**Recomendação:** com estes números, não há base para implementar Parity Session nem Rise/Fall
+agora. O melhor candidato novo ficou em EV `-2,0%`, pior que a referência DIGITDIFF `-1,9%`; os
+contratos de paridade, Over/Under 4/5 e Rise/Fall ficaram em `-2,5%`; DIGITMATCH ficou em `-10,7%`
+como controle negativo.
+
+**Validação:** teste focado da sonda/validators/websocket: **41 passed**. O teste prova que a sonda
+usa exclusivamente `DerivOperation.PROPOSAL`, respeita orçamento, falha fechado quando o orçamento
+acaba e não emite `BUY` nem em caminho de falha/rate-limit. Nenhuma credencial foi usada e nenhuma
+ordem Demo ou Real foi enviada.
+
+## WL-2026-08-28-16 — Startup fix para perfil com Martingale Demo travado
+
+**Data/hora:** 2026-08-28 00:40 BRT.
+
+**Contexto:** o EXE atualizado fechava antes de abrir a UI quando o perfil padrão continha
+`digit_risk_runtime` com sequência de Martingale ativa presa a um fingerprint antigo de configuração.
+O caso real observado tinha `martingale_step=2`, `pinned_symbol=R_10`, nenhuma ordem Deriv não
+terminal e nenhuma reserva de risco ativa.
+
+**Correção:** `CoreRuntime.start()` agora trata `DIGIT_MARTINGALE_SEQUENCE_ACTIVE` no startup como
+estado recuperável quando o perfil está flat: se não houver ordem Deriv digit não terminal nem
+reserva `ACTIVE`, o Core reaplica a política atual com `reset_active_sequence=True`, mantém o P&L
+diário preservado, emite `digit_runtime_startup_sequence_reset` com
+`DIGIT_RUNTIME_POLICY_MISMATCH_FLAT` e permite que a aplicação abra em Safe Stop. Se houver exposição
+ativa, a inicialização continua fail-closed.
+
+**Validação:** adicionado teste de regressão
+`test_startup_resets_flat_stale_martingale_sequence_after_config_drift`. Validação focada:
+`tests/integration/test_storage_resilience.py` + `tests/unit/test_digit_risk_config.py` =
+**35 passed**. Nenhuma ordem foi enviada.
+
+## WL-2026-08-28-17 — Reset automático de sessão Demo ao rearmar testes
+
+**Data/hora:** 2026-08-28 00:57 BRT.
+
+**Contexto:** ao tentar rearmar o bot em Demo, o Health Gate mantinha bloqueios de sessão já
+encerrada, como `HG_DAILY_STOP_REACHED`, impedindo novos testes mesmo quando não havia ordem aberta
+nem reserva ativa.
+
+**Correção:** `CoreLifecycleService.resume()` agora reconhece bloqueios de sessão de teste Demo
+(`HG_DAILY_STOP_REACHED`, `HG_DAILY_TAKE_PROFIT_REACHED`, `HG_COOLDOWN_ACTIVE`) e, somente em
+`live-demo` e com Safe Stop ativo, executa o reset de sessão antes de tentar armar novamente. Conta
+Real e demais ambientes não recebem auto-reset.
+
+**Validação:** adicionado teste para auto-reset em Demo e teste garantindo que Real não reseta
+automaticamente. Validação focada: **43 passed**; Ruff, format, mypy e compileall aprovados.
+
+## WL-2026-08-28-18 — Debug desktop completo, cache de ordem rejeitada e reset Demo
+
+**Data/hora:** 2026-08-28 02:00 BRT.
+
+**Contexto:** sessão manual no aplicativo desktop compilado para reproduzir a queixa operacional:
+bot ligava, executava por um tempo, depois parava de abrir operações após loss/pausa/troca de
+estratégia ou reset.
+
+**Problemas reais encontrados e corrigidos:**
+
+- Ordem Deriv rejeitada de forma síncrona podia permanecer no cache em memória como se estivesse em
+  voo. O auto trader agora recarrega a projeção persistida após submissão financeira e só limpa a
+  ordem do cache quando o banco comprova estado terminal. Caso não haja prova, mantém fail-closed.
+- Diálogo de reset Demo podia não executar a ação após confirmação por comparação inadequada do enum
+  do PySide. A comparação agora usa igualdade de valor.
+- Reset Demo podia ser recusado quando o runtime já estava em Safe Stop, mas a flag do serviço estava
+  defasada. O reset agora aceita Safe Stop vindo do serviço ou do runtime e recarrega caches do auto
+  trader após sucesso.
+- A janela podia abrir maior que a área útil do monitor em telas baixas, deixando o botão inferior
+  parcialmente atrás da barra do Windows. A UI agora ajusta a geometria inicial à área útil.
+- O launcher interno podia permanecer vivo após o fechamento seguro porque o loop principal não
+  encerrava quando o supervisor já havia convergido para `STOPPED`. O launcher agora sai com código
+  0 nesse estado.
+- Aplicar parâmetros de risco com o bot ligado agora aciona Safe Stop antes de enviar a nova
+  configuração ao Core, evitando troca de regra em runtime ativo.
+
+**Testes manuais no desktop:** EXE portátil aberto; aba Deriv selecionada; cards Tail Probability
+Edge, Selective Differs Edge, Parity Regime Edge e Sessão Differs inspecionados; abas Resumen,
+Parámetros y riesgo, Mercado en vivo e Operaciones acionadas; botão de ligar/desligar validado com
+clique físico; reset de resultados validado pela UI.
+
+**Teste Demo controlado:** após reset, o runtime ficou com `daily_pnl_minor=0`,
+`consecutive_losses=0`, `martingale_step=0`, sem símbolo pinado e sem perda acumulada. Em seguida o
+bot foi armado em Demo, abriu e liquidou operações, e terminou com `daily_pnl_minor=99`, zero
+reservas ativas e zero ordens Deriv não terminais. O bot foi desligado por Safe Stop ao final.
+Nenhuma conta Real foi usada.
+
+**Validação automatizada:** suíte completa **836 passed, 4 skipped**; `ruff check`, `ruff format
+--check`, `mypy`, `compileall` e `git diff --check` aprovados. Após a correção final do launcher,
+testes focados de launcher/shutdown e regressões críticas: **23 passed**.
+
+**Build:** pipeline canônico `build_scripts/compile_trading_lab.py` gerou `dist/TradingLab` com
+scanner de segredo limpo, manifesto de 453 arquivos e health check aprovado. O smoke final do EXE
+confirmou startup completo e fechamento seguro sem processo órfão. Portátil final:
+`dist/TradingLab-Desktop-v1.9.11-DESKTOP-DEBUG-FIX.exe`, 57.199.104 bytes, SHA-256
+`98521BFF381678C41B2505DB1874E6522CC993C5861EE63462777F4C670C8026`.
+
+**Relatório:** `docs/DESKTOP_DEBUG_SESSION_V1_9_11.md`.
+
+## WL-2026-08-28-19 — Retomada automática pós-pausa e piso da recuperação Martingale
+
+**Data/hora:** 2026-08-28 11:45 BRT.
+
+**Contexto:** o aplicativo Demo continuava exibindo sinais e criando intenções após uma loss, mas
+as entradas seguintes apareciam como `REJECTED`. A sequência real auditada tinha perda de USD 1,00,
+recuperação de +USD 0,97 e residual de USD 0,03. O cálculo antigo gerou stakes inválidas de USD 0,34
+em `DIGITDIFF` e USD 0,04 em `DIGITODD`, produzindo rejeições sucessivas sem motivo persistido.
+
+**Correções:** a recuperação quote-aware agora nunca retorna valor abaixo da stake base já validada
+para o broker, mantendo todos os tetos de risco. O auto trader atualiza a expiração do
+`HG_COOLDOWN_ACTIVE` antes de consultar o Health Gate, permitindo retomada automática no primeiro
+tick posterior. O motivo de rejeição confirmado passa a ser persistido em
+`outbox_messages.state_reason`, emitido no journal e refletido no motivo operacional do bot. Ordem
+rejeitada não consome tentativa do lote de performance.
+
+**Segurança:** nenhuma regra de Stop Loss, exposição, stake máxima, limite de passos, UNKNOWN ou
+reconciliação foi reduzida. Deriv Real permaneceu read-only e nenhum caminho Real foi habilitado.
+
+**Validação:** regressões focadas **146 passed**. Suíte completa **840 passed, 4 skipped, 0 failed**.
+Ruff check/format, mypy, compileall e `git diff --check` aprovados. Relatório:
+`docs/PAUSE_AND_REJECTION_DEBUG_V1_9_11.md`.
+
+## WL-2026-08-28-20 — Build e validação externa Demo da retomada pós-loss
+
+**Data/hora:** 2026-08-28 11:55 BRT.
+
+**Build:** o pipeline canônico gerou a distribuição onedir em `dist_pause_fix/TradingLab`, com
+scanner de segredo limpo, manifesto de 453 arquivos e health check aprovado. O smoke do EXE em
+profile temporário isolado confirmou startup, Safe Stop, shutdown completo, banco íntegro e zero
+processos órfãos.
+
+**Teste Deriv Demo:** o artefato compilado foi conectado somente com `live-demo` e armado pela UI.
+Foram observadas duas perdas naturais de USD 1,00. Em ambas, o auto trader retomou sem intervenção,
+usou o piso válido de USD 1,00 em vez dos valores inválidos antigos de USD 0,34/0,04 e liquidou a
+recuperação calculada com stake de USD 10,12. Foram 12 ordens Demo novas, todas liquidadas, nenhuma
+nova rejeição, `pnl_application_count` máximo 1 e `release_count` máximo 1.
+
+**Estado final:** Safe Stop confirmado, zero reservas ativas, zero ordens Deriv não terminais,
+`PRAGMA integrity_check=ok`, fechamento seguro e zero processos restantes. Nenhuma conta Real foi
+selecionada e nenhuma ordem Real foi enviada.
+
+**Artefato:** `dist_pause_fix/TradingLab-Desktop-v1.9.11-PAUSE-RECOVERY-FIX.exe`, SHA-256
+`4525C17A7A916B062D16B7A7AFF21173D4E85E986F82E9A122A2D32A0BD3B231`.

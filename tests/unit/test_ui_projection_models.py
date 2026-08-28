@@ -11,9 +11,11 @@ from packages.protocol import (
     OrderSummary,
     ProtocolError,
     UiAccountMode,
+    UiBotWaitingStatus,
     UiDerivAssetRank,
     UiDerivStrategyStatus,
     UiGlobalState,
+    UiMultiStrategyMetrics,
     UiProjectionSnapshot,
 )
 
@@ -55,6 +57,11 @@ def _snapshot() -> UiProjectionSnapshot:
                 "TAIL_EDGE_NO_CONSERVATIVE_ADVANTAGE",
                 500,
                 500,
+                signals_emitted_total=7,
+                signals_executed_total=2,
+                signals_lost_to_arbitration_total=5,
+                analysis_latency_microseconds_p95=120,
+                conditional_sample=249,
             ),
         ),
         deriv_asset_ranking=(
@@ -74,6 +81,21 @@ def _snapshot() -> UiProjectionSnapshot:
                 analysis_latency_microseconds=9,
             ),
         ),
+        deriv_bot_waiting_status=UiBotWaitingStatus(
+            "BOT_WAITING_FOR_NEW_TICK",
+            "Aguardando um novo tick após o acionamento.",
+            7,
+            "R_100",
+            123,
+            True,
+        ),
+        multi_strategy_metrics=UiMultiStrategyMetrics(
+            12.5,
+            5,
+            3,
+            8,
+            900,
+        ),
     )
 
 
@@ -87,7 +109,14 @@ def test_ui_projection_round_trip_and_view_model_use_minor_units() -> None:
     assert "INDISPONÍVEL" in view.broker_lines[0]
     assert view.can_resume is True
     assert snapshot.deriv_strategies[0].strategy_id == "tail-probability-edge"
+    assert snapshot.deriv_strategies[0].signals_executed_total == 2
+    assert snapshot.deriv_strategies[0].signals_lost_to_arbitration_total == 5
     assert snapshot.deriv_asset_ranking[0].selected is True
+    assert snapshot.deriv_bot_waiting_status is not None
+    assert snapshot.deriv_bot_waiting_status.waiting_since_seconds == 7
+    assert snapshot.deriv_bot_waiting_status.rearm_notice is True
+    assert snapshot.multi_strategy_metrics is not None
+    assert snapshot.multi_strategy_metrics.active_engines == 5
 
 
 def test_ui_projection_rejects_float_money_and_unproven_currency() -> None:

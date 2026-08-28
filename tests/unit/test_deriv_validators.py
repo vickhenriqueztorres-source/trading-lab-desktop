@@ -60,12 +60,48 @@ def test_real_websocket_requires_explicit_real_expectation() -> None:
     assert validate_deriv_ws_url(url, expected_account_type="real") == url
 
 
-@pytest.mark.parametrize("opcode", ["buy", "sell", "proposal", "deposit", "withdraw"])
+@pytest.mark.parametrize("opcode", ["buy", "sell", "deposit", "withdraw"])
 def test_trading_denylist_runs_before_any_transport(opcode: str) -> None:
     payload: Mapping[str, object] = {opcode: "placeholder"}
 
     with pytest.raises(DerivWorkerError) as captured:
         validate_outbound_deriv_request(opcode, payload)
+
+    assert captured.value.reason_code == "DERIV_TRADING_OPERATION_DISABLED"
+
+
+def test_public_proposal_allows_only_strict_read_only_contract_probe() -> None:
+    validate_outbound_deriv_request(
+        "proposal",
+        {
+            "proposal": 1,
+            "amount": "1.00",
+            "basis": "stake",
+            "contract_type": "DIGITOVER",
+            "currency": "USD",
+            "duration": 1,
+            "duration_unit": "t",
+            "underlying_symbol": "R_100",
+            "barrier": "4",
+        },
+    )
+
+    with pytest.raises(DerivWorkerError) as captured:
+        validate_outbound_deriv_request(
+            "proposal",
+            {
+                "proposal": 1,
+                "amount": "1.00",
+                "basis": "stake",
+                "contract_type": "DIGITOVER",
+                "currency": "USD",
+                "duration": 1,
+                "duration_unit": "t",
+                "underlying_symbol": "R_100",
+                "barrier": "4",
+                "passthrough": {"order_id": "forbidden"},
+            },
+        )
 
     assert captured.value.reason_code == "DERIV_TRADING_OPERATION_DISABLED"
 

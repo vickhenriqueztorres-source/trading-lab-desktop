@@ -271,12 +271,19 @@ DIGIT_RISK_RUNTIME = Migration(
     ),
 )
 
+DIGIT_TEST_SESSION = Migration(
+    version=6,
+    name="0006_digit_test_session",
+    statements=("ALTER TABLE digit_risk_runtime ADD COLUMN session_started_at TEXT",),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
     RECONCILIATION,
     BROKER_ORDER_EVENTS,
     DIGIT_RISK_RUNTIME,
+    DIGIT_TEST_SESSION,
 )
 
 

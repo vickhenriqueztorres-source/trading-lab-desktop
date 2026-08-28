@@ -430,6 +430,189 @@ def test_restart_preserves_operator_martingale_configuration(tmp_path: Path) -> 
         restarted.shutdown()
 
 
+def test_apply_parameters_resets_stale_demo_martingale_sequence(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    profile = tmp_path / "profile"
+    runtime = CoreRuntime(profile)
+    runtime.start()
+    try:
+        config = replace(
+            runtime.risk_ledger.digit_config,
+            martingale_enabled=True,
+            max_consecutive_losses=3,
+            martingale_max_stake_minor_units=5000,
+        )
+        assert runtime.update_digit_risk_config(config) == (True, None)
+        runtime.risk_ledger.apply_digit_realized_pnl(-100, "USD", runtime.health_gate)
+        assert runtime.risk_ledger.get_digit_metrics().martingale_step == 1
+        with sqlite3.connect(runtime.database_path) as connection:
+            connection.execute(
+                """
+                UPDATE digit_risk_runtime
+                SET consecutive_losses = 1, martingale_step = 1,
+                    pinned_symbol = 'R_100', cumulative_sequence_loss_minor = 100
+                WHERE singleton_id = 1
+                """
+            )
+        before = runtime.reader.digit_risk_runtime()
+        assert before is not None and before["martingale_step"] == 1
+
+        changed = replace(config, stake_minor_units=1000)
+        assert runtime.update_digit_risk_config(changed) == (True, None)
+        metrics = runtime.risk_ledger.get_digit_metrics()
+        durable = runtime.reader.digit_risk_runtime()
+        assert metrics.martingale_step == 0
+        assert metrics.cumulative_sequence_loss_minor_units == 0
+        assert metrics.daily_pnl_minor_units == -100
+        assert durable is not None
+        assert durable["martingale_step"] == 0
+        assert durable["cumulative_sequence_loss_minor"] == 0
+    finally:
+        runtime.shutdown()
+
+
+def test_startup_resets_flat_stale_martingale_sequence_after_config_drift(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    from apps.core.digit_risk_store import DigitRiskConfigStore
+
+    profile = tmp_path / "profile"
+    runtime = CoreRuntime(profile)
+    runtime.start()
+    try:
+        config = replace(
+            runtime.risk_ledger.digit_config,
+            martingale_enabled=True,
+            max_consecutive_losses=3,
+            martingale_max_stake_minor_units=5000,
+        )
+        assert runtime.update_digit_risk_config(config) == (True, None)
+        runtime.risk_ledger.apply_digit_realized_pnl(-100, "USD", runtime.health_gate)
+        with sqlite3.connect(runtime.database_path) as connection:
+            connection.execute(
+                """
+                UPDATE digit_risk_runtime
+                SET daily_pnl_minor = -100, consecutive_losses = 1, martingale_step = 1,
+                    pinned_symbol = 'R_100', cumulative_sequence_loss_minor = 100
+                WHERE singleton_id = 1
+                """
+            )
+    finally:
+        runtime.shutdown()
+
+    changed = replace(config, stake_minor_units=1000)
+    DigitRiskConfigStore(profile / "digit_risk_config.json").save(changed)
+
+    events = InMemoryEventSink()
+    restarted = CoreRuntime(profile, event_sink=events)
+    restarted.start()
+    try:
+        metrics = restarted.risk_ledger.get_digit_metrics()
+        durable = restarted.reader.digit_risk_runtime()
+        assert metrics.martingale_step == 0
+        assert metrics.cumulative_sequence_loss_minor_units == 0
+        assert metrics.daily_pnl_minor_units == -100
+        assert durable is not None
+        assert durable["martingale_step"] == 0
+        assert durable["cumulative_sequence_loss_minor"] == 0
+        assert durable["daily_pnl_minor"] == -100
+        assert any(
+            event.event_name == "digit_runtime_startup_sequence_reset"
+            and event.reason_code == "DIGIT_RUNTIME_POLICY_MISMATCH_FLAT"
+            for event in events.events
+        )
+    finally:
+        restarted.shutdown()
+
+
+def test_explicit_demo_session_reset_clears_durable_daily_stop_and_allows_rearm(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    profile = tmp_path / "profile"
+    runtime = CoreRuntime(profile)
+    runtime.start()
+    try:
+        config = replace(
+            runtime.risk_ledger.digit_config,
+            daily_stop_loss_minor_units=100,
+            martingale_max_stake_minor_units=100,
+        )
+        assert runtime.update_digit_risk_config(config) == (True, None)
+        runtime.risk_ledger.apply_digit_realized_pnl(-100, "USD", runtime.health_gate)
+        historical_at = datetime.now(UTC) - timedelta(seconds=5)
+        with sqlite3.connect(runtime.database_path) as connection:
+            connection.execute(
+                "UPDATE digit_risk_runtime SET daily_pnl_minor = -100 WHERE singleton_id = 1"
+            )
+            connection.execute(
+                """
+                INSERT INTO trade_intents(
+                    intent_id, correlation_id, broker, account_id, product, symbol,
+                    direction, amount_minor, currency, status, created_at,
+                    strategy_id, strategy_version
+                ) VALUES (?, ?, 'DERIV', 'demo', 'DIGITOVER', 'R_100', 'CALL', 100,
+                          'USD', 'SETTLED', ?, 'tail-probability-edge', 'test')
+                """,
+                ("historical-intent", "historical-correlation", historical_at.isoformat()),
+            )
+            connection.execute(
+                """
+                INSERT INTO orders(
+                    order_id, intent_id, broker, account_id, broker_order_id, state,
+                    correlation_id, realized_pnl_minor, created_at, updated_at
+                ) VALUES (?, ?, 'DERIV', 'demo', 'historical-broker-order', 'SETTLED',
+                          ?, -100, ?, ?)
+                """,
+                (
+                    "historical-order",
+                    "historical-intent",
+                    "historical-correlation",
+                    historical_at.isoformat(),
+                    historical_at.isoformat(),
+                ),
+            )
+
+        assert len(runtime.reader.ui_order_summaries()) == 1
+
+        runtime.stop_new_entries()
+        assert runtime.resume_new_entries() is False
+        assert runtime.health_gate.contains("HG_DAILY_STOP_REACHED")
+
+        assert runtime.reset_digit_test_session() == (True, None)
+        durable = runtime.reader.digit_risk_runtime()
+        assert durable is not None and durable["daily_pnl_minor"] == 0
+        session_started_at = runtime.reader.digit_test_session_started_at()
+        assert session_started_at is not None
+        assert runtime.reader.count("orders") == 1
+        assert runtime.reader.ui_order_summaries(since_utc=session_started_at) == []
+        assert (
+            runtime.reader.deriv_recent_strategy_settlements(
+                since_utc=session_started_at,
+            )
+            == []
+        )
+        assert runtime.reader.daily_realized_pnl_by_currency(since_utc=session_started_at) == {}
+        assert runtime.risk_ledger.get_digit_metrics().daily_pnl_minor_units == 0
+        assert not runtime.health_gate.contains("HG_DAILY_STOP_REACHED")
+        assert runtime.safe_stop_active is True
+        assert runtime.resume_new_entries() is True
+    finally:
+        runtime.shutdown()
+
+    restarted = CoreRuntime(profile)
+    restarted.start()
+    try:
+        assert restarted.risk_ledger.get_digit_metrics().daily_pnl_minor_units == 0
+        assert restarted.reader.digit_test_session_started_at() == session_started_at
+    finally:
+        restarted.shutdown()
+
+
 def test_shutdown_and_restart_preserve_unknown_exposure(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     runtime = CoreRuntime(

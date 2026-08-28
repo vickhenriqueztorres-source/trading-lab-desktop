@@ -25,6 +25,7 @@ from packages.domain.models import (
     TradeIntentState,
     utc_now,
 )
+from packages.domain.symbols import canonicalize_symbol
 from packages.observability.events import EventSink, NullEventSink
 from packages.persistence.database import (
     DatabaseIntegrityError,
@@ -38,6 +39,7 @@ from packages.persistence.database import (
 )
 from packages.persistence.health import DatabaseFailureReason, DatabaseHealth
 from packages.persistence.migrations import MigrationError, apply_migrations
+from packages.protocol.messages import NotFoundEvidence
 
 
 class PersistenceError(RuntimeError):
@@ -272,15 +274,21 @@ class SingleDatabaseWriter:
         created_at: datetime,
         global_max_exposure_minor_units: int | None = None,
         max_exposure_per_symbol_minor_units: int | None = None,
+        reference_currency: str | None = None,
     ) -> None:
         payload = json.dumps(command.to_payload(), sort_keys=True, separators=(",", ":"))
 
         def operation(connection: sqlite3.Connection) -> None:
+            if reference_currency is not None and request.amount.currency != reference_currency:
+                raise RiskLimitExceededError(
+                    "HG_EXPOSURE_CURRENCY_MISMATCH",
+                    "Reservation currency does not match the configured reference currency.",
+                )
             if global_max_exposure_minor_units is not None:
                 row = connection.execute(
                     "SELECT COALESCE(SUM(amount_minor), 0) AS total "
-                    "FROM risk_reservations WHERE state = ?",
-                    (RiskReservationState.ACTIVE.value,),
+                    "FROM risk_reservations WHERE state = ? AND currency = ?",
+                    (RiskReservationState.ACTIVE.value, request.amount.currency),
                 ).fetchone()
                 active_global = int(row["total"])
                 if active_global + request.amount.minor_units > global_max_exposure_minor_units:
@@ -290,22 +298,21 @@ class SingleDatabaseWriter:
                         f"exceeds limit ({global_max_exposure_minor_units})",
                     )
             if max_exposure_per_symbol_minor_units is not None:
-                clean_sym = request.symbol.strip().upper()
-                sym_variants = (
-                    clean_sym,
-                    f"FRX{clean_sym}" if not clean_sym.startswith("FRX") else clean_sym[3:],
-                )
-                placeholders = ",".join("?" for _ in sym_variants)
-                row = connection.execute(
-                    f"""
-                    SELECT COALESCE(SUM(r.amount_minor), 0) AS total
+                rows = connection.execute(
+                    """
+                    SELECT r.amount_minor, r.currency, t.symbol
                     FROM risk_reservations r
                     JOIN trade_intents t ON t.intent_id = r.intent_id
-                    WHERE r.state = ? AND UPPER(t.symbol) IN ({placeholders})
+                    WHERE r.state = ? AND r.currency = ?
                     """,
-                    (RiskReservationState.ACTIVE.value, *sym_variants),
-                ).fetchone()
-                active_symbol = int(row["total"])
+                    (RiskReservationState.ACTIVE.value, request.amount.currency),
+                ).fetchall()
+                request_symbol = canonicalize_symbol(request.symbol)
+                active_symbol = sum(
+                    int(row["amount_minor"])
+                    for row in rows
+                    if canonicalize_symbol(str(row["symbol"])) == request_symbol
+                )
                 if active_symbol + request.amount.minor_units > max_exposure_per_symbol_minor_units:
                     raise RiskLimitExceededError(
                         "HG_SYMBOL_EXPOSURE_LIMIT_EXCEEDED",
@@ -397,7 +404,26 @@ class SingleDatabaseWriter:
 
         self._transaction(operation)
 
-    def configure_digit_risk_runtime(self, policy: Mapping[str, object]) -> None:
+    def list_active_reservations(self) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT rr.reservation_id, rr.broker, rr.account_id,
+                       rr.amount_minor, rr.currency, ti.symbol
+                FROM risk_reservations rr
+                JOIN trade_intents ti ON ti.intent_id = rr.intent_id
+                WHERE rr.state = 'ACTIVE'
+                ORDER BY rr.created_at, rr.reservation_id
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def configure_digit_risk_runtime(
+        self,
+        policy: Mapping[str, object],
+        *,
+        reset_active_sequence: bool = False,
+    ) -> None:
         """Mirror the active digit policy into state.db without losing an active sequence."""
 
         required = {
@@ -440,6 +466,7 @@ class SingleDatabaseWriter:
                 current is not None
                 and current["config_fingerprint"] != fingerprint
                 and int(current["martingale_step"]) > 0
+                and not reset_active_sequence
             ):
                 raise PersistenceError("DIGIT_MARTINGALE_SEQUENCE_ACTIVE")
             if current is None:
@@ -462,12 +489,20 @@ class SingleDatabaseWriter:
                     ),
                 )
             else:
+                reset_clause = (
+                    ", consecutive_losses = 0, martingale_step = 0, "
+                    "pinned_symbol = NULL, cumulative_sequence_loss_minor = 0, "
+                    "cooldown_started_at = NULL"
+                    if reset_active_sequence
+                    else ""
+                )
                 connection.execute(
-                    """
+                    f"""
                     UPDATE digit_risk_runtime
                     SET config_fingerprint = ?, currency = ?, martingale_enabled = ?,
                         martingale_max_steps = ?,
                         max_consecutive_losses = ?, cooldown_seconds = ?, updated_at = ?
+                        {reset_clause}
                     WHERE singleton_id = 1
                     """,
                     (
@@ -480,6 +515,50 @@ class SingleDatabaseWriter:
                         now,
                     ),
                 )
+
+        self._transaction(operation)
+
+    def reset_digit_test_session_if_flat(self) -> None:
+        """Reset durable Demo risk counters only when no financial work is pending."""
+
+        now = utc_now().isoformat()
+
+        def operation(connection: sqlite3.Connection) -> None:
+            pending = connection.execute(
+                """
+                SELECT 1
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                WHERE o.broker = 'DERIV'
+                  AND ti.product IN (
+                      'DIGITDIFF', 'DIGITOVER', 'DIGITUNDER', 'DIGITEVEN', 'DIGITODD'
+                  )
+                  AND o.state NOT IN ('SETTLED', 'REJECTED')
+                LIMIT 1
+                """
+            ).fetchone()
+            active_reservation = connection.execute(
+                "SELECT 1 FROM risk_reservations WHERE state = 'ACTIVE' LIMIT 1"
+            ).fetchone()
+            if pending is not None or active_reservation is not None:
+                raise PersistenceError("DIGIT_TEST_SESSION_RESET_BLOCKED_EXPOSURE")
+            updated = connection.execute(
+                """
+                UPDATE digit_risk_runtime
+                SET daily_pnl_minor = 0,
+                    consecutive_losses = 0,
+                    martingale_step = 0,
+                    pinned_symbol = NULL,
+                    cumulative_sequence_loss_minor = 0,
+                    cooldown_started_at = NULL,
+                    session_started_at = ?,
+                    updated_at = ?
+                WHERE singleton_id = 1
+                """,
+                (now, now),
+            )
+            if updated.rowcount != 1:
+                raise PersistenceError("DIGIT_RISK_RUNTIME_NOT_CONFIGURED")
 
         self._transaction(operation)
 
@@ -606,6 +685,7 @@ class SingleDatabaseWriter:
         outcome: str,
         *,
         broker_order_id: str | None = None,
+        reason_code: str | None = None,
         now: datetime | None = None,
     ) -> None:
         recorded_at = now or utc_now()
@@ -620,12 +700,15 @@ class SingleDatabaseWriter:
             if outcome == "ACCEPTED":
                 outbox_state = OutboxState.DISPATCHED
                 order_state = OrderState.ACCEPTED
+                state_reason = None
             elif outcome == "REJECTED":
                 outbox_state = OutboxState.DISPATCHED
                 order_state = OrderState.REJECTED
+                state_reason = reason_code or "BROKER_REJECTED"
             elif outcome == "TIMEOUT_AFTER_POSSIBLE_SEND":
                 outbox_state = OutboxState.AMBIGUOUS
                 order_state = OrderState.UNKNOWN
+                state_reason = reason_code or "POSSIBLE_SEND_TIMEOUT"
             else:
                 raise PersistenceError("unsupported worker outcome")
             connection.execute(
@@ -636,7 +719,7 @@ class SingleDatabaseWriter:
                 (
                     outbox_state.value,
                     (recorded_at.isoformat() if outbox_state is OutboxState.DISPATCHED else None),
-                    ("POSSIBLE_SEND_TIMEOUT" if outbox_state is OutboxState.AMBIGUOUS else None),
+                    state_reason,
                     command.message_id,
                 ),
             )
@@ -1407,7 +1490,14 @@ class SingleDatabaseWriter:
                         OrderState(str(row["state"])),
                         None,
                     )
-                if previous["external_status"] != evidence.external_status.value:
+                previous_status = ExternalOrderStatus(str(previous["external_status"]))
+                if (
+                    previous_status is not evidence.external_status
+                    and not self._is_valid_reconciliation_status_progression(
+                        previous_status,
+                        evidence.external_status,
+                    )
+                ):
                     return self._finish_reconciliation_conflict(
                         connection,
                         attempt_id,
@@ -1524,6 +1614,175 @@ class SingleDatabaseWriter:
         return result
 
     @staticmethod
+    def _is_valid_reconciliation_status_progression(
+        previous: ExternalOrderStatus,
+        current: ExternalOrderStatus,
+    ) -> bool:
+        """Permit only broker lifecycle progress; contradictions remain conflicts."""
+
+        return current in {
+            ExternalOrderStatus.ACCEPTED: {
+                ExternalOrderStatus.OPEN,
+                ExternalOrderStatus.SETTLEMENT_UNKNOWN,
+                ExternalOrderStatus.SETTLED,
+            },
+            ExternalOrderStatus.OPEN: {
+                ExternalOrderStatus.SETTLEMENT_UNKNOWN,
+                ExternalOrderStatus.SETTLED,
+            },
+            ExternalOrderStatus.SETTLEMENT_UNKNOWN: {
+                ExternalOrderStatus.SETTLED,
+            },
+        }.get(previous, set())
+
+    def apply_reconciliation_not_found(
+        self,
+        attempt_id: str,
+        evidence: NotFoundEvidence,
+        *,
+        not_found_grace_seconds: float,
+        confirmation_interval_seconds: float,
+        resolved_at: datetime | None = None,
+    ) -> ReconciliationApplyResult:
+        """Atomically finalize a proven never-submitted order and release its reservation."""
+
+        if (
+            not evidence.confirms_both_sources
+            or not_found_grace_seconds <= 0
+            or confirmation_interval_seconds <= 0
+        ):
+            raise ValueError("NOT_FOUND reconciliation proof is invalid")
+        actual_resolved_at = resolved_at or utc_now()
+        reason = "RECONCILIATION_NOT_FOUND_BOTH_SOURCES"
+
+        def operation(connection: sqlite3.Connection) -> ReconciliationApplyResult:
+            row = connection.execute(
+                """
+                SELECT o.order_id, o.intent_id, o.state, o.created_at,
+                       o.resolution_source
+                FROM reconciliation_attempts ra
+                JOIN orders o ON o.order_id = ra.order_id
+                WHERE ra.attempt_id = ? AND ra.result = 'STARTED'
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise PersistenceError("reconciliation attempt is not STARTED")
+            current = OrderState(str(row["state"]))
+            if current is OrderState.REJECTED and row["resolution_source"] == "STATUS_QUERY":
+                self._finish_reconciliation_attempt(
+                    connection,
+                    attempt_id,
+                    "IDEMPOTENT",
+                    reason,
+                    actual_resolved_at,
+                    None,
+                )
+                return ReconciliationApplyResult(
+                    ReconciliationApplyStatus.IDEMPOTENT,
+                    current,
+                    reason,
+                )
+            submitted_at = datetime.fromisoformat(str(row["created_at"]))
+            age_seconds = (evidence.observed_at - submitted_at).total_seconds()
+            prior = connection.execute(
+                """
+                SELECT attempt_id, completed_at
+                FROM reconciliation_attempts
+                WHERE order_id = ? AND attempt_id != ?
+                  AND result = 'UNRESOLVED' AND reason_code = ?
+                  AND completed_at IS NOT NULL
+                ORDER BY completed_at DESC LIMIT 1
+                """,
+                (row["order_id"], attempt_id, reason),
+            ).fetchone()
+            confirmed = False
+            if prior is not None:
+                prior_completed = datetime.fromisoformat(str(prior["completed_at"]))
+                confirmed = (
+                    evidence.observed_at - prior_completed
+                ).total_seconds() >= confirmation_interval_seconds
+            if (
+                current is not OrderState.UNKNOWN
+                or age_seconds < not_found_grace_seconds
+                or not confirmed
+            ):
+                self._finish_reconciliation_attempt(
+                    connection,
+                    attempt_id,
+                    "UNRESOLVED",
+                    reason,
+                    evidence.observed_at,
+                    None,
+                )
+                return ReconciliationApplyResult(
+                    ReconciliationApplyStatus.UNRESOLVED,
+                    current,
+                    reason,
+                )
+            self._transition_order(
+                connection,
+                str(row["intent_id"]),
+                OrderState.RECONCILING,
+                actual_resolved_at,
+            )
+            self._transition_order(
+                connection,
+                str(row["intent_id"]),
+                OrderState.REJECTED,
+                actual_resolved_at,
+            )
+            connection.execute(
+                """
+                UPDATE orders
+                SET resolution_source = 'STATUS_QUERY', resolved_at = ?
+                WHERE order_id = ?
+                """,
+                (actual_resolved_at.isoformat(), row["order_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE outbox_messages
+                SET state = ?, state_reason = ?, dispatched_at = COALESCE(dispatched_at, ?)
+                WHERE intent_id = ? AND state = ?
+                """,
+                (
+                    OutboxState.RECONCILED.value,
+                    "RECONCILED_NOT_FOUND",
+                    actual_resolved_at.isoformat(),
+                    row["intent_id"],
+                    OutboxState.AMBIGUOUS.value,
+                ),
+            )
+            evidence_reference = f"{reason}:{prior['attempt_id']}:{attempt_id}"
+            self._release_for_intent(
+                connection,
+                str(row["intent_id"]),
+                actual_resolved_at,
+                reason="RECONCILED_NOT_FOUND",
+                evidence=evidence_reference,
+            )
+            self._finish_reconciliation_attempt(
+                connection,
+                attempt_id,
+                "RESOLVED",
+                reason,
+                actual_resolved_at,
+                None,
+            )
+            self._inject("before_reconciliation_commit")
+            return ReconciliationApplyResult(
+                ReconciliationApplyStatus.RESOLVED,
+                OrderState.REJECTED,
+                reason,
+            )
+
+        result = self._transaction(operation)
+        if not isinstance(result, ReconciliationApplyResult):
+            raise PersistenceError("unexpected NOT_FOUND reconciliation result")
+        return result
+
+    @staticmethod
     def _apply_digit_runtime_settlement(
         connection: sqlite3.Connection,
         *,
@@ -1566,14 +1825,31 @@ class SingleDatabaseWriter:
             losses += 1
             cumulative += -pnl_minor
             if bool(runtime["martingale_enabled"]):
-                step = 0 if step >= int(runtime["martingale_max_steps"]) else step + 1
+                if step >= int(runtime["martingale_max_steps"]):
+                    step = 0
+                    cumulative = 0
+                else:
+                    step += 1
             else:
                 step = 0
             pinned_symbol = symbol if step > 0 else None
             if losses >= int(runtime["max_consecutive_losses"]):
                 cooldown_started_at = occurred_at.isoformat()
-        else:
+        elif pnl_minor > 0:
             losses = 0
+            cumulative = max(0, cumulative - pnl_minor)
+            if (
+                bool(runtime["martingale_enabled"])
+                and cumulative > 0
+                and step < int(runtime["martingale_max_steps"])
+            ):
+                step += 1
+            else:
+                step = 0
+                cumulative = 0
+                pinned_symbol = None
+            cooldown_started_at = None
+        else:
             step = 0
             cumulative = 0
             pinned_symbol = None
@@ -1885,6 +2161,7 @@ class FinancialUnitOfWork:
         created_at: datetime,
         global_max_exposure_minor_units: int | None = None,
         max_exposure_per_symbol_minor_units: int | None = None,
+        reference_currency: str | None = None,
     ) -> None:
         self._writer.persist_intent_reservation_outbox(
             request=request,
@@ -1895,4 +2172,5 @@ class FinancialUnitOfWork:
             created_at=created_at,
             global_max_exposure_minor_units=global_max_exposure_minor_units,
             max_exposure_per_symbol_minor_units=max_exposure_per_symbol_minor_units,
+            reference_currency=reference_currency,
         )

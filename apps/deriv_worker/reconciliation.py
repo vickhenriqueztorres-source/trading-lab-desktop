@@ -19,7 +19,7 @@ from packages.domain.models import (
     ReconciliationSource,
     StatusQueryOutcome,
 )
-from packages.protocol.messages import OrderStatusResult
+from packages.protocol.messages import NotFoundEvidence, OrderStatusResult
 
 
 class DerivLiveReconciliationHandler:
@@ -45,6 +45,7 @@ class DerivLiveReconciliationHandler:
     ) -> OrderStatusResult:
         if timeout is not None and timeout <= 0:
             raise ValueError("status query timeout must be positive")
+        effective_timeout = timeout if timeout is not None else self._timeout_seconds
         cid = causation_id or str(uuid4())
         if not self._order_session.trading_authenticated:
             return OrderStatusResult(
@@ -69,6 +70,8 @@ class DerivLiveReconciliationHandler:
         contract_data: dict[str, object] | None = None
         raw_bytes: bytes = b""
         query_failed = False
+        portfolio_checked = False
+        statement_checked = False
 
         if query.broker_order_id:
             try:
@@ -78,7 +81,7 @@ class DerivLiveReconciliationHandler:
                         "proposal_open_contract": 1,
                         "contract_id": int(query.broker_order_id),
                     },
-                    timeout=self._timeout_seconds,
+                    timeout=effective_timeout,
                 )
                 poc = response.get("proposal_open_contract")
                 if isinstance(poc, dict) and poc.get("contract_id") is not None:
@@ -98,7 +101,7 @@ class DerivLiveReconciliationHandler:
                             "proposal_open_contract": 1,
                             "contract_id": int(tracked.contract_id),
                         },
-                        timeout=self._timeout_seconds,
+                        timeout=effective_timeout,
                     )
                     poc = response.get("proposal_open_contract")
                     if isinstance(poc, dict) and poc.get("contract_id") is not None:
@@ -107,18 +110,68 @@ class DerivLiveReconciliationHandler:
                 except (DerivWorkerError, OSError, TimeoutError, ValueError):
                     query_failed = True
 
-        # 3. If still not found, query statement or profit_table
+        # 3. Prove absence from the complete set of currently open contracts.
         if contract_data is None:
             try:
                 response = self._transport.request(
+                    DerivOperation.PORTFOLIO,
+                    {"portfolio": 1},
+                    timeout=effective_timeout,
+                )
+                portfolio = response.get("portfolio")
+                contracts = portfolio.get("contracts") if isinstance(portfolio, dict) else None
+                if not isinstance(contracts, list):
+                    query_failed = True
+                else:
+                    portfolio_checked = True
+                    tracked_order = self._order_session.get_tracked_by_order_id(query.order_id)
+                    known_contract_ids = {
+                        str(value)
+                        for value in (
+                            query.broker_order_id,
+                            (tracked_order.contract_id if tracked_order is not None else None),
+                        )
+                        if value
+                    }
+                    for item in contracts:
+                        if not isinstance(item, dict):
+                            continue
+                        contract_id = item.get("contract_id")
+                        passthrough = item.get("passthrough")
+                        if contract_id is not None and (
+                            str(contract_id) in known_contract_ids
+                            or (
+                                isinstance(passthrough, dict)
+                                and passthrough.get("order_id") == query.order_id
+                            )
+                        ):
+                            return self._query_contract_id(
+                                query, str(contract_id), cid, timeout=effective_timeout
+                            )
+            except (DerivWorkerError, OSError, TimeoutError, ValueError):
+                query_failed = True
+
+        # 4. If still not found, query statement.
+        if contract_data is None:
+            try:
+                statement_request: dict[str, object] = {
+                    "statement": 1,
+                    "description": 1,
+                    "limit": 999,
+                    "action_type": "buy",
+                }
+                if query.submitted_at is not None:
+                    statement_request["date_from"] = int(query.submitted_at.timestamp())
+                response = self._transport.request(
                     DerivOperation.STATEMENT,
-                    {"statement": 1, "description": 1, "limit": 50},
-                    timeout=self._timeout_seconds,
+                    statement_request,
+                    timeout=effective_timeout,
                 )
                 statement = response.get("statement")
                 if isinstance(statement, dict):
                     transactions = statement.get("transactions")
                     if isinstance(transactions, list):
+                        statement_checked = True
                         for tx in transactions:
                             if not isinstance(tx, dict):
                                 continue
@@ -129,18 +182,33 @@ class DerivLiveReconciliationHandler:
                             ):
                                 contract_id = tx.get("contract_id")
                                 if contract_id:
-                                    return self._query_contract_id(query, str(contract_id), cid)
+                                    return self._query_contract_id(
+                                        query, str(contract_id), cid, timeout=effective_timeout
+                                    )
+                    else:
+                        query_failed = True
+                else:
+                    query_failed = True
             except (DerivWorkerError, OSError, TimeoutError, ValueError):
                 query_failed = True
 
-        # 4. Some Deriv account configurations expose the passthrough only in profit_table.
+        # 5. Some Deriv account configurations expose the passthrough only in profit_table.
         ambiguous_profit_match = False
         if contract_data is None:
             try:
                 response = self._transport.request(
                     DerivOperation.PROFIT_TABLE,
-                    {"profit_table": 1, "description": 1, "limit": 50},
-                    timeout=self._timeout_seconds,
+                    {
+                        "profit_table": 1,
+                        "description": 1,
+                        "limit": 500,
+                        **(
+                            {"date_from": int(query.submitted_at.timestamp())}
+                            if query.submitted_at is not None
+                            else {}
+                        ),
+                    },
+                    timeout=effective_timeout,
                 )
                 table = response.get("profit_table")
                 transactions = table.get("transactions") if isinstance(table, dict) else None
@@ -156,30 +224,53 @@ class DerivLiveReconciliationHandler:
                             continue
                         contract_id = tx.get("contract_id")
                         if contract_id is not None:
-                            return self._query_contract_id(query, str(contract_id), cid)
+                            return self._query_contract_id(
+                                query, str(contract_id), cid, timeout=effective_timeout
+                            )
                     matched_ids = self._match_profit_table_contracts(query, transactions)
                     if len(matched_ids) == 1:
-                        return self._query_contract_id(query, matched_ids[0], cid)
+                        return self._query_contract_id(
+                            query, matched_ids[0], cid, timeout=effective_timeout
+                        )
                     ambiguous_profit_match = len(matched_ids) > 1
             except (DerivWorkerError, OSError, TimeoutError, ValueError):
                 query_failed = True
 
         if contract_data is None:
+            if ambiguous_profit_match:
+                return OrderStatusResult(
+                    outcome=StatusQueryOutcome.INVALID_RESPONSE,
+                    evidence=None,
+                    response_message_id=str(uuid4()),
+                    correlation_id=query.correlation_id,
+                    causation_id=cid,
+                    reason_code="DERIV_RECONCILIATION_AMBIGUOUS_MATCH",
+                )
+            negative_evidence = (
+                NotFoundEvidence(
+                    observed_at=datetime.now(UTC),
+                    statement_checked=True,
+                    portfolio_checked=True,
+                )
+                if statement_checked and portfolio_checked and not query_failed
+                else None
+            )
             return OrderStatusResult(
                 outcome=(
-                    StatusQueryOutcome.UNAVAILABLE if query_failed else StatusQueryOutcome.NOT_FOUND
+                    StatusQueryOutcome.UNAVAILABLE
+                    if query_failed or negative_evidence is None
+                    else StatusQueryOutcome.NOT_FOUND
                 ),
                 evidence=None,
                 response_message_id=str(uuid4()),
                 correlation_id=query.correlation_id,
                 causation_id=cid,
                 reason_code=(
-                    "DERIV_RECONCILIATION_AMBIGUOUS_MATCH"
-                    if ambiguous_profit_match
-                    else "DERIV_STATUS_QUERY_UNAVAILABLE"
-                    if query_failed
+                    "DERIV_STATUS_QUERY_UNAVAILABLE"
+                    if query_failed or negative_evidence is None
                     else "DERIV_CONTRACT_NOT_FOUND"
                 ),
+                not_found_evidence=negative_evidence,
             )
 
         return self._build_evidence_from_contract(query, contract_data, raw_bytes, cid)
@@ -228,6 +319,8 @@ class DerivLiveReconciliationHandler:
         query: OrderStatusQuery,
         contract_id: str,
         causation_id: str,
+        *,
+        timeout: float | None = None,
     ) -> OrderStatusResult:
         try:
             response = self._transport.request(
@@ -236,7 +329,7 @@ class DerivLiveReconciliationHandler:
                     "proposal_open_contract": 1,
                     "contract_id": int(contract_id),
                 },
-                timeout=self._timeout_seconds,
+                timeout=timeout if timeout is not None else self._timeout_seconds,
             )
             poc = response.get("proposal_open_contract")
             if isinstance(poc, dict) and poc.get("contract_id") is not None:

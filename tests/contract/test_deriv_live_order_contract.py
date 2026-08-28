@@ -28,6 +28,7 @@ class CapturingDerivTransport(FakeDerivTransport):
     def __init__(self, scenario: FakeDerivScenario = FakeDerivScenario.NORMAL) -> None:
         super().__init__(scenario, demo_authenticated=True)
         self.payloads: list[tuple[DerivOperation, dict[str, object]]] = []
+        self.timeouts: list[tuple[DerivOperation, float]] = []
 
     def request(
         self,
@@ -37,6 +38,7 @@ class CapturingDerivTransport(FakeDerivTransport):
         timeout: float,
     ) -> dict[str, object]:
         self.payloads.append((operation, dict(payload)))
+        self.timeouts.append((operation, timeout))
         return super().request(operation, payload, timeout=timeout)
 
 
@@ -177,3 +179,36 @@ def test_reconciliation_accepts_digitdiff_contract_type_for_call_command() -> No
 
     assert result.outcome is StatusQueryOutcome.FOUND
     assert result.evidence is not None
+
+
+def test_reconciliation_not_found_requires_dual_read_proof_and_forwards_timeout() -> None:
+    transport = CapturingDerivTransport()
+    session = DerivLiveOrderSession(transport, "VRTC123456")
+    command = _command(product="DIGITDIFF", prediction_digit=4)
+    query = OrderStatusQuery.from_payload(
+        {
+            **command.to_payload(),
+            "client_order_ref": command.order_id,
+            "submitted_at": datetime.now(UTC).isoformat(),
+        },
+        command.correlation_id,
+    )
+
+    result = DerivLiveReconciliationHandler(transport, session).query_order_status(
+        query,
+        timeout=8.0,
+    )
+
+    assert result.outcome is StatusQueryOutcome.NOT_FOUND
+    assert result.not_found_evidence is not None
+    assert result.not_found_evidence.confirms_both_sources
+    reconciliation_operations = {
+        DerivOperation.PORTFOLIO,
+        DerivOperation.STATEMENT,
+        DerivOperation.PROFIT_TABLE,
+    }
+    assert [
+        timeout
+        for operation, timeout in transport.timeouts
+        if operation in reconciliation_operations
+    ] == [8.0, 8.0, 8.0]

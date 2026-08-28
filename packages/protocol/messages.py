@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 
 from packages.domain.market import (
     BrokerAccountBalance,
@@ -19,6 +20,7 @@ from packages.domain.models import (
     ReconciliationEvidence,
     StatusQueryOutcome,
     WorkerOutcome,
+    require_aware_utc,
 )
 from packages.protocol.envelope import Envelope, MessageType
 from packages.protocol.errors import ProtocolError, ProtocolErrorCode
@@ -122,6 +124,44 @@ class WorkerSubmissionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class NotFoundEvidence:
+    observed_at: datetime
+    statement_checked: bool
+    portfolio_checked: bool
+
+    def __post_init__(self) -> None:
+        require_aware_utc(self.observed_at, "observed_at")
+
+    @property
+    def confirms_both_sources(self) -> bool:
+        return self.statement_checked and self.portfolio_checked
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "observed_at": self.observed_at.isoformat(),
+            "statement_checked": self.statement_checked,
+            "portfolio_checked": self.portfolio_checked,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> NotFoundEvidence:
+        observed_at = payload.get("observed_at")
+        statement_checked = payload.get("statement_checked")
+        portfolio_checked = payload.get("portfolio_checked")
+        if (
+            not isinstance(observed_at, str)
+            or not isinstance(statement_checked, bool)
+            or not isinstance(portfolio_checked, bool)
+        ):
+            raise ValueError("invalid NOT_FOUND evidence")
+        return cls(
+            datetime.fromisoformat(observed_at),
+            statement_checked,
+            portfolio_checked,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class OrderStatusResult:
     outcome: StatusQueryOutcome
     evidence: ReconciliationEvidence | None
@@ -129,12 +169,15 @@ class OrderStatusResult:
     correlation_id: str
     causation_id: str
     reason_code: str | None = None
+    not_found_evidence: NotFoundEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.outcome is StatusQueryOutcome.FOUND and self.evidence is None:
             raise ValueError("FOUND status result requires evidence")
         if self.outcome is not StatusQueryOutcome.FOUND and self.evidence is not None:
             raise ValueError("only FOUND status result may contain evidence")
+        if self.outcome is not StatusQueryOutcome.NOT_FOUND and self.not_found_evidence is not None:
+            raise ValueError("only NOT_FOUND status result may contain negative evidence")
 
 
 def parse_order_submit(envelope: Envelope) -> OrderCommand:
@@ -235,6 +278,7 @@ def parse_order_status_response(envelope: Envelope) -> OrderStatusResult:
     outcome_value = _require(envelope.payload, "query_outcome", str)
     reason_code = envelope.payload.get("reason_code")
     raw_evidence = envelope.payload.get("evidence")
+    raw_not_found_evidence = envelope.payload.get("not_found_evidence")
     if reason_code is not None and not isinstance(reason_code, str):
         raise ProtocolError(
             ProtocolErrorCode.IPC_INVALID_ENVELOPE,
@@ -248,6 +292,7 @@ def parse_order_status_response(envelope: Envelope) -> OrderStatusResult:
             "unknown status query outcome",
         ) from exc
     evidence: ReconciliationEvidence | None = None
+    not_found_evidence: NotFoundEvidence | None = None
     if raw_evidence is not None:
         if not isinstance(raw_evidence, dict):
             raise ProtocolError(
@@ -260,6 +305,19 @@ def parse_order_status_response(envelope: Envelope) -> OrderStatusResult:
             raise ProtocolError(
                 ProtocolErrorCode.RECONCILIATION_INVALID_RESPONSE,
                 "invalid reconciliation evidence",
+            ) from exc
+    if raw_not_found_evidence is not None:
+        if not isinstance(raw_not_found_evidence, dict):
+            raise ProtocolError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                "NOT_FOUND evidence must be an object or null",
+            )
+        try:
+            not_found_evidence = NotFoundEvidence.from_payload(raw_not_found_evidence)
+        except (TypeError, ValueError) as exc:
+            raise ProtocolError(
+                ProtocolErrorCode.RECONCILIATION_INVALID_RESPONSE,
+                "invalid NOT_FOUND evidence",
             ) from exc
     if envelope.causation_id is None:
         raise ProtocolError(
@@ -274,6 +332,7 @@ def parse_order_status_response(envelope: Envelope) -> OrderStatusResult:
             correlation_id=envelope.correlation_id,
             causation_id=envelope.causation_id,
             reason_code=reason_code,
+            not_found_evidence=not_found_evidence,
         )
     except ValueError as exc:
         raise ProtocolError(

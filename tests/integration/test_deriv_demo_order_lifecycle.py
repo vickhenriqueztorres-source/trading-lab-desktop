@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import threading
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -136,6 +137,13 @@ def test_deriv_demo_order_lifecycle_full(test_db_path: Path) -> None:
 
     assert client.capabilities.can_submit_orders is True
     assert client.capabilities.supports_reconciliation is True
+    assert client.quote_digit_contract(
+        product="DIGITDIFF",
+        symbol="R_100",
+        amount_minor_units=100,
+        currency="USD",
+        prediction_digit=7,
+    ) == Decimal("0.10")
 
     # Setup Core services
     writer = SingleDatabaseWriter(test_db_path)

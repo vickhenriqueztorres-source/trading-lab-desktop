@@ -272,7 +272,7 @@ def test_deriv_reconciliation_refuses_non_unique_profit_table_match() -> None:
         _ambiguous_digit_query()
     )
 
-    assert result.outcome is StatusQueryOutcome.NOT_FOUND
+    assert result.outcome is StatusQueryOutcome.INVALID_RESPONSE
     assert result.reason_code == "DERIV_RECONCILIATION_AMBIGUOUS_MATCH"
 
 

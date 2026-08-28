@@ -26,6 +26,7 @@ addopts = "-ra"
 markers = [
     "external_deriv_public: opt-in smoke tests against Deriv public read-only API",
     "external_deriv_demo: opt-in smoke tests against a Deriv demo read-only session",
+    "slow: bounded local stress or soak test",
 ]
 
 [tool.ruff]

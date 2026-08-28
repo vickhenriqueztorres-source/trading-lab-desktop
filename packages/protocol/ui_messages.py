@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from math import isfinite
 from typing import TypeGuard
@@ -18,7 +18,7 @@ _MAX_TEXT = 128
 _MAX_GATES = 32
 _MAX_BROKERS = 4
 _MAX_ORDERS = 100
-_MAX_DERIV_STRATEGIES = 8
+_MAX_DERIV_STRATEGIES = 36
 _MAX_DERIV_ASSET_RANKS = 16
 
 
@@ -368,6 +368,15 @@ class UiDigitRiskConfig:
     currency: str = "USD"
     auto_select_symbol: bool = True
     active_strategy_id: str = "tail-probability-edge"
+    enabled_strategy_ids: frozenset[str] = frozenset(
+        {
+            "tail-probability-edge",
+            "selective-differs-edge",
+            "parity-regime-edge",
+            "payout-routed-differs-session",
+        }
+    )
+    stress_test_all_strategies_enabled: bool = True
     martingale_enabled: bool = False
     martingale_multiplier: Decimal = Decimal("2.00")
     martingale_max_steps: int = 2
@@ -409,8 +418,23 @@ class UiDigitRiskConfig:
             "tail-probability-edge",
             "selective-differs-edge",
             "parity-regime-edge",
+            "payout-routed-differs-session",
         }:
             raise ValueError("digit active strategy is invalid")
+        allowed_strategies = {
+            "tail-probability-edge",
+            "selective-differs-edge",
+            "parity-regime-edge",
+            "payout-routed-differs-session",
+        }
+        if isinstance(self.enabled_strategy_ids, list | tuple | set):
+            object.__setattr__(self, "enabled_strategy_ids", frozenset(self.enabled_strategy_ids))
+        if not isinstance(
+            self.enabled_strategy_ids, frozenset
+        ) or not self.enabled_strategy_ids.issubset(allowed_strategies):
+            raise ValueError("digit enabled strategies are invalid")
+        if type(self.stress_test_all_strategies_enabled) is not bool:
+            raise ValueError("digit stress mode is invalid")
         if type(self.martingale_enabled) is not bool:
             raise ValueError("digit martingale opt-in is invalid")
         if (
@@ -432,19 +456,8 @@ class UiDigitRiskConfig:
                 raise ValueError("digit martingale max stake is invalid")
             if self.max_consecutive_losses < self.martingale_max_steps + 1:
                 raise ValueError("digit martingale loss limit is too low")
-            projected_loss = sum(
-                min(
-                    int(
-                        (
-                            Decimal(self.stake_minor_units) * (self.martingale_multiplier**step)
-                        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-                    ),
-                    self.martingale_max_stake_minor_units,
-                )
-                for step in range(self.martingale_max_steps + 1)
-            )
-            if projected_loss > self.daily_stop_loss_minor_units:
-                raise ValueError("digit martingale sequence exceeds daily stop loss")
+            # The Core calculates recovery from the broker proposal's real net
+            # payout and enforces the remaining stop-loss budget per order.
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -457,6 +470,8 @@ class UiDigitRiskConfig:
             "selected_symbol": self.selected_symbol,
             "auto_select_symbol": self.auto_select_symbol,
             "active_strategy_id": self.active_strategy_id,
+            "enabled_strategy_ids": sorted(self.enabled_strategy_ids),
+            "stress_test_all_strategies_enabled": self.stress_test_all_strategies_enabled,
             "stake_minor_units": self.stake_minor_units,
             "martingale_enabled": self.martingale_enabled,
             "martingale_multiplier": str(self.martingale_multiplier),
@@ -484,17 +499,14 @@ class UiDigitRiskConfig:
         }
         automatic_selection_keys = {"auto_select_symbol"}
         active_strategy_keys = {"active_strategy_id"}
-        optional_keys = martingale_keys | automatic_selection_keys | active_strategy_keys
-        if frozenset(payload) not in {
-            frozenset(base_keys),
-            frozenset(base_keys | martingale_keys),
-            frozenset(base_keys | automatic_selection_keys),
-            frozenset(base_keys | martingale_keys | automatic_selection_keys),
-            frozenset(base_keys | active_strategy_keys),
-            frozenset(base_keys | martingale_keys | active_strategy_keys),
-            frozenset(base_keys | automatic_selection_keys | active_strategy_keys),
-            frozenset(base_keys | optional_keys),
-        }:
+        multi_strategy_keys = {
+            "enabled_strategy_ids",
+            "stress_test_all_strategies_enabled",
+        }
+        optional_keys = (
+            martingale_keys | automatic_selection_keys | active_strategy_keys | multi_strategy_keys
+        )
+        if not base_keys.issubset(payload) or not set(payload).issubset(base_keys | optional_keys):
             raise _invalid()
         stake = payload.get("stake_minor_units")
         stop = payload.get("daily_stop_loss_minor_units")
@@ -505,9 +517,11 @@ class UiDigitRiskConfig:
         martingale_enabled = payload.get("martingale_enabled", False)
         martingale_multiplier = payload.get("martingale_multiplier", "2.00")
         martingale_steps = payload.get("martingale_max_steps", 2)
-        martingale_max_stake = payload.get("martingale_max_stake_minor_units", 400)
+        martingale_max_stake = payload.get("martingale_max_stake_minor_units", stop)
         auto_select_symbol = payload.get("auto_select_symbol", True)
         active_strategy_id = payload.get("active_strategy_id", "tail-probability-edge")
+        enabled_strategy_ids = payload.get("enabled_strategy_ids", [active_strategy_id])
+        stress_mode = payload.get("stress_test_all_strategies_enabled", False)
         if (
             type(stake) is not int
             or type(stop) is not int
@@ -522,6 +536,9 @@ class UiDigitRiskConfig:
             or type(martingale_max_stake) is not int
             or type(auto_select_symbol) is not bool
             or not isinstance(active_strategy_id, str)
+            or not isinstance(enabled_strategy_ids, list)
+            or not all(isinstance(item, str) for item in enabled_strategy_ids)
+            or type(stress_mode) is not bool
         ):
             raise _invalid()
         try:
@@ -536,6 +553,8 @@ class UiDigitRiskConfig:
                 currency=_string(payload, "currency", 3),
                 auto_select_symbol=auto_select_symbol,
                 active_strategy_id=active_strategy_id,
+                enabled_strategy_ids=frozenset(enabled_strategy_ids),
+                stress_test_all_strategies_enabled=stress_mode,
                 martingale_enabled=martingale_enabled,
                 martingale_multiplier=Decimal(martingale_multiplier),
                 martingale_max_steps=martingale_steps,
@@ -602,6 +621,11 @@ class UiDerivStrategyStatus:
     estimated_probability_pct: str | None = None
     required_probability_pct: str | None = None
     analysis_latency_microseconds: int = 0
+    signals_emitted_total: int = 0
+    signals_executed_total: int = 0
+    signals_lost_to_arbitration_total: int = 0
+    analysis_latency_microseconds_p95: int = 0
+    conditional_sample: int = 0
 
     def __post_init__(self) -> None:
         for value in (
@@ -641,6 +665,15 @@ class UiDerivStrategyStatus:
             or self.analysis_latency_microseconds < 0
         ):
             raise ValueError("Deriv strategy analysis latency is invalid")
+        for metric_value in (
+            self.signals_emitted_total,
+            self.signals_executed_total,
+            self.signals_lost_to_arbitration_total,
+            self.analysis_latency_microseconds_p95,
+            self.conditional_sample,
+        ):
+            if type(metric_value) is not int or metric_value < 0:
+                raise ValueError("Deriv strategy telemetry is invalid")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -660,42 +693,64 @@ class UiDerivStrategyStatus:
             "strategy_id": self.strategy_id,
             "warmup_current": self.warmup_current,
             "warmup_required": self.warmup_required,
+            "signals_emitted_total": self.signals_emitted_total,
+            "signals_executed_total": self.signals_executed_total,
+            "signals_lost_to_arbitration_total": self.signals_lost_to_arbitration_total,
+            "analysis_latency_microseconds_p95": self.analysis_latency_microseconds_p95,
+            "conditional_sample": self.conditional_sample,
         }
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> UiDerivStrategyStatus:
-        _exact(
-            payload,
-            {
-                "display_name",
-                "last_contract_type",
-                "last_direction",
-                "last_barrier",
-                "last_signal_epoch",
-                "last_signal_symbol",
-                "estimated_probability_pct",
-                "required_probability_pct",
-                "analysis_latency_microseconds",
-                "lifecycle_status",
-                "markets",
-                "reason_code",
-                "signal_state",
-                "strategy_id",
-                "warmup_current",
-                "warmup_required",
-            },
-        )
+        required_keys = {
+            "display_name",
+            "last_contract_type",
+            "last_direction",
+            "last_barrier",
+            "last_signal_epoch",
+            "last_signal_symbol",
+            "estimated_probability_pct",
+            "required_probability_pct",
+            "analysis_latency_microseconds",
+            "lifecycle_status",
+            "markets",
+            "reason_code",
+            "signal_state",
+            "strategy_id",
+            "warmup_current",
+            "warmup_required",
+        }
+        telemetry_keys = {
+            "signals_emitted_total",
+            "signals_executed_total",
+            "signals_lost_to_arbitration_total",
+            "analysis_latency_microseconds_p95",
+            "conditional_sample",
+        }
+        actual = frozenset(payload)
+        if actual not in {frozenset(required_keys), frozenset(required_keys | telemetry_keys)}:
+            raise _invalid()
         current = payload.get("warmup_current")
         required = payload.get("warmup_required")
         signal_epoch = payload.get("last_signal_epoch")
         barrier = payload.get("last_barrier")
         latency = payload.get("analysis_latency_microseconds")
+        emitted = payload.get("signals_emitted_total", 0)
+        executed = payload.get("signals_executed_total", 0)
+        lost = payload.get("signals_lost_to_arbitration_total", 0)
+        latency_p95 = payload.get("analysis_latency_microseconds_p95", 0)
+        conditional_sample = payload.get("conditional_sample", 0)
         if (
             type(current) is not int
             or type(required) is not int
             or (signal_epoch is not None and type(signal_epoch) is not int)
             or (barrier is not None and type(barrier) is not int)
             or type(latency) is not int
+            or type(emitted) is not int
+            or type(executed) is not int
+            or type(lost) is not int
+            or type(latency_p95) is not int
+            or type(conditional_sample) is not int
         ):
             raise _invalid()
         try:
@@ -716,6 +771,11 @@ class UiDerivStrategyStatus:
                 estimated_probability_pct=_optional_string(payload, "estimated_probability_pct"),
                 required_probability_pct=_optional_string(payload, "required_probability_pct"),
                 analysis_latency_microseconds=latency,
+                signals_emitted_total=emitted,
+                signals_executed_total=executed,
+                signals_lost_to_arbitration_total=lost,
+                analysis_latency_microseconds_p95=latency_p95,
+                conditional_sample=conditional_sample,
             )
         except ValueError as exc:
             raise _invalid() from exc
@@ -854,6 +914,135 @@ class UiDerivAssetRank:
 
 
 @dataclass(frozen=True, slots=True)
+class UiBotWaitingStatus:
+    reason_code: str
+    description: str
+    waiting_since_seconds: int
+    symbol: str | None = None
+    armed_epoch: int | None = None
+    rearm_notice: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.reason_code or len(self.reason_code) > 64:
+            raise ValueError("bot waiting reason is invalid")
+        if not self.description or len(self.description) > 320:
+            raise ValueError("bot waiting description is invalid")
+        if type(self.waiting_since_seconds) is not int or self.waiting_since_seconds < 0:
+            raise ValueError("bot waiting duration is invalid")
+        if self.symbol is not None and (not self.symbol or len(self.symbol) > 32):
+            raise ValueError("bot waiting symbol is invalid")
+        if self.armed_epoch is not None and (
+            type(self.armed_epoch) is not int or self.armed_epoch <= 0
+        ):
+            raise ValueError("bot armed epoch is invalid")
+        if not isinstance(self.rearm_notice, bool):
+            raise TypeError("bot rearm notice must be boolean")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "armed_epoch": self.armed_epoch,
+            "description": self.description,
+            "rearm_notice": self.rearm_notice,
+            "reason_code": self.reason_code,
+            "symbol": self.symbol,
+            "waiting_since_seconds": self.waiting_since_seconds,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiBotWaitingStatus:
+        _exact(
+            payload,
+            {
+                "armed_epoch",
+                "description",
+                "rearm_notice",
+                "reason_code",
+                "symbol",
+                "waiting_since_seconds",
+            },
+        )
+        waiting = payload.get("waiting_since_seconds")
+        epoch = payload.get("armed_epoch")
+        rearm = payload.get("rearm_notice")
+        if (
+            type(waiting) is not int
+            or (epoch is not None and type(epoch) is not int)
+            or not isinstance(rearm, bool)
+        ):
+            raise _invalid()
+        return cls(
+            reason_code=_string(payload, "reason_code", 64),
+            description=_string(payload, "description", 320),
+            waiting_since_seconds=waiting,
+            symbol=_optional_string(payload, "symbol", 32),
+            armed_epoch=epoch,
+            rearm_notice=rearm,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UiMultiStrategyMetrics:
+    evaluations_per_second: float
+    active_engines: int
+    enabled_strategies: int
+    arbitration_candidates_p95: int
+    evaluation_cycle_duration_microseconds_p95: int
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.evaluations_per_second) or self.evaluations_per_second < 0:
+            raise ValueError("multi-strategy evaluation rate is invalid")
+        for value in (
+            self.active_engines,
+            self.enabled_strategies,
+            self.arbitration_candidates_p95,
+            self.evaluation_cycle_duration_microseconds_p95,
+        ):
+            if type(value) is not int or value < 0:
+                raise ValueError("multi-strategy metric is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "active_engines": self.active_engines,
+            "arbitration_candidates_p95": self.arbitration_candidates_p95,
+            "enabled_strategies": self.enabled_strategies,
+            "evaluation_cycle_duration_microseconds_p95": (
+                self.evaluation_cycle_duration_microseconds_p95
+            ),
+            "evaluations_per_second": self.evaluations_per_second,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiMultiStrategyMetrics:
+        _exact(
+            payload,
+            {
+                "active_engines",
+                "arbitration_candidates_p95",
+                "enabled_strategies",
+                "evaluation_cycle_duration_microseconds_p95",
+                "evaluations_per_second",
+            },
+        )
+        rate = payload.get("evaluations_per_second")
+        values = tuple(
+            payload.get(name)
+            for name in (
+                "active_engines",
+                "enabled_strategies",
+                "arbitration_candidates_p95",
+                "evaluation_cycle_duration_microseconds_p95",
+            )
+        )
+        if (
+            isinstance(rate, bool)
+            or not isinstance(rate, int | float)
+            or any(type(value) is not int for value in values)
+        ):
+            raise _invalid()
+        return cls(float(rate), *values)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True)
 class UiProjectionSnapshot:
     global_state: UiGlobalState
     safe_stop_active: bool
@@ -875,6 +1064,8 @@ class UiProjectionSnapshot:
     digit_next_stake_minor_units: int = 0
     digit_projected_sequence_loss_minor_units: int = 0
     deriv_bot_reason: str = "BOT_WAITING_FOR_LIVE_DERIV"
+    deriv_bot_waiting_status: UiBotWaitingStatus | None = None
+    multi_strategy_metrics: UiMultiStrategyMetrics | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.health_gates) <= _MAX_GATES:
@@ -949,6 +1140,16 @@ class UiProjectionSnapshot:
                 self.digit_projected_sequence_loss_minor_units
             ),
             "deriv_bot_reason": self.deriv_bot_reason,
+            "deriv_bot_waiting_status": (
+                None
+                if self.deriv_bot_waiting_status is None
+                else self.deriv_bot_waiting_status.to_payload()
+            ),
+            "multi_strategy_metrics": (
+                None
+                if self.multi_strategy_metrics is None
+                else self.multi_strategy_metrics.to_payload()
+            ),
         }
 
     @classmethod
@@ -976,6 +1177,8 @@ class UiProjectionSnapshot:
             "digit_next_stake_minor_units",
             "digit_projected_sequence_loss_minor_units",
             "deriv_bot_reason",
+            "deriv_bot_waiting_status",
+            "multi_strategy_metrics",
         }
         actual_keys = set(payload)
         if not (
@@ -1000,6 +1203,8 @@ class UiProjectionSnapshot:
         next_stake = payload.get("digit_next_stake_minor_units", 0)
         projected_sequence_loss = payload.get("digit_projected_sequence_loss_minor_units", 0)
         deriv_bot_reason = payload.get("deriv_bot_reason", "BOT_WAITING_FOR_LIVE_DERIV")
+        waiting_status_payload = payload.get("deriv_bot_waiting_status")
+        multi_strategy_metrics_payload = payload.get("multi_strategy_metrics")
         if (
             not isinstance(safe_stop, bool)
             or type(pnl) is not int
@@ -1055,6 +1260,18 @@ class UiProjectionSnapshot:
                 next_stake,
                 projected_sequence_loss,
                 deriv_bot_reason,
+                (
+                    None
+                    if waiting_status_payload is None
+                    else UiBotWaitingStatus.from_payload(_mapping(waiting_status_payload))
+                ),
+                (
+                    None
+                    if multi_strategy_metrics_payload is None
+                    else UiMultiStrategyMetrics.from_payload(
+                        _mapping(multi_strategy_metrics_payload)
+                    )
+                ),
             )
         except ValueError as exc:
             raise _invalid() from exc

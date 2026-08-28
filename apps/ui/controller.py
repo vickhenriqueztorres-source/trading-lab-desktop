@@ -84,6 +84,11 @@ class UiController:
         self.refresh()
         return ack
 
+    def reset_digit_test_session(self) -> UiCommandAck:
+        ack = self._client.reset_digit_test_session()
+        self.refresh()
+        return ack
+
     def stop(self) -> None:
         self._stop.set()
         thread = self._thread

@@ -56,11 +56,24 @@ _STRATEGY_DETAILS: dict[str, _StrategyDetails] = {
         ),
         "evidence": "Hipótese: dependência condicional entre par e ímpar",
     },
+    "payout-routed-differs-session": {
+        "contract": "DIGITDIFF · 1 tick",
+        "parameters": (
+            ("Sessão", "Símbolo ativo escolhido pelo cliente/ranking existente"),
+            ("Barreira", "Fixa em 0"),
+            ("Payout observado", "0,090000"),
+            ("Piso de segurança", "0,088000"),
+        ),
+        "evidence": (
+            "Sem histórico de dígitos; usa proposal fresca apenas como verificação de payout"
+        ),
+    },
 }
 
 
 class SyntheticStrategyConfigWidget(QWidget):
     config_apply_requested = Signal(object)
+    test_session_reset_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -109,6 +122,7 @@ class SyntheticStrategyConfigWidget(QWidget):
         self._evidence.setVisible(False)
         self.risk_panel = DigitConfigPanelWidget()
         self.risk_panel.config_apply_requested.connect(self.config_apply_requested.emit)
+        self.risk_panel.test_session_reset_requested.connect(self.test_session_reset_requested.emit)
         root.addWidget(self.risk_panel, 1)
         self.set_strategy(self._strategy_id)
 

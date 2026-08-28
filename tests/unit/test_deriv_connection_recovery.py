@@ -201,3 +201,186 @@ def test_account_connection_retries_transient_worker_startup_failure(
     assert "replacement.start:2" in events
     assert "wait:1.0" in events
     assert events[-2:] == ["telemetry.start", "financial.attach"]
+
+
+def test_saved_demo_is_scheduled_for_safe_startup_reconnect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    class _Vault:
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def load(self) -> object:
+            return SimpleNamespace(account_type="demo")
+
+    service = CoreLifecycleService(
+        tmp_path,
+        ("simulated", "deriv_read_only"),
+        force_auth_simulation=True,
+        deriv_transport="fake-public",
+    )
+    monkeypatch.setattr("apps.core.lifecycle_service.DerivCredentialVault", _Vault)
+    monkeypatch.setattr(service, "_request_deriv_recovery", requested.append)
+    service._safe_stop = True
+
+    service._schedule_saved_deriv_startup(has_deriv_recovery=False)
+
+    assert service._deriv_transport == "live-demo"
+    assert requested == ["DERIV_SAVED_DEMO_AUTO_CONNECT"]
+    assert service.safe_stop_active is True
+
+
+def test_saved_real_is_not_auto_selected_without_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    class _Vault:
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def load(self) -> object:
+            return SimpleNamespace(account_type="real")
+
+    service = CoreLifecycleService(
+        tmp_path,
+        ("simulated", "deriv_read_only"),
+        force_auth_simulation=True,
+        deriv_transport="fake-public",
+    )
+    monkeypatch.setattr("apps.core.lifecycle_service.DerivCredentialVault", _Vault)
+    monkeypatch.setattr(service, "_request_deriv_recovery", requested.append)
+
+    service._schedule_saved_deriv_startup(has_deriv_recovery=False)
+
+    assert service._deriv_transport == "fake-public"
+    assert requested == []
+
+
+def test_demo_result_reset_reloads_auto_trader_performance_cache(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class _ResetRuntime:
+        safe_stop_active = True
+
+        def reset_digit_test_session(self) -> tuple[bool, None]:
+            events.append("runtime.reset")
+            return True, None
+
+    class _Trader:
+        def reload_runtime_caches(self) -> None:
+            events.append("trader.reload")
+
+    service = CoreLifecycleService(
+        tmp_path,
+        ("simulated", "deriv_read_only"),
+        force_auth_simulation=True,
+        deriv_transport="live-demo",
+    )
+    service._runtime = _ResetRuntime()  # type: ignore[assignment]
+    service._deriv_auto_trader = _Trader()  # type: ignore[assignment]
+    service._safe_stop = True
+
+    assert service.reset_digit_test_session() == (True, "DIGIT_TEST_SESSION_RESET")
+    assert events == ["runtime.reset", "trader.reload"]
+
+
+def test_demo_result_reset_accepts_runtime_safe_stop_if_service_flag_is_stale(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    class _ResetRuntime:
+        safe_stop_active = True
+
+        def reset_digit_test_session(self) -> tuple[bool, None]:
+            events.append("runtime.reset")
+            return True, None
+
+    service = CoreLifecycleService(
+        tmp_path,
+        ("simulated", "deriv_read_only"),
+        force_auth_simulation=True,
+        deriv_transport="live-demo",
+    )
+    service._runtime = _ResetRuntime()  # type: ignore[assignment]
+    service._safe_stop = False
+
+    assert service.reset_digit_test_session() == (True, "DIGIT_TEST_SESSION_RESET")
+    assert service.safe_stop_active is True
+    assert events == ["runtime.reset"]
+
+
+def test_demo_resume_auto_resets_previous_test_session_daily_stop(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class _Gate:
+        def __init__(self) -> None:
+            self._blockers = ("HG_SAFE_STOP", "HG_DAILY_STOP_REACHED")
+
+        def get_snapshot(self) -> object:
+            return SimpleNamespace(active_blockers=self._blockers)
+
+    class _ResettableRuntime:
+        def __init__(self) -> None:
+            self.health_gate = _Gate()
+            self._resume_attempts = 0
+
+        def resume_new_entries(self) -> bool:
+            self._resume_attempts += 1
+            events.append(f"runtime.resume:{self._resume_attempts}")
+            return self._resume_attempts > 1
+
+        def reset_digit_test_session(self) -> tuple[bool, None]:
+            events.append("runtime.reset")
+            self.health_gate._blockers = ("HG_SAFE_STOP",)
+            return True, None
+
+    service = CoreLifecycleService(
+        tmp_path,
+        ("simulated", "deriv_read_only"),
+        force_auth_simulation=True,
+        deriv_transport="live-demo",
+    )
+    service._runtime = _ResettableRuntime()  # type: ignore[assignment]
+    service._safe_stop = True
+
+    assert service.resume() is True
+    assert service.safe_stop_active is False
+    assert events == ["runtime.resume:1", "runtime.reset", "runtime.resume:2"]
+
+
+def test_non_demo_resume_does_not_auto_reset_daily_stop(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class _Gate:
+        def get_snapshot(self) -> object:
+            return SimpleNamespace(active_blockers=("HG_SAFE_STOP", "HG_DAILY_STOP_REACHED"))
+
+    class _RuntimeWithBlockedResume:
+        health_gate = _Gate()
+
+        def resume_new_entries(self) -> bool:
+            events.append("runtime.resume")
+            return False
+
+        def reset_digit_test_session(self) -> tuple[bool, None]:
+            events.append("runtime.reset")
+            return True, None
+
+    service = CoreLifecycleService(
+        tmp_path,
+        ("simulated", "deriv_read_only"),
+        force_auth_simulation=True,
+        deriv_transport="live-real",
+    )
+    service._runtime = _RuntimeWithBlockedResume()  # type: ignore[assignment]
+    service._safe_stop = True
+
+    assert service.resume() is False
+    assert service.safe_stop_active is True
+    assert events == ["runtime.resume"]

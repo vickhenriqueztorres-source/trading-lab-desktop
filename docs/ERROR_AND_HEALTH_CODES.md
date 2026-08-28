@@ -79,15 +79,28 @@ O `HealthGate` opera em dois níveis estritamente isolados:
 - `HG_SYMBOL_EXPOSURE_LIMIT_EXCEEDED` — a exposição somada em um mesmo ativo canônico cross-broker (ex: EURUSD) excede o teto do ativo;
 - `HG_DAILY_STOP_REACHED` — o P&L realizado diário consolidado de todas as corretoras atingiu o stop loss máximo, bloqueando novas entradas globalmente (`RISK_LOCKED`);
 - `HG_DAILY_TAKE_PROFIT_REACHED` — a meta diária configurada para `DIGITDIFF` foi atingida; novas entradas ficam bloqueadas para preservar o lucro já realizado;
-- `HG_COOLDOWN_ACTIVE` — sequência máxima de perdas consecutivas atingida, ativando pausa. A origem UTC e a duração ficam em `state.db`; após restart o Core reconstrói o restante e usa `time.monotonic()` somente para a espera dentro do processo atual.
+- `HG_COOLDOWN_ACTIVE` — sequência máxima de perdas consecutivas atingida, ativando pausa. A origem UTC e a duração ficam em `state.db`; após restart o Core reconstrói o restante e usa `time.monotonic()` somente para a espera dentro do processo atual. O auto trader atualiza esse blocker antes de verificar o gate; no primeiro tick posterior ao vencimento ele é removido automaticamente.
+
+Motivos operacionais relacionados apresentados pelo auto trader:
+
+- `BOT_RISK_COOLDOWN_ACTIVE` — pausa de perdas ainda dentro do prazo; retomada automática no primeiro tick após o vencimento;
+- `BOT_PERFORMANCE_COOLDOWN` — pausa de até 10 minutos para uma estratégia/ativo com amostra recente líquida não positiva;
+- `BOT_ENTRY_REJECTED_<reason>` — a submissão foi comprovadamente rejeitada. O `reason` também é persistido em `outbox_messages.state_reason` e emitido no journal redigido para diagnóstico.
 
 `DERIV_READY_TO_ARM` é uma projeção explicativa da UI, não um blocker financeiro novo. Pode exibir
 `BROKER_PROCESS_NOT_READY`, `BROKER_NOT_AUTHENTICATED`, `RECONCILIATION_INCOMPLETE`,
 `RISK_NOT_READY`, `CLOCK_NOT_TRUSTED`, `MARKET_NOT_HEALTHY` ou `WARMUP_INCOMPLETE`.
 
-Os blockers de Stop Loss e Take Profit não são limpos por edição da configuração durante o mesmo
-dia. O reset diário explícito zera P&L/contadores e limpa as travas. O cooldown não cancela nem
-interrompe a liquidação de contratos abertos.
+Os blockers de Stop Loss e Take Profit não são limpos por edição da configuração. Na conta Demo,
+o comando explícito `Resetar Resultados do Bot`, executado com Safe Stop e sem ordem/exposição
+pendente, cria um novo baseline persistido. P&L, ganhos/perdas, contador de losses, cooldown,
+Martingale e cache de desempenho passam a considerar somente a nova rodada. O histórico de ordens
+é preservado para auditoria, mas deixa de aparecer e influenciar a sessão corrente. O bot permanece
+desarmado e conta Real é rejeitada. O cooldown não cancela nem interrompe contratos abertos.
+
+Códigos do reset: `DIGIT_TEST_SESSION_RESET`, `DERIV_DEMO_REQUIRED`, `SAFE_STOP_REQUIRED`,
+`DIGIT_TEST_SESSION_RESET_BLOCKED_EXPOSURE`, `DIGIT_TEST_SESSION_RESET_FAILED` e
+`DIGIT_TEST_SESSION_RESET_UNAVAILABLE`.
 
 Validação de configuração de dígitos pode responder com os códigos estáveis
 `DIGIT_RISK_STAKE_BELOW_MINIMUM`, `DIGIT_RISK_STOP_LOSS_INVALID`,

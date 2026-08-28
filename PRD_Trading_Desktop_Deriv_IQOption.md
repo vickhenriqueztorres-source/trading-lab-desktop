@@ -493,6 +493,8 @@ sinaliza o Launcher; falha da UI degrada apenas a projeção e o Core permanece 
 | FR-109 | P1 | Suportar pacotes assinados e entitlement | Pacote remoto adulterado, não autorizado, suspenso ou incompatível é rejeitado. |
 | FR-110 | P0 | Suspender estratégia sem abandonar operação existente | `SUSPENDED` impede novas entradas e mantém acompanhamento das ordens abertas. |
 | FR-111 | P0 | Manter estratégias atuais separadas de promessa de resultado | Tail Probability Edge, Selective Differs Edge e Parity Regime Edge são experimentais, não garantias de rentabilidade. |
+| FR-112 | P0 | Permitir seleção explícita de N estratégias Digit Edge | Todas continuam em análise shadow; somente as habilitadas disputam, por arbitragem determinística, o único slot de ordem da conta. |
+| FR-113 | P0 | Isolar o motor de ticks por símbolo | Cada `(broker, símbolo)` possui buffer e warm-up próprios, limitados a 12 engines; tick estrangeiro falha explicitamente. |
 
 ## 15. Regras de negócio
 
@@ -519,6 +521,8 @@ sinaliza o Launcher; falha da UI degrada apenas a projeção e o Core permanece 
 | BR-019 | Estratégia só executa quando manifesto, hash, compatibilidade, entitlement e status permitem. |
 | BR-020 | Signal Arbiter precede Portfolio Allocator e Risk Ledger. |
 | BR-021 | Sinais opostos no mesmo contexto cancelam a entrada no MVP; sinais iguais não multiplicam stake. |
+| BR-022 | Modo estresse com todas as estratégias habilitadas é exclusivo da conta Demo; conta Real continua sem submissão financeira. |
+| BR-023 | Seleção vazia falha fechada e nenhuma mudança de seleção altera ordem já em voo. |
 
 ## 16. Telas do produto
 

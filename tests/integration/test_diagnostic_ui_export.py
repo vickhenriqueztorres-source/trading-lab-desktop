@@ -6,7 +6,12 @@ from uuid import uuid4
 
 from apps.core.diagnostic_service import CoreDiagnosticService
 from apps.core.health import HealthGate
-from apps.core.risk import GlobalRiskConfig, RiskLedger
+from apps.core.risk import (
+    GlobalRiskConfig,
+    RestoredExposure,
+    RiskLedger,
+    StaticActiveExposurePort,
+)
 from apps.core.ui_service import CoreUiProjectionService
 from apps.ui.ipc_client import UiIpcClient
 from packages.domain.models import Broker, Money
@@ -27,7 +32,20 @@ class DummyRuntime:
         self.database_path = profile_dir / "state.db"
         self.event_sink = InMemoryEventSink()
         self.health_gate = HealthGate()
-        self.risk_ledger = RiskLedger(GlobalRiskConfig())
+        self.risk_ledger = RiskLedger(
+            GlobalRiskConfig(),
+            active_exposure_port=StaticActiveExposurePort(
+                (
+                    RestoredExposure(
+                        "res_1",
+                        Broker.DERIV.value,
+                        "VRTC1001",
+                        Money(1500, "USD"),
+                        "frxEURUSD",
+                    ),
+                )
+            ),
+        )
         self.worker_supervisor = None
 
 
@@ -36,11 +54,6 @@ def test_ui_generate_diagnostic_end_to_end(tmp_path: Path) -> None:
     # Emit some events to the sink
     runtime.event_sink.emit("CORE_STARTUP", reason_code="BOOT_OK", component="CORE")
     runtime.event_sink.emit("HEALTH_GATE_OPENED", reason_code="ALL_READY")
-
-    # Setup risk ledger metrics
-    runtime.risk_ledger.register_active_reservation(
-        "res_1", Broker.DERIV.value, "VRTC1001", "frxEURUSD", Money(1500, "USD")
-    )
 
     diag_service = CoreDiagnosticService(runtime, reports_dir=tmp_path / "diagnostics")
 

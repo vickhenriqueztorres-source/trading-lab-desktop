@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +15,7 @@ from apps.core.reconciliation import (
     ReconciliationCoordinator,
     ReconciliationOutcome,
 )
+from apps.core.reconciliation_scheduler import ReconciliationScheduler
 from apps.core.runtime import CoreRuntime
 from apps.core.worker_client import StatusQueryError
 from apps.core.worker_supervisor import WorkerSupervisor
@@ -26,12 +29,14 @@ from packages.domain.models import (
     OrderRequest,
     OrderState,
     OrderStatusQuery,
+    StatusQueryOutcome,
 )
 from packages.persistence.database import open_writer_connection
 from packages.persistence.migrations import MIGRATIONS, apply_migrations
 from packages.persistence.reader import StateReader
 from packages.persistence.writer import ReconciliationApplyStatus, SingleDatabaseWriter
 from packages.protocol.errors import ProtocolErrorCode
+from packages.protocol.messages import NotFoundEvidence, OrderStatusResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +240,41 @@ def test_rec_10_broker_id_conflict_is_detected_when_both_ids_exist(tmp_path: Pat
     assert applied.reason_code == "BROKER_ORDER_ID_CONFLICT"
 
 
+def test_rec_conflict_stays_blocked_and_is_excluded_from_auto_cycle(tmp_path: Path) -> None:
+    fixture = create_ambiguous(tmp_path)
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    gate = HealthGate()
+    supervisor = WorkerSupervisor(
+        gate,
+        scenario=WorkerScenario.STATUS_CONFLICT_AMOUNT,
+        response_timeout=0.2,
+        heartbeat_interval=10.0,
+        broker_store_path=fixture.broker_store_path,
+    )
+    client = supervisor.start()
+    coordinator = ReconciliationCoordinator(
+        writer,
+        reader,
+        client,
+        gate,
+        max_query_attempts=1,
+        retry_delay=0,
+    )
+    try:
+        first = coordinator.reconcile_all()
+        second = coordinator.reconcile_all()
+    finally:
+        supervisor.shutdown()
+        writer.close()
+
+    assert first.results[0].outcome is ReconciliationOutcome.MANUAL_REVIEW_REQUIRED
+    assert second.results == ()
+    assert gate.contains("HG_RECONCILIATION_CONFLICT")
+    assert reader.list_reconciliation_candidates() == []
+    assert SimulatedBrokerStore.read_metrics(fixture.broker_store_path)["status_query_count"] == 1
+
+
 def test_rec_11_12_repeated_evidence_is_idempotent_and_conflict_cannot_regress(
     tmp_path: Path,
 ) -> None:
@@ -321,6 +361,52 @@ class UnavailableStatusWorker:
         )
 
 
+class RecoveringStatusWorker:
+    def __init__(self, evidence: object, failure_code: ProtocolErrorCode) -> None:
+        self.evidence = evidence
+        self.failure_code = failure_code
+        self.timeouts: list[float | None] = []
+
+    def query_order_status(
+        self, query: OrderStatusQuery, *, timeout: float | None = None
+    ) -> OrderStatusResult:
+        self.timeouts.append(timeout)
+        if len(self.timeouts) <= 3:
+            raise StatusQueryError(self.failure_code, "temporary status boundary failure")
+        return OrderStatusResult(
+            outcome=StatusQueryOutcome.FOUND,
+            evidence=self.evidence,  # type: ignore[arg-type]
+            response_message_id=str(uuid4()),
+            correlation_id=query.correlation_id,
+            causation_id=query.order_id,
+        )
+
+
+class EvidenceStatusWorker:
+    def __init__(self, evidence: object) -> None:
+        self.evidence = evidence
+
+    def query_order_status(
+        self, query: OrderStatusQuery, *, timeout: float | None = None
+    ) -> OrderStatusResult:
+        del timeout
+        return OrderStatusResult(
+            outcome=StatusQueryOutcome.FOUND,
+            evidence=self.evidence,  # type: ignore[arg-type]
+            response_message_id=str(uuid4()),
+            correlation_id=query.correlation_id,
+            causation_id=query.order_id,
+        )
+
+
+class ThreeSecondStatusWorker(EvidenceStatusWorker):
+    def query_order_status(
+        self, query: OrderStatusQuery, *, timeout: float | None = None
+    ) -> OrderStatusResult:
+        assert timeout is not None and timeout >= 3.0
+        return super().query_order_status(query, timeout=timeout)
+
+
 def test_rec_16_unavailable_worker_uses_only_bounded_read_retries(tmp_path: Path) -> None:
     fixture = create_ambiguous(tmp_path)
     writer = SingleDatabaseWriter(fixture.database_path)
@@ -341,6 +427,195 @@ def test_rec_16_unavailable_worker_uses_only_bounded_read_retries(tmp_path: Path
     assert report.results[0].outcome is ReconciliationOutcome.FAILED
     assert reader.count("reconciliation_attempts") == 2
     assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+
+
+def test_slow_query_within_new_timeout_resolves(tmp_path: Path) -> None:
+    fixture = create_ambiguous(tmp_path, WorkerScenario.REJECT_BUT_DROP_RESPONSE)
+    store = SimulatedBrokerStore(fixture.broker_store_path)
+    evidence = store.query_order(query_from_fixture(fixture))
+    store.close()
+    assert evidence is not None
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+
+    report = ReconciliationCoordinator(
+        writer,
+        reader,
+        ThreeSecondStatusWorker(evidence),
+        HealthGate(),
+        max_query_attempts=1,
+    ).reconcile_all()
+    writer.close()
+
+    assert report.results[0].outcome is ReconciliationOutcome.RESOLVED
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "REJECTED"
+
+
+@pytest.mark.parametrize(
+    "failure_code",
+    [
+        ProtocolErrorCode.RECONCILIATION_QUERY_TIMEOUT,
+        ProtocolErrorCode.WORKER_NOT_READY,
+    ],
+)
+def test_rec_transient_failures_use_realistic_timeouts_and_backoff_then_recover(
+    tmp_path: Path, failure_code: ProtocolErrorCode
+) -> None:
+    fixture = create_ambiguous(tmp_path, WorkerScenario.REJECT_BUT_DROP_RESPONSE)
+    store = SimulatedBrokerStore(fixture.broker_store_path)
+    evidence = store.query_order(query_from_fixture(fixture))
+    store.close()
+    assert evidence is not None
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    gate = HealthGate()
+    gate.block("HG_ORDER_UNKNOWN")
+    worker = RecoveringStatusWorker(evidence, failure_code)
+    delays: list[float] = []
+
+    report = ReconciliationCoordinator(
+        writer,
+        reader,
+        worker,
+        gate,
+        sleeper=delays.append,
+        random_provider=lambda: 0.5,
+    ).reconcile_all()
+    writer.close()
+
+    assert report.results[0].outcome is ReconciliationOutcome.RESOLVED
+    assert worker.timeouts == [8.0, 12.0, 16.0, 20.0]
+    assert delays == [1.0, 2.0, 4.0]
+    assert not gate.contains("HG_ORDER_UNKNOWN")
+    assert not gate.contains("HG_RECONCILIATION_UNAVAILABLE")
+
+
+def test_rec_empty_cycle_does_not_clear_unproven_health_gate(tmp_path: Path) -> None:
+    database_path = tmp_path / "state.db"
+    writer = SingleDatabaseWriter(database_path)
+    reader = StateReader(database_path)
+    gate = HealthGate()
+    gate.block("HG_RECONCILIATION_UNAVAILABLE")
+
+    report = ReconciliationCoordinator(
+        writer,
+        reader,
+        UnavailableStatusWorker(),
+        gate,
+        retry_delay=0,
+    ).reconcile_all()
+    writer.close()
+
+    assert report.results == ()
+    assert gate.contains("HG_RECONCILIATION_UNAVAILABLE")
+
+
+def test_backoff_has_jitter_and_respects_max(tmp_path: Path) -> None:
+    writer = SingleDatabaseWriter(tmp_path / "state.db")
+    reader = StateReader(tmp_path / "state.db")
+    delays: list[float] = []
+    random_values = iter([0.0, 1.0] * 5)
+    coordinator = ReconciliationCoordinator(
+        writer,
+        reader,
+        UnavailableStatusWorker(),
+        HealthGate(),
+        retry_delay=1.0,
+        retry_delay_max=15.0,
+        retry_jitter=0.25,
+        sleeper=delays.append,
+        random_provider=lambda: next(random_values),
+    )
+
+    for attempt in range(1, 9):
+        coordinator._sleep_before_retry(attempt)
+    writer.close()
+
+    assert delays[:4] == [0.75, 2.5, 3.0, 10.0]
+    assert all(0 <= delay <= 15.0 for delay in delays)
+    assert delays[-1] == 15.0
+
+
+def test_reconciliation_does_not_block_hot_path(tmp_path: Path) -> None:
+    fixture = create_ambiguous(tmp_path, WorkerScenario.REJECT_BUT_DROP_RESPONSE)
+    store = SimulatedBrokerStore(fixture.broker_store_path)
+    evidence = store.query_order(query_from_fixture(fixture))
+    store.close()
+    assert evidence is not None
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    gate = HealthGate()
+    sleeper_threads: list[str] = []
+    coordinator = ReconciliationCoordinator(
+        writer,
+        reader,
+        RecoveringStatusWorker(
+            evidence,
+            ProtocolErrorCode.RECONCILIATION_UNAVAILABLE,
+        ),
+        gate,
+        sleeper=lambda delay: sleeper_threads.append(threading.current_thread().name),
+        random_provider=lambda: 0.5,
+    )
+    scheduler = ReconciliationScheduler(
+        coordinator,
+        reader,
+        gate,
+        reconcile_cycle_seconds=0.005,
+        reconcile_cycle_max_seconds=0.02,
+    )
+
+    scheduler.start()
+    deadline = time.monotonic() + 2
+    while reader.list_reconciliation_candidates() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    scheduler.stop()
+    writer.close()
+
+    assert reader.list_reconciliation_candidates() == []
+    assert sleeper_threads == ["reconciliation-scheduler"] * 3
+
+
+def test_rec_settlement_unknown_gate_is_cleared_when_resolved(tmp_path: Path) -> None:
+    fixture = create_ambiguous(
+        tmp_path,
+        WorkerScenario.SETTLEMENT_UNKNOWN_BUT_DROP_RESPONSE,
+    )
+    store = SimulatedBrokerStore(fixture.broker_store_path)
+    unknown_evidence = store.query_order(query_from_fixture(fixture))
+    store.close()
+    assert unknown_evidence is not None
+    settled_evidence = replace(
+        unknown_evidence,
+        evidence_id=str(uuid4()),
+        external_status=ExternalOrderStatus.SETTLED,
+        realized_pnl_minor=250,
+    )
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    gate = HealthGate()
+
+    first = ReconciliationCoordinator(
+        writer,
+        reader,
+        EvidenceStatusWorker(unknown_evidence),
+        gate,
+        max_query_attempts=1,
+    ).reconcile_all()
+    assert first.results[0].order_state is OrderState.SETTLEMENT_UNKNOWN
+    assert gate.contains("HG_SETTLEMENT_UNKNOWN")
+
+    second = ReconciliationCoordinator(
+        writer,
+        reader,
+        EvidenceStatusWorker(settled_evidence),
+        gate,
+        max_query_attempts=1,
+    ).reconcile_all()
+    writer.close()
+
+    assert second.results[0].order_state is OrderState.SETTLED
+    assert not gate.contains("HG_SETTLEMENT_UNKNOWN")
 
 
 def test_rec_17_status_timeout_is_bounded_and_does_not_release_exposure(tmp_path: Path) -> None:
@@ -442,6 +717,155 @@ def test_rec_25_elapsed_time_alone_never_resolves_unknown(tmp_path: Path) -> Non
     assert (
         reader.one("outbox_messages", "message_id", fixture.persisted.message_id)["state"]
         == "AMBIGUOUS"
+    )
+
+
+class NotFoundStatusWorker:
+    def __init__(self, evidence: list[NotFoundEvidence]) -> None:
+        self._evidence = iter(evidence)
+        self.query_count = 0
+
+    def query_order_status(
+        self, query: OrderStatusQuery, *, timeout: float | None = None
+    ) -> OrderStatusResult:
+        del timeout
+        self.query_count += 1
+        return OrderStatusResult(
+            outcome=StatusQueryOutcome.NOT_FOUND,
+            evidence=None,
+            response_message_id=str(uuid4()),
+            correlation_id=query.correlation_id,
+            causation_id=query.order_id,
+            reason_code=ProtocolErrorCode.RECONCILIATION_NOT_FOUND.value,
+            not_found_evidence=next(self._evidence),
+        )
+
+
+def test_rec_not_found_requires_grace_and_two_dual_source_observations(
+    tmp_path: Path,
+) -> None:
+    fixture = create_ambiguous(tmp_path)
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    gate = HealthGate()
+    created_at = datetime.fromisoformat(
+        str(reader.one("orders", "order_id", fixture.persisted.order_id)["created_at"])
+    )
+    worker = NotFoundStatusWorker(
+        [
+            NotFoundEvidence(created_at + timedelta(seconds=100), True, True),
+            NotFoundEvidence(created_at + timedelta(seconds=120), True, True),
+        ]
+    )
+    coordinator = ReconciliationCoordinator(
+        writer,
+        reader,
+        worker,
+        gate,
+        max_query_attempts=1,
+        not_found_grace_seconds=90,
+        not_found_confirmation_interval_seconds=10,
+    )
+
+    first = coordinator.reconcile_all()
+    assert first.results[0].outcome is ReconciliationOutcome.UNRESOLVED
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+    assert (
+        reader.one("risk_reservations", "reservation_id", fixture.persisted.reservation_id)["state"]
+        == "ACTIVE"
+    )
+
+    second = coordinator.reconcile_all()
+    assert second.results[0].outcome is ReconciliationOutcome.NOT_EXECUTED
+    assert not gate.contains("HG_ORDER_UNKNOWN")
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "REJECTED"
+    reservation = reader.one(
+        "risk_reservations", "reservation_id", fixture.persisted.reservation_id
+    )
+    assert reservation["state"] == "RELEASED"
+    assert reservation["release_count"] == 1
+    assert (
+        reader.one("outbox_messages", "message_id", fixture.persisted.message_id)["state"]
+        == "RECONCILED"
+    )
+    repeated_attempt = str(uuid4())
+    writer.begin_reconciliation_attempt(
+        repeated_attempt,
+        fixture.persisted.order_id,
+        fixture.request.correlation_id,
+    )
+    repeated = writer.apply_reconciliation_not_found(
+        repeated_attempt,
+        NotFoundEvidence(created_at + timedelta(seconds=140), True, True),
+        not_found_grace_seconds=90,
+        confirmation_interval_seconds=10,
+    )
+    writer.close()
+    assert repeated.status is ReconciliationApplyStatus.IDEMPOTENT
+    assert (
+        reader.one("risk_reservations", "reservation_id", fixture.persisted.reservation_id)[
+            "release_count"
+        ]
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        NotFoundEvidence(datetime.now(UTC), True, False),
+        NotFoundEvidence(datetime.now(UTC), False, True),
+    ],
+)
+def test_rec_not_found_single_source_never_releases_exposure(
+    tmp_path: Path, evidence: NotFoundEvidence
+) -> None:
+    fixture = create_ambiguous(tmp_path)
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    result = ReconciliationCoordinator(
+        writer,
+        reader,
+        NotFoundStatusWorker([evidence]),
+        HealthGate(),
+        max_query_attempts=1,
+    ).reconcile_all()
+    writer.close()
+
+    assert result.results[0].outcome is ReconciliationOutcome.UNRESOLVED
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+    assert (
+        reader.one("risk_reservations", "reservation_id", fixture.persisted.reservation_id)[
+            "release_count"
+        ]
+        == 0
+    )
+
+
+def test_rec_not_found_dual_source_before_grace_remains_unknown(tmp_path: Path) -> None:
+    fixture = create_ambiguous(tmp_path)
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    created_at = datetime.fromisoformat(
+        str(reader.one("orders", "order_id", fixture.persisted.order_id)["created_at"])
+    )
+    result = ReconciliationCoordinator(
+        writer,
+        reader,
+        NotFoundStatusWorker([NotFoundEvidence(created_at + timedelta(seconds=30), True, True)]),
+        HealthGate(),
+        max_query_attempts=1,
+        not_found_grace_seconds=90,
+    ).reconcile_all()
+    writer.close()
+
+    assert result.results[0].outcome is ReconciliationOutcome.UNRESOLVED
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+    assert (
+        reader.one("risk_reservations", "reservation_id", fixture.persisted.reservation_id)[
+            "release_count"
+        ]
+        == 0
     )
 
 

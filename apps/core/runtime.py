@@ -16,10 +16,12 @@ from apps.core.digit_risk_store import DigitRiskConfigStore
 from apps.core.health import HealthGate
 from apps.core.instance import CoreInstanceGuard, CoreInstanceGuardError
 from apps.core.reconciliation import (
+    MultiBrokerStatusRouter,
     ReconciliationCoordinator,
     ReconciliationOutcome,
     ReconciliationReport,
 )
+from apps.core.reconciliation_scheduler import ReconciliationScheduler
 from apps.core.recovery import RecoveryCoordinator, RecoveryReport
 from apps.core.risk import RiskLedger
 from apps.core.worker_client import OrderStatusPort, OrderSubmissionPort, WorkerPort
@@ -30,7 +32,11 @@ from packages.observability.events import EventSink, PersistentJsonlEventSink
 from packages.persistence.backup import DatabaseBackupService
 from packages.persistence.health import DatabaseFailureReason, DatabaseHealth
 from packages.persistence.reader import StateReader
-from packages.persistence.writer import BrokerEventApplyResult, SingleDatabaseWriter
+from packages.persistence.writer import (
+    BrokerEventApplyResult,
+    PersistenceError,
+    SingleDatabaseWriter,
+)
 
 
 class FinancialWorkerPort(OrderSubmissionPort, OrderStatusPort, OrderEventSource, Protocol):
@@ -81,11 +87,14 @@ class CoreRuntime:
         self._backup_service: DatabaseBackupService | None = None
         self._recovery_report: RecoveryReport | None = None
         self._reconciliation_coordinator: ReconciliationCoordinator | None = None
+        self._reconciliation_scheduler: ReconciliationScheduler | None = None
+        self._reconciliation_status_router: MultiBrokerStatusRouter | None = None
         self._reconciliation_report: ReconciliationReport | None = None
         self._risk_ledger: RiskLedger | None = None
         self._broker_event_processor: BrokerEventProcessor | None = None
         self._broker_event_pump: BrokerEventPump | None = None
         self._deriv_event_pump: BrokerEventPump | None = None
+        self._deriv_reconciliation_completed: Callable[[], None] | None = None
         self._submission_router: MultiBrokerSubmissionRouter | None = None
 
     @property
@@ -158,7 +167,7 @@ class CoreRuntime:
                 digit_config=self._digit_risk_config_store.load(),
                 digit_runtime_expirer=writer.expire_digit_cooldown,
             )
-            writer.configure_digit_risk_runtime(risk_ledger.digit_runtime_policy())
+            self._configure_digit_risk_runtime_for_startup(writer, reader, risk_ledger)
             risk_ledger.restore_digit_runtime(writer.expire_digit_cooldown())
             risk_ledger.restore(reader.list_by_state("risk_reservations", "ACTIVE"))
             self._risk_ledger = risk_ledger
@@ -177,10 +186,15 @@ class CoreRuntime:
                 worker = supervisor
                 self.worker_supervisor = supervisor
                 self.worker = worker
+            status_router = MultiBrokerStatusRouter()
+            for broker in Broker:
+                if broker not in self._deferred_reconciliation_brokers:
+                    status_router.register(broker, worker)
+            self._reconciliation_status_router = status_router
             reconciliation = ReconciliationCoordinator(
                 writer,
                 reader,
-                worker,
+                status_router,
                 self.health_gate,
                 self.event_sink,
             )
@@ -242,6 +256,15 @@ class CoreRuntime:
                 pump.start()
             self._backup_service = DatabaseBackupService(writer, self.event_sink)
             self._recovery_report = report
+            scheduler = ReconciliationScheduler(
+                reconciliation,
+                reader,
+                self.health_gate,
+                self.event_sink,
+                on_cycle_completed=self._on_reconciliation_cycle_completed,
+            )
+            self._reconciliation_scheduler = scheduler
+            scheduler.start()
             self.dispatcher_started = self.health_gate.state.is_open
             return report
         except Exception:
@@ -259,14 +282,52 @@ class CoreRuntime:
                 self._risk_ledger = None
                 self._backup_service = None
                 self._reconciliation_coordinator = None
+                self._reconciliation_scheduler = None
+                self._reconciliation_status_router = None
                 self._reconciliation_report = None
                 self._broker_event_processor = None
                 self._broker_event_pump = None
                 self._deriv_event_pump = None
                 self._submission_router = None
-                self.worker = None
-                self.instance_guard.release()
+            self.worker = None
+            self.instance_guard.release()
             raise
+
+    def _configure_digit_risk_runtime_for_startup(
+        self,
+        writer: SingleDatabaseWriter,
+        reader: StateReader,
+        risk_ledger: RiskLedger,
+    ) -> None:
+        """Keep startup recoverable when a flat Demo sequence used an older config.
+
+        Operator reconfiguration is intentionally blocked mid-Martingale unless it
+        explicitly resets the Demo recovery sequence. A previous build could persist
+        the new UI config while leaving an old flat sequence in ``digit_risk_runtime``;
+        treating that as fatal on the next startup made the EXE close before the UI.
+        Startup may clear only this stale test sequence, and only when there is no
+        non-terminal Deriv digit order and no ACTIVE risk reservation to reconcile.
+        """
+
+        policy = risk_ledger.digit_runtime_policy()
+        try:
+            writer.configure_digit_risk_runtime(policy)
+            return
+        except PersistenceError as exc:
+            if "DIGIT_MARTINGALE_SEQUENCE_ACTIVE" not in str(exc):
+                raise
+
+        if reader.has_nonterminal_deriv_digit_order() or reader.list_by_state(
+            "risk_reservations",
+            "ACTIVE",
+        ):
+            raise PersistenceError("DIGIT_MARTINGALE_SEQUENCE_ACTIVE_WITH_EXPOSURE")
+
+        writer.configure_digit_risk_runtime(policy, reset_active_sequence=True)
+        self.event_sink.emit(
+            "digit_runtime_startup_sequence_reset",
+            reason_code="DIGIT_RUNTIME_POLICY_MISMATCH_FLAT",
+        )
 
     def _recover_simulated_financial_state(self) -> None:
         """Reconcile a replaced simulated connection without rearming entries."""
@@ -274,23 +335,24 @@ class CoreRuntime:
         reconciliation = self._reconciliation_coordinator
         if reconciliation is None or self._reader is None:
             return
-        candidates = tuple(
-            item
-            for item in self._reader.list_reconciliation_candidates()
-            if Broker(str(item["broker"])) not in self._deferred_reconciliation_brokers
-        )
-        outcomes = tuple(
-            reconciliation.reconcile_order(str(item["order_id"])) for item in candidates
-        )
-        prior = () if self._reconciliation_report is None else self._reconciliation_report.results
-        self._reconciliation_report = ReconciliationReport((*prior, *outcomes))
-        if self._risk_ledger is not None:
-            self._risk_ledger.restore(self._reader.list_by_state("risk_reservations", "ACTIVE"))
+        scheduler = self._reconciliation_scheduler
+        if scheduler is not None:
+            scheduler.trigger("worker_reconnected")
         self.event_sink.emit(
             "simulated_worker_recovery_reconciled",
-            reconciled_count=len(outcomes),
+            reconciled_count=0,
             reason_code="OPERATOR_REARM_REQUIRED",
         )
+
+    def _on_reconciliation_cycle_completed(self, report: ReconciliationReport) -> None:
+        prior = () if self._reconciliation_report is None else self._reconciliation_report.results
+        self._reconciliation_report = ReconciliationReport((*prior, *report.results))
+        if self._risk_ledger is not None and self._reader is not None:
+            self._risk_ledger.restore(self._reader.list_by_state("risk_reservations", "ACTIVE"))
+        self.dispatcher_started = self.health_gate.state.is_open
+        callback = getattr(self, "_deriv_reconciliation_completed", None)
+        if callback is not None:
+            callback()
 
     def submit(self, request: OrderRequest, *, dispatch: bool = True) -> PersistedOrder:
         return self.coordinator.submit(request, dispatch=dispatch)
@@ -304,11 +366,18 @@ class CoreRuntime:
         if self.reader.has_nonterminal_deriv_digit_order():
             return False, "DIGIT_RISK_CONFIG_BLOCKED_OPEN_ORDER"
         previous = self.risk_ledger.digit_config
-        accepted, reason = self.risk_ledger.update_digit_risk_config(config, self.health_gate)
+        accepted, reason = self.risk_ledger.update_digit_risk_config(
+            config,
+            self.health_gate,
+            reset_active_sequence=True,
+        )
         if not accepted:
             return False, reason
         try:
-            self.writer.configure_digit_risk_runtime(self.risk_ledger.digit_runtime_policy())
+            self.writer.configure_digit_risk_runtime(
+                self.risk_ledger.digit_runtime_policy(),
+                reset_active_sequence=True,
+            )
             self._digit_risk_config_store.save(config)
         except (OSError, RuntimeError, ValueError):
             self.risk_ledger.update_digit_risk_config(previous, self.health_gate)
@@ -316,11 +385,28 @@ class CoreRuntime:
             return False, "DIGIT_RISK_CONFIG_PERSISTENCE_FAILED"
         return True, None
 
+    def reset_digit_test_session(self) -> tuple[bool, str | None]:
+        """Start a fresh bounded test session while preserving the order history."""
+
+        if self.reader.has_nonterminal_deriv_digit_order():
+            return False, "DIGIT_TEST_SESSION_RESET_BLOCKED_EXPOSURE"
+        try:
+            self.writer.reset_digit_test_session_if_flat()
+        except PersistenceError as exc:
+            reason = str(exc)
+            if "DIGIT_TEST_SESSION_RESET_BLOCKED_EXPOSURE" in reason:
+                return False, "DIGIT_TEST_SESSION_RESET_BLOCKED_EXPOSURE"
+            return False, "DIGIT_TEST_SESSION_RESET_FAILED"
+        self.risk_ledger.reset_daily_pnl(self.health_gate)
+        self.event_sink.emit("digit_test_session_reset", reason_code="OPERATOR_DEMO_RESET")
+        return True, None
+
     def attach_deriv_worker(
         self,
         worker: FinancialWorkerPort,
         *,
         on_order_event: Callable[[BrokerOrderEvent, BrokerEventApplyResult], None] | None = None,
+        on_reconciliation_completed: Callable[[], None] | None = None,
     ) -> None:
         """Route Deriv orders and settlement events through the authenticated worker."""
 
@@ -329,6 +415,7 @@ class CoreRuntime:
         if router is None or processor is None:
             raise RuntimeError("Core runtime is not started")
         self.detach_deriv_worker()
+        self._deriv_reconciliation_completed = on_reconciliation_completed
         self.reconcile_deriv_worker(worker)
         router.register(Broker.DERIV, worker)
         pump = BrokerEventPump(
@@ -345,39 +432,15 @@ class CoreRuntime:
         """Resolve durable Deriv ambiguity before enabling a submission route."""
 
         if Broker.DERIV in self._deferred_reconciliation_brokers:
-            deferred = tuple(
-                candidate
-                for candidate in self.reader.list_reconciliation_candidates()
-                if str(candidate["broker"]) == Broker.DERIV.value
-            )
-            if deferred:
-                reconciliation = ReconciliationCoordinator(
-                    self.writer,
-                    self.reader,
-                    worker,
-                    self.health_gate,
-                    self.event_sink,
-                    query_timeout=3.0,
-                )
-                prior = (
-                    ()
-                    if self._reconciliation_report is None
-                    else self._reconciliation_report.results
-                )
-                resolved = tuple(
-                    reconciliation.reconcile_order(str(candidate["order_id"]))
-                    for candidate in deferred
-                )
-                self._reconciliation_report = ReconciliationReport((*prior, *resolved))
-                self.risk_ledger.restore(self.reader.list_by_state("risk_reservations", "ACTIVE"))
-                self.risk_ledger.restore_digit_runtime(self.writer.expire_digit_cooldown())
-                if not self.reader.list_reconciliation_candidates():
-                    self.health_gate.clear_if("HG_ORDER_UNKNOWN")
-                    self.health_gate.clear_if("HG_RECONCILIATION_REQUIRED")
-                    self.health_gate.clear_if("HG_RECONCILIATION_UNAVAILABLE")
-                    self.dispatcher_started = self.health_gate.state.is_open
+            router = self._reconciliation_status_router
+            scheduler = self._reconciliation_scheduler
+            if router is None or scheduler is None:
+                raise RuntimeError("reconciliation scheduler is unavailable")
+            router.register(Broker.DERIV, worker)
+            scheduler.trigger("deriv_reconnected")
 
     def detach_deriv_worker(self) -> None:
+        self._deriv_reconciliation_completed = None
         pump = self._deriv_event_pump
         self._deriv_event_pump = None
         if pump is not None:
@@ -385,6 +448,9 @@ class CoreRuntime:
         router = self._submission_router
         if router is not None:
             router.unregister(Broker.DERIV)
+        status_router = self._reconciliation_status_router
+        if status_router is not None and Broker.DERIV in self._deferred_reconciliation_brokers:
+            status_router.unregister(Broker.DERIV)
 
     def dispatch_pending(self) -> OrderCommand | None:
         if not self.dispatcher_started:
@@ -412,10 +478,15 @@ class CoreRuntime:
         self.risk_ledger.refresh_digit_health_gate(self.health_gate)
         self.health_gate.clear_if("HG_SAFE_STOP")
         self.dispatcher_started = self.health_gate.state.is_open
+        blocker = self.health_gate.state.reason_code
+        if not self.dispatcher_started:
+            # A rejected ARM attempt must remain visibly DISARMED. Otherwise the UI
+            # projects the bot as enabled while a different risk gate blocks every order.
+            self.health_gate.block("HG_SAFE_STOP")
         self.event_sink.emit(
             "trading_arm_evaluated",
             armed=self.dispatcher_started,
-            reason_code=self.health_gate.state.reason_code,
+            reason_code=blocker,
         )
         return self.dispatcher_started
 
@@ -460,6 +531,10 @@ class CoreRuntime:
         self.stop_new_entries()
         writer = self._writer
         try:
+            scheduler = self._reconciliation_scheduler
+            self._reconciliation_scheduler = None
+            if scheduler is not None:
+                scheduler.stop()
             self.shutdown_workers()
             if writer is not None:
                 writer.close()
@@ -469,6 +544,7 @@ class CoreRuntime:
             self._coordinator = None
             self._backup_service = None
             self._reconciliation_coordinator = None
+            self._reconciliation_status_router = None
             self._reconciliation_report = None
             self._broker_event_processor = None
             self._submission_router = None

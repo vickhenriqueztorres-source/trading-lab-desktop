@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import closing
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -85,9 +85,61 @@ class StateReader:
         with closing(open_reader_connection(self._path)) as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM orders
-                WHERE state NOT IN ('SETTLED', 'REJECTED')
-                ORDER BY created_at
+                SELECT o.*, ti.strategy_id, ti.symbol
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                WHERE o.state NOT IN ('SETTLED', 'REJECTED')
+                ORDER BY o.created_at
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def deriv_recent_strategy_settlements(
+        self,
+        *,
+        limit_per_scope: int = 30,
+        since_utc: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Seed the in-memory strategy cache outside the auto-trader hot path."""
+
+        if type(limit_per_scope) is not int or not 1 <= limit_per_scope <= 200:
+            raise ValueError("strategy settlement projection limit is outside bounds")
+        boundary = self._optional_utc_boundary(since_utc)
+        with closing(open_reader_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT order_id, strategy_id, symbol, realized_pnl_minor, settled_at
+                FROM (
+                    SELECT o.order_id, ti.strategy_id, ti.symbol,
+                           o.realized_pnl_minor, o.updated_at AS settled_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ti.strategy_id, ti.symbol
+                               ORDER BY o.updated_at DESC, o.order_id DESC
+                           ) AS scope_rank
+                    FROM orders o
+                    JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                    WHERE o.broker = 'DERIV'
+                      AND o.state = 'SETTLED'
+                      AND o.realized_pnl_minor IS NOT NULL
+                      AND (? IS NULL OR o.updated_at >= ?)
+                )
+                WHERE scope_rank <= ?
+                ORDER BY strategy_id, symbol, settled_at, order_id
+                """,
+                (boundary, boundary, limit_per_scope),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_active_reservations(self) -> list[dict[str, object]]:
+        with closing(open_reader_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT rr.reservation_id, rr.broker, rr.account_id,
+                       rr.amount_minor, rr.currency, ti.symbol
+                FROM risk_reservations rr
+                JOIN trade_intents ti ON ti.intent_id = rr.intent_id
+                WHERE rr.state = 'ACTIVE'
+                ORDER BY rr.created_at, rr.reservation_id
                 """
             ).fetchall()
             return [dict(row) for row in rows]
@@ -107,6 +159,10 @@ class StateReader:
                 JOIN outbox_messages ob ON ob.intent_id = o.intent_id
                 JOIN risk_reservations rr ON rr.intent_id = o.intent_id
                 WHERE o.state IN ('ACCEPTED', 'OPEN', 'UNKNOWN', 'SETTLEMENT_UNKNOWN')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reconciliation_attempts ra
+                      WHERE ra.order_id = o.order_id AND ra.result = 'CONFLICT'
+                  )
                 ORDER BY o.created_at
                 """
             ).fetchall()
@@ -193,6 +249,23 @@ class StateReader:
             ).fetchone()
             return dict(row) if row is not None else None
 
+    def digit_test_session_started_at(self) -> datetime | None:
+        """Return the persisted current-test boundary without deleting audit history."""
+
+        row = self.digit_risk_runtime()
+        if row is None or row.get("session_started_at") is None:
+            return None
+        value = row["session_started_at"]
+        if not isinstance(value, str):
+            raise ValueError("digit test session boundary is invalid")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("digit test session boundary is invalid") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("digit test session boundary is invalid")
+        return parsed.astimezone(UTC)
+
     def has_nonterminal_deriv_digit_order(self) -> bool:
         with closing(open_reader_connection(self._path)) as connection:
             row = connection.execute(
@@ -210,11 +283,17 @@ class StateReader:
             ).fetchone()
             return row is not None
 
-    def ui_order_summaries(self, *, limit: int = 50) -> list[dict[str, Any]]:
+    def ui_order_summaries(
+        self,
+        *,
+        limit: int = 50,
+        since_utc: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """Return a bounded, read-only order projection for the UI service."""
 
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("UI order projection limit is outside bounds")
+        boundary = self._optional_utc_boundary(since_utc)
         with closing(open_reader_connection(self._path)) as connection:
             rows = connection.execute(
                 """
@@ -223,10 +302,11 @@ class StateReader:
                        o.broker_order_id, o.realized_pnl_minor
                 FROM orders o
                 JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                WHERE (? IS NULL OR o.created_at >= ?)
                 ORDER BY o.created_at DESC, o.order_id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (boundary, boundary, limit),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -251,6 +331,15 @@ class StateReader:
                 (since_utc.isoformat(),),
             ).fetchall()
             return {str(row["currency"]): int(row["pnl_minor"]) for row in rows}
+
+    @staticmethod
+    def _optional_utc_boundary(value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        offset = value.utcoffset()
+        if value.tzinfo is None or offset is None or offset.total_seconds() != 0:
+            raise ValueError("projection boundary must be timezone-aware UTC")
+        return value.isoformat()
 
     def deriv_strategy_performance(
         self,

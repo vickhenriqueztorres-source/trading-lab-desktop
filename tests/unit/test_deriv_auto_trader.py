@@ -4,14 +4,25 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
 from apps.core.deriv_auto_trader import DerivDigitAutoTrader
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot, DerivTelemetrySource
 from apps.core.digit_risk_config import DigitRiskConfig
-from packages.domain.models import Money, OrderRequest
+from packages.domain.models import (
+    Broker,
+    BrokerOrderEvent,
+    Direction,
+    ExternalOrderStatus,
+    Money,
+    OrderRequest,
+    OrderState,
+)
 from packages.market_data import DigitFrequencySnapshot
+from packages.observability.events import InMemoryEventSink
+from packages.persistence.writer import BrokerEventApplyResult, BrokerEventApplyStatus
 from packages.strategies.deriv_digits import (
     DerivDigitStrategyId,
     DigitAssetShadowProjection,
@@ -22,8 +33,11 @@ from packages.strategies.deriv_digits import (
 
 
 class _Reader:
-    def ui_order_summaries(self, limit: int) -> list[dict[str, object]]:
-        assert limit == 100
+    def list_nonterminal_orders(self) -> list[dict[str, object]]:
+        return []
+
+    def deriv_recent_strategy_settlements(self, *, limit_per_scope: int) -> list[dict[str, object]]:
+        assert limit_per_scope == 30
         return []
 
 
@@ -42,6 +56,7 @@ class _Runtime:
         self.reader = _Reader()
         self.risk_ledger = _RiskLedger()
         self.requests: list[OrderRequest] = []
+        self.event_sink = InMemoryEventSink()
 
     def submit(self, request: OrderRequest) -> None:
         self.requests.append(request)
@@ -109,6 +124,30 @@ def test_auto_trader_obeys_central_bot_stop() -> None:
     assert runtime.requests == []
 
 
+def test_expired_digit_cooldown_is_refreshed_before_global_gate_check() -> None:
+    class GateState:
+        is_open = False
+
+    class Gate:
+        state = GateState()
+
+    class RefreshingRiskLedger(_RiskLedger):
+        refresh_calls = 0
+
+        def refresh_digit_health_gate(self, gate: Gate) -> None:
+            self.refresh_calls += 1
+            gate.state.is_open = True
+
+    runtime = _Runtime()
+    runtime.health_gate = Gate()
+    runtime.risk_ledger = RefreshingRiskLedger()
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    assert trader.evaluate_once() is True
+    assert runtime.risk_ledger.refresh_calls == 1
+    assert len(runtime.requests) == 1
+
+
 def test_auto_trader_requires_explicit_operator_arming_even_if_dispatcher_is_open() -> None:
     runtime = _Runtime()
     trader = DerivDigitAutoTrader(
@@ -174,7 +213,7 @@ def test_auto_trader_maps_each_strategy_signal_to_its_demo_contract(
     assert runtime.requests[0].strategy_id == strategy_id.value
 
 
-def test_auto_trader_rearm_requires_a_signal_after_the_pause_boundary() -> None:
+def test_begin_new_run_semantics_unchanged() -> None:
     runtime = _Runtime()
     current = _telemetry()
     trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", lambda: current)  # type: ignore[arg-type]
@@ -234,25 +273,13 @@ def test_auto_trader_selects_best_ranked_asset_in_demo_mode() -> None:
 
 def test_auto_trader_abstains_from_strategy_with_negative_recent_net_result() -> None:
     class LosingReader(_Reader):
-        def deriv_strategy_performance(
-            self,
-            strategy_id: str,
-            *,
-            symbol: str,
-            limit: int,
-        ) -> dict[str, object]:
-            assert strategy_id == "tail-probability-edge"
-            assert symbol == "R_100"
-            assert limit == 30
-            return {
-                "settled_count": 10,
-                "wins": 8,
-                "losses": 2,
-                "total_pnl_minor": -100,
-                "avg_win_minor": 9.0,
-                "avg_loss_minor": 100.0,
-                "last_settled_at": datetime(2026, 8, 26, tzinfo=UTC).isoformat(),
-            }
+        def deriv_recent_strategy_settlements(
+            self, *, limit_per_scope: int
+        ) -> list[dict[str, object]]:
+            return _performance_rows(
+                [9] * 8 + [-86] * 2,
+                datetime(2026, 8, 26, tzinfo=UTC),
+            )
 
     runtime = _Runtime()
     runtime.reader = LosingReader()
@@ -268,36 +295,45 @@ def test_auto_trader_abstains_from_strategy_with_negative_recent_net_result() ->
     assert runtime.requests == []
 
 
+def test_new_test_session_excludes_old_performance_from_runtime_cache() -> None:
+    boundary = datetime(2026, 8, 27, tzinfo=UTC)
+
+    class SessionReader(_Reader):
+        received_boundary: datetime | None = None
+
+        def digit_test_session_started_at(self) -> datetime:
+            return boundary
+
+        def deriv_recent_strategy_settlements(
+            self,
+            *,
+            limit_per_scope: int,
+            since_utc: datetime | None = None,
+        ) -> list[dict[str, object]]:
+            assert limit_per_scope == 30
+            self.received_boundary = since_utc
+            return []
+
+    runtime = _Runtime()
+    reader = SessionReader()
+    runtime.reader = reader
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    assert reader.received_boundary == boundary
+    assert trader.evaluate_once() is True
+    assert len(runtime.requests) == 1
+
+
 def test_auto_trader_does_not_apply_r10_circuit_breaker_to_r50() -> None:
     class AssetScopedReader(_Reader):
-        def deriv_strategy_performance(
-            self,
-            strategy_id: str,
-            *,
-            symbol: str,
-            limit: int,
-        ) -> dict[str, object]:
-            assert strategy_id == "tail-probability-edge"
-            assert limit == 30
-            if symbol == "R_10":
-                return {
-                    "settled_count": 10,
-                    "wins": 4,
-                    "losses": 6,
-                    "total_pnl_minor": -100,
-                    "avg_win_minor": 40.0,
-                    "avg_loss_minor": 100.0,
-                    "last_settled_at": datetime.now(UTC).isoformat(),
-                }
-            return {
-                "settled_count": 0,
-                "wins": 0,
-                "losses": 0,
-                "total_pnl_minor": 0,
-                "avg_win_minor": None,
-                "avg_loss_minor": None,
-                "last_settled_at": None,
-            }
+        def deriv_recent_strategy_settlements(
+            self, *, limit_per_scope: int
+        ) -> list[dict[str, object]]:
+            return _performance_rows(
+                [40] * 4 + [-50] * 6,
+                datetime.now(UTC),
+                symbol="R_10",
+            )
 
     runtime = _Runtime()
     runtime.reader = AssetScopedReader()
@@ -350,31 +386,22 @@ def test_negative_performance_cooldown_reopens_a_bounded_probe_batch() -> None:
     class RecoveringReader(_Reader):
         calls = 0
 
-        def deriv_strategy_performance(
-            self,
-            strategy_id: str,
-            *,
-            symbol: str,
-            limit: int,
-        ) -> dict[str, object]:
-            assert strategy_id == "tail-probability-edge"
-            assert symbol == "R_100"
-            assert limit == 30
+        def deriv_recent_strategy_settlements(
+            self, *, limit_per_scope: int
+        ) -> list[dict[str, object]]:
             self.calls += 1
             last_settled = now - timedelta(minutes=11) if self.calls == 1 else now
-            return {
-                "settled_count": 10,
-                "wins": 8,
-                "losses": 2,
-                "total_pnl_minor": -100,
-                "avg_win_minor": 100.0,
-                "avg_loss_minor": 100.0,
-                "last_settled_at": last_settled.isoformat(),
-            }
+            return _performance_rows([100] * 8 + [-450] * 2, last_settled)
 
     runtime = _Runtime()
     runtime.reader = RecoveringReader()
     current = _telemetry()
+    current = replace(
+        current,
+        synthetic_strategies=(
+            replace(current.synthetic_strategies[0], estimated_probability_pct=Decimal("95")),
+        ),
+    )
     trader = DerivDigitAutoTrader(
         runtime,
         "DOT-DEMO",
@@ -394,6 +421,426 @@ def test_negative_performance_cooldown_reopens_a_bounded_probe_batch() -> None:
         current,
         synthetic_strategies=(replace(current.synthetic_strategies[0], last_signal_epoch=133),),
     )
+    trader.reload_runtime_caches()
     assert trader.evaluate_once() is False
     assert trader.last_reason == "BOT_PERFORMANCE_COOLDOWN"
     assert len(runtime.requests) == 10
+
+
+def _performance_rows(
+    pnl_values: list[int],
+    settled_at: datetime,
+    *,
+    symbol: str = "R_100",
+) -> list[dict[str, object]]:
+    return [
+        {
+            "order_id": f"order-{index}",
+            "strategy_id": "tail-probability-edge",
+            "symbol": symbol,
+            "realized_pnl_minor": pnl,
+            "settled_at": (settled_at - timedelta(seconds=len(pnl_values) - index)).isoformat(),
+        }
+        for index, pnl in enumerate(pnl_values)
+    ]
+
+
+def _broker_event(
+    order_id: str,
+    status: ExternalOrderStatus,
+    pnl: int | None = None,
+) -> BrokerOrderEvent:
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+    payload: dict[str, object] = {
+        "event_id": f"event-{status.value}",
+        "event_version": 1,
+        "broker": Broker.DERIV.value,
+        "account_id": "DOT-DEMO",
+        "client_order_ref": order_id,
+        "broker_order_id": "broker-order",
+        "correlation_id": "correlation",
+        "external_sequence": 1,
+        "external_status": status.value,
+        "occurred_at": now.isoformat(),
+        "observed_at": now.isoformat(),
+        "product": "DIGITOVER",
+        "symbol": "R_100",
+        "direction": Direction.CALL.value,
+        "amount_minor": 100,
+        "currency": "USD",
+        "result_minor": pnl,
+        "result_currency": "USD" if pnl is not None else None,
+    }
+    payload["evidence_hash"] = BrokerOrderEvent.evidence_hash_for_payload(payload)
+    return BrokerOrderEvent.from_payload(payload)
+
+
+def test_evaluate_once_does_not_read_database() -> None:
+    class SpyReader(_Reader):
+        calls = 0
+
+        def list_nonterminal_orders(self) -> list[dict[str, object]]:
+            self.calls += 1
+            return []
+
+        def deriv_recent_strategy_settlements(
+            self, *, limit_per_scope: int
+        ) -> list[dict[str, object]]:
+            self.calls += 1
+            return []
+
+    runtime = _Runtime()
+    reader = SpyReader()
+    runtime.reader = reader
+    snapshot = replace(_telemetry(), synthetic_strategies=())
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", lambda: snapshot)  # type: ignore[arg-type]
+    startup_calls = reader.calls
+
+    for _ in range(1_000):
+        assert trader.evaluate_once() is False
+
+    assert reader.calls == startup_calls
+    assert runtime.requests == []
+
+
+def test_inflight_cache_is_seeded_from_database_on_startup() -> None:
+    class OpenOrderReader(_Reader):
+        def list_nonterminal_orders(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "order_id": "open-1",
+                    "broker": "DERIV",
+                    "state": "OPEN",
+                    "strategy_id": "tail-probability-edge",
+                    "symbol": "R_100",
+                }
+            ]
+
+    runtime = _Runtime()
+    runtime.reader = OpenOrderReader()
+    telemetry_calls = 0
+
+    def telemetry() -> DerivTelemetrySnapshot:
+        nonlocal telemetry_calls
+        telemetry_calls += 1
+        return _telemetry()
+
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", telemetry)  # type: ignore[arg-type]
+
+    assert trader.evaluate_once() is False
+    assert trader.last_reason == "BOT_ORDER_IN_FLIGHT"
+    assert telemetry_calls == 0
+
+
+def test_cheap_checks_short_circuit_before_telemetry() -> None:
+    class OpenOrderReader(_Reader):
+        def list_nonterminal_orders(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "order_id": "open-1",
+                    "broker": "DERIV",
+                    "state": "OPEN",
+                    "strategy_id": "tail-probability-edge",
+                    "symbol": "R_100",
+                }
+            ]
+
+    runtime = _Runtime()
+    runtime.reader = OpenOrderReader()
+    telemetry_calls = 0
+
+    def telemetry() -> DerivTelemetrySnapshot:
+        nonlocal telemetry_calls
+        telemetry_calls += 1
+        return _telemetry()
+
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", telemetry)  # type: ignore[arg-type]
+
+    assert trader.evaluate_once() is False
+    assert telemetry_calls == 0
+
+
+def test_order_events_update_inflight_cache_without_reader_query() -> None:
+    runtime = _Runtime()
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    trader.notify_order_event(
+        _broker_event("order-1", ExternalOrderStatus.OPEN),
+        BrokerEventApplyResult(BrokerEventApplyStatus.APPLIED, OrderState.OPEN, None),
+    )
+    assert trader.evaluate_once() is False
+    assert trader.last_reason == "BOT_ORDER_IN_FLIGHT"
+
+    trader.notify_order_event(
+        _broker_event("order-1", ExternalOrderStatus.SETTLED, 80),
+        BrokerEventApplyResult(BrokerEventApplyStatus.APPLIED, OrderState.SETTLED, None),
+    )
+    assert trader.evaluate_once() is True
+
+
+def test_inflight_cache_reloads_after_reconciliation() -> None:
+    class MutableReader(_Reader):
+        rows: list[dict[str, object]] = []
+
+        def list_nonterminal_orders(self) -> list[dict[str, object]]:
+            return self.rows
+
+    runtime = _Runtime()
+    reader = MutableReader()
+    runtime.reader = reader
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    reader.rows = [
+        {
+            "order_id": "open-2",
+            "broker": "DERIV",
+            "state": "OPEN",
+            "strategy_id": "tail-probability-edge",
+            "symbol": "R_100",
+        }
+    ]
+    trader.reload_runtime_caches()
+
+    assert trader.evaluate_once() is False
+    assert trader.last_reason == "BOT_ORDER_IN_FLIGHT"
+
+    reader.rows = []
+    trader.reload_runtime_caches()
+
+    assert trader.evaluate_once() is True
+
+
+def test_synchronous_rejected_submit_does_not_leave_inflight_cache() -> None:
+    class TerminalOrderReader(_Reader):
+        def one(self, table: str, key_name: str, key_value: str) -> dict[str, object] | None:
+            if (table, key_name, key_value) == ("orders", "order_id", "rejected-order"):
+                return {"order_id": "rejected-order", "state": "REJECTED"}
+            assert (table, key_name, key_value) == (
+                "outbox_messages",
+                "message_id",
+                "rejected-message",
+            )
+            return {
+                "message_id": "rejected-message",
+                "state": "DISPATCHED",
+                "state_reason": "DERIV_INVALID_REQUEST",
+            }
+
+    class RejectedRuntime(_Runtime):
+        def submit(self, request: OrderRequest) -> object:
+            self.requests.append(request)
+            return SimpleNamespace(
+                order_id="rejected-order",
+                message_id="rejected-message",
+            )
+
+    runtime = RejectedRuntime()
+    runtime.reader = TerminalOrderReader()
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    assert trader.evaluate_once() is False
+
+    assert len(runtime.requests) == 1
+    assert trader._has_open_deriv_order() is False
+    assert trader.last_reason == "BOT_ENTRY_REJECTED_DERIV_INVALID_REQUEST"
+    assert any(
+        item.event_name == "autotrader_inflight_cache_divergence"
+        and ("cached_count", 1) in item.fields
+        and ("persisted_count", 0) in item.fields
+        for item in runtime.event_sink.events
+    )
+    assert any(
+        item.event_name == "autotrader_order_rejected"
+        and item.reason_code == "DERIV_INVALID_REQUEST"
+        and ("amount_minor_units", 100) in item.fields
+        for item in runtime.event_sink.events
+    )
+
+
+def test_uninitialized_cache_blocks_entry() -> None:
+    class MutableReader(_Reader):
+        fail = True
+
+        def list_nonterminal_orders(self) -> list[dict[str, object]]:
+            if self.fail:
+                raise RuntimeError("unavailable")
+            return []
+
+    runtime = _Runtime()
+    reader = MutableReader()
+    runtime.reader = reader
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    assert trader.evaluate_once() is False
+    assert trader.last_reason == "BOT_ORDER_STATE_UNAVAILABLE"
+    assert runtime.requests == []
+
+
+def test_cache_divergence_is_reported() -> None:
+    class MutableReader(_Reader):
+        rows: list[dict[str, object]] = []
+
+        def list_nonterminal_orders(self) -> list[dict[str, object]]:
+            return self.rows
+
+    runtime = _Runtime()
+    reader = MutableReader()
+    runtime.reader = reader
+    trader = DerivDigitAutoTrader(runtime, "DOT-DEMO", _telemetry)  # type: ignore[arg-type]
+
+    reader.rows = [
+        {
+            "order_id": "open-2",
+            "broker": "DERIV",
+            "state": "OPEN",
+            "strategy_id": "tail-probability-edge",
+            "symbol": "R_100",
+        }
+    ]
+    trader.reload_runtime_caches()
+    assert any(
+        item.event_name == "autotrader_inflight_cache_divergence"
+        for item in runtime.event_sink.events
+    )
+
+
+def test_tick_coalescing_produces_single_evaluation() -> None:
+    runtime = _Runtime()
+    clock = [0.0]
+    waits: list[float] = []
+
+    def waiter(seconds: float) -> bool:
+        waits.append(seconds)
+        clock[0] += seconds
+        return False
+
+    trader = DerivDigitAutoTrader(
+        runtime,  # type: ignore[arg-type]
+        "DOT-DEMO",
+        _telemetry,
+        monotonic_clock=lambda: clock[0],
+        interval_waiter=waiter,
+    )
+    evaluations = 0
+
+    def evaluate() -> bool:
+        nonlocal evaluations
+        evaluations += 1
+        return False
+
+    trader.evaluate_once = evaluate  # type: ignore[method-assign]
+    for _ in range(50):
+        trader.notify_tick()
+    assert trader._process_pending_once() is True
+    assert trader._process_pending_once() is False
+    assert evaluations == 1
+
+    trader.notify_tick()
+    assert trader._process_pending_once() is True
+    assert evaluations == 2
+    assert waits == [pytest.approx(0.25)]
+
+
+def test_min_evaluation_interval_does_not_delay_real_decisions() -> None:
+    runtime = _Runtime()
+    clock = [0.0]
+    waits: list[float] = []
+    trader = DerivDigitAutoTrader(
+        runtime,  # type: ignore[arg-type]
+        "DOT-DEMO",
+        _telemetry,
+        monotonic_clock=lambda: clock[0],
+        interval_waiter=lambda seconds: bool(waits.append(seconds)),
+    )
+    evaluations = 0
+
+    def evaluate() -> bool:
+        nonlocal evaluations
+        evaluations += 1
+        return False
+
+    trader.evaluate_once = evaluate  # type: ignore[method-assign]
+
+    for second in (0.0, 2.0, 4.0):
+        clock[0] = second
+        trader.notify_tick()
+        assert trader._process_pending_once() is True
+
+    assert evaluations == 3
+    assert waits == []
+
+
+def test_last_reason_is_exposed_with_waiting_duration() -> None:
+    runtime = _Runtime()
+    clock = [10.0]
+    trader = DerivDigitAutoTrader(
+        runtime,  # type: ignore[arg-type]
+        "DOT-DEMO",
+        _telemetry,
+        monotonic_clock=lambda: clock[0],
+    )
+    trader.begin_new_run()
+    clock[0] = 17.9
+
+    status = trader.waiting_status
+    assert status.reason_code == "BOT_WAITING_FOR_NEW_TICK"
+    assert status.waiting_since_seconds == 7
+    assert status.armed_epoch == 123
+    assert status.rearm_notice is True
+    assert "descartou sinais anteriores" in status.description
+
+
+def test_rearm_resets_waiting_and_is_reported() -> None:
+    runtime = _Runtime()
+    clock = [10.0]
+    trader = DerivDigitAutoTrader(
+        runtime,  # type: ignore[arg-type]
+        "DOT-DEMO",
+        _telemetry,
+        monotonic_clock=lambda: clock[0],
+    )
+
+    trader.begin_new_run()
+    clock[0] = 30.0
+    assert trader.waiting_status.waiting_since_seconds == 20
+
+    trader.begin_new_run()
+
+    status = trader.waiting_status
+    assert status.reason_code == "BOT_WAITING_FOR_NEW_TICK"
+    assert status.waiting_since_seconds == 0
+    assert status.rearm_notice is True
+
+
+def test_no_order_is_ever_sent_by_this_path() -> None:
+    runtime = _Runtime()
+    trader = DerivDigitAutoTrader(
+        runtime,  # type: ignore[arg-type]
+        "DOT-DEMO",
+        _telemetry,
+        operator_armed=lambda: False,
+    )
+
+    assert trader.evaluate_once() is False
+    trader.notify_tick()
+    trader._process_pending_once()
+
+    assert runtime.requests == []
+
+
+def test_ten_thousand_ticks_do_not_read_database_or_submit() -> None:
+    runtime = _Runtime()
+    trader = DerivDigitAutoTrader(
+        runtime,  # type: ignore[arg-type]
+        "DOT-DEMO",
+        _telemetry,
+        operator_armed=lambda: False,
+    )
+    started = time.perf_counter()
+    for _ in range(10_000):
+        trader.notify_tick()
+    elapsed = time.perf_counter() - started
+    trader._process_pending_once()
+
+    assert elapsed < 1.0
+    assert runtime.requests == []

@@ -9,10 +9,12 @@ import pytest
 
 from apps.launcher.cli import (
     _default_profile_dir,
+    _exit_code_after_snapshot_state,
     _restore_redirected_standard_streams,
     build_parser,
     main,
 )
+from apps.launcher.models import LauncherLifecycleState
 from packages.security import ReleaseManifestBuilder
 
 
@@ -64,6 +66,12 @@ def test_frozen_default_profile_is_user_writable_local_app_data(
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     assert _default_profile_dir() == tmp_path / "TradingLab" / "profiles" / "default"
+
+
+def test_launcher_main_loop_exits_when_supervisor_reports_stopped() -> None:
+    assert _exit_code_after_snapshot_state(LauncherLifecycleState.STOPPED) == 0
+    assert _exit_code_after_snapshot_state(LauncherLifecycleState.FAILED) == 1
+    assert _exit_code_after_snapshot_state(LauncherLifecycleState.HEALTHY) is None
 
 
 def test_windowed_frozen_child_restores_only_missing_redirected_streams() -> None:

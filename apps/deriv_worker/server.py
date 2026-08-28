@@ -198,15 +198,33 @@ class DerivWorkerServer:
             return MessageType.PONG, {}
         if message_type is MessageType.WORKER_HEALTH_REQUEST:
             manager = self._session.subscriptions
+            transport_health = self._session.transport.health_snapshot()
             return MessageType.WORKER_HEALTH_RESPONSE, {
                 "status": self._session.health.value,
                 "messages_received": self._session.messages_received,
                 "reconnect_count": self._session.reconnect_count,
                 "schema_errors": self._session.schema_errors,
                 "ticks_received": manager.ticks_received,
-                "ticks_dropped": manager.ticks_dropped,
+                "ticks_dropped": manager.ticks_dropped + transport_health.ticks_dropped_total,
                 "duplicate_ticks": manager.duplicates,
                 "late_ticks": manager.late_ticks,
+                "transport_ticks_dropped_total": transport_health.ticks_dropped_total,
+                "balance_dropped_total": transport_health.balance_dropped_total,
+                "contract_events_overflow_total": (transport_health.contract_events_overflow_total),
+                "unknown_msg_type_total": transport_health.unknown_msg_type_total,
+                "parse_failures_total": transport_health.parse_failures_total,
+                "consecutive_parse_failures": transport_health.consecutive_parse_failures,
+                "last_drop_monotonic": transport_health.last_drop_monotonic,
+                "duplicate_response_total": transport_health.duplicate_response_total,
+                "unsigned_event_total": transport_health.unsigned_event_total,
+                "last_rx_age_seconds": transport_health.last_rx_age_seconds,
+                "pings_sent_total": transport_health.pings_sent_total,
+                "pongs_received_total": transport_health.pongs_received_total,
+                "heartbeat_kills_total": transport_health.heartbeat_kills_total,
+                "last_kill_reason": transport_health.last_kill_reason,
+                "last_kill_monotonic": transport_health.last_kill_monotonic,
+                "suspend_detections_total": transport_health.suspend_detections_total,
+                "reconciliation_required": (transport_health.contract_events_overflow_total > 0),
             }
         if message_type is MessageType.ORDER_SUBMIT:
             if not self._capabilities.can_submit_orders or self._order_session is None:
@@ -247,15 +265,43 @@ class DerivWorkerServer:
             evidence_payload = (
                 status_result.evidence.to_payload() if status_result.evidence is not None else None
             )
+            not_found_payload = (
+                status_result.not_found_evidence.to_payload()
+                if status_result.not_found_evidence is not None
+                else None
+            )
             return MessageType.ORDER_STATUS_RESPONSE, {
                 "query_outcome": status_result.outcome.value,
                 "reason_code": status_result.reason_code,
                 "evidence": evidence_payload,
+                "not_found_evidence": not_found_payload,
             }
         if message_type is MessageType.BROKER_CAPABILITIES_REQUEST:
             return MessageType.BROKER_CAPABILITIES_RESPONSE, {
                 **self._session.capabilities.to_payload()
             }
+        if message_type is MessageType.BROKER_QUOTE_REQUEST:
+            if not self._capabilities.supports_quotes or self._order_session is None:
+                return MessageType.ERROR, {
+                    "reason_code": ProtocolErrorCode.WORKER_CAPABILITY_DENIED.value
+                }
+            product = self._required_str(request.payload, "product")
+            symbol = self._required_str(request.payload, "symbol")
+            currency = self._required_str(request.payload, "currency")
+            amount = request.payload.get("amount_minor_units")
+            barrier = request.payload.get("prediction_digit")
+            if type(amount) is not int or amount <= 0:
+                raise ValueError("quote amount must be a positive integer")
+            if barrier is not None and (type(barrier) is not int or not 0 <= barrier <= 9):
+                raise ValueError("quote prediction digit is invalid")
+            quote = self._order_session.quote_digit_contract(
+                product=product,
+                symbol=symbol,
+                amount_minor_units=amount,
+                currency=currency,
+                prediction_digit=barrier,
+            )
+            return MessageType.BROKER_QUOTE_RESPONSE, quote
         if message_type is MessageType.MARKET_SYMBOLS_REQUEST:
             return MessageType.MARKET_SYMBOLS_RESPONSE, {
                 "symbols": [item.to_payload() for item in self._session.active_symbols()]

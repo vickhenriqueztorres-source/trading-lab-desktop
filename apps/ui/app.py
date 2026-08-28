@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -91,6 +91,7 @@ class TradingLabMainWindow(QMainWindow):
         self.setStyleSheet(get_application_stylesheet())
 
         self._build_ui()
+        self._fit_to_available_screen()
 
         # Timer for polling IPC projection
         self._timer = QTimer(self)
@@ -100,6 +101,20 @@ class TradingLabMainWindow(QMainWindow):
 
         # Subscribe to language changes
         I18nManager.subscribe(self._on_language_changed)
+
+    def _fit_to_available_screen(self) -> None:
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        margin = 8
+        max_width = max(self.minimumWidth(), available.width() - margin)
+        max_height = max(self.minimumHeight(), available.height() - margin)
+        width = min(self.width(), max_width)
+        height = min(self.height(), max_height)
+        x = available.x() + max(0, (available.width() - width) // 2)
+        y = available.y() + max(0, (available.height() - height) // 2)
+        self.setGeometry(x, y, width, height)
 
     def _build_ui(self) -> None:
         central_widget = QWidget(self)
@@ -129,6 +144,9 @@ class TradingLabMainWindow(QMainWindow):
         self._deriv_workspace.strategy_selected.connect(self._on_strategy_selected)
         self._synthetic_config_panel.config_apply_requested.connect(
             self._on_digit_risk_config_apply
+        )
+        self._synthetic_config_panel.test_session_reset_requested.connect(
+            self._on_reset_digit_test_session
         )
         self._iqoption_workspace = BrokerWorkspaceWidget(
             "IQ_OPTION",
@@ -507,6 +525,7 @@ class TradingLabMainWindow(QMainWindow):
             deriv_connected,
             self._deriv_real_selected,
             snapshot.deriv_bot_reason,
+            snapshot.deriv_bot_waiting_status,
         )
 
     def _update_bot_button(self) -> None:
@@ -541,8 +560,14 @@ class TradingLabMainWindow(QMainWindow):
 
     def _on_resume(self) -> None:
         try:
-            self._controller.resume()
+            ack = self._controller.resume()
             self._refresh_projection()
+            if not ack.accepted:
+                QMessageBox.warning(
+                    self,
+                    t("error.resume_title"),
+                    t("error.resume_blocked_message", reason=ack.reason_code),
+                )
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -563,12 +588,42 @@ class TradingLabMainWindow(QMainWindow):
 
     def _on_digit_risk_config_apply(self, config: UiDigitRiskConfig) -> None:
         try:
+            if self._bot_enabled:
+                self._on_safe_stop()
             ack = self._controller.update_digit_risk_config(config)
             accepted = ack.status is UiDigitRiskConfigStatus.OK
             self._synthetic_config_panel.set_apply_result(accepted, ack.reason_code)
             self._refresh_projection()
         except Exception as exc:
             self._synthetic_config_panel.set_apply_result(False, str(exc)[:64])
+
+    def _on_reset_digit_test_session(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            t("demo.reset.title"),
+            t("demo.reset.confirm"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            ack = self._controller.reset_digit_test_session()
+            self._refresh_projection()
+            if ack.accepted:
+                QMessageBox.information(self, t("demo.reset.title"), t("demo.reset.success"))
+            else:
+                QMessageBox.warning(
+                    self,
+                    t("demo.reset.title"),
+                    t("demo.reset.rejected", reason=ack.reason_code),
+                )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                t("demo.reset.title"),
+                t("demo.reset.rejected", reason=str(exc)[:64]),
+            )
 
     def _on_export_diagnostic(self) -> None:
         try:

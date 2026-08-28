@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qs, urlsplit
 
 from apps.deriv_worker.schema import DerivErrorCategory, DerivWorkerError
@@ -34,6 +35,75 @@ TRADING_OPERATION_DENYLIST = (
     )
     | FORBIDDEN_OPERATIONS_DENYLIST
 )
+
+READ_ONLY_PROPOSAL_CONTRACT_TYPES = frozenset(
+    {
+        "CALL",
+        "PUT",
+        "DIGITDIFF",
+        "DIGITEVEN",
+        "DIGITMATCH",
+        "DIGITODD",
+        "DIGITOVER",
+        "DIGITUNDER",
+    }
+)
+_READ_ONLY_PROPOSAL_ALLOWED_KEYS = frozenset(
+    {
+        "amount",
+        "barrier",
+        "basis",
+        "contract_type",
+        "currency",
+        "duration",
+        "duration_unit",
+        "proposal",
+        "req_id",
+        "underlying_symbol",
+    }
+)
+_DIGIT_BARRIER_CONTRACT_TYPES = frozenset({"DIGITDIFF", "DIGITMATCH", "DIGITOVER", "DIGITUNDER"})
+_CALL_PUT_CONTRACT_TYPES = frozenset({"CALL", "PUT"})
+
+
+def _validate_public_read_only_proposal(payload: Mapping[str, object]) -> bool:
+    if set(payload) - _READ_ONLY_PROPOSAL_ALLOWED_KEYS:
+        return False
+    if payload.get("proposal") != 1:
+        return False
+    contract_type = str(payload.get("contract_type", "")).strip().upper()
+    if contract_type not in READ_ONLY_PROPOSAL_CONTRACT_TYPES:
+        return False
+    try:
+        amount = Decimal(str(payload.get("amount", "")))
+    except (InvalidOperation, ValueError):
+        return False
+    if not amount.is_finite() or amount <= 0:
+        return False
+    if payload.get("basis") != "stake" or payload.get("currency") != "USD":
+        return False
+    if payload.get("duration_unit") != "t":
+        return False
+    duration = payload.get("duration")
+    if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
+        return False
+    if contract_type in _CALL_PUT_CONTRACT_TYPES and duration not in {1, 5, 10}:
+        return False
+    if contract_type not in _CALL_PUT_CONTRACT_TYPES and duration != 1:
+        return False
+    symbol = payload.get("underlying_symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        return False
+    has_barrier = "barrier" in payload
+    if contract_type in _DIGIT_BARRIER_CONTRACT_TYPES:
+        if not has_barrier:
+            return False
+        try:
+            barrier = int(str(payload["barrier"]))
+        except (TypeError, ValueError):
+            return False
+        return 0 <= barrier <= 9
+    return not has_barrier
 
 
 def validate_deriv_ws_url(
@@ -131,6 +201,13 @@ def validate_outbound_deriv_request(
     if opcode in FORBIDDEN_OPERATIONS_DENYLIST or any(
         key in FORBIDDEN_OPERATIONS_DENYLIST for key in payload
     ):
+        raise DerivWorkerError(
+            DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
+            "DERIV_TRADING_OPERATION_DISABLED",
+        )
+    if not demo_authenticated and opcode == "proposal":
+        if _validate_public_read_only_proposal(payload):
+            return
         raise DerivWorkerError(
             DerivErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "DERIV_TRADING_OPERATION_DISABLED",

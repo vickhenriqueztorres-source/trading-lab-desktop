@@ -35,6 +35,7 @@ _PANEL_KEYS = {
     "COOLDOWN_LABEL",
     "CONFIDENCE_LABEL",
     "APPLY_CONFIG_BTN",
+    "RESET_DEMO_SESSION_BTN",
     "DIGIT_SYMBOL_LABEL",
     "DIGIT_CONFIDENCE_DISCLAIMER",
     "MARTINGALE_ENABLED_LABEL",
@@ -115,8 +116,17 @@ def test_digit_panel_i18n_parity_and_headless_rendering() -> None:
     panel.set_config(_config())
     panel.show()
     app.processEvents()
-    assert panel.current_config() == _config()
+    assert panel.current_config() == UiDigitRiskConfig(
+        **{
+            **_config().to_payload(),
+            "min_quantum_confidence_pct": Decimal("92.5"),
+            "martingale_multiplier": Decimal("2.00"),
+            "martingale_max_stake_minor_units": 5000,
+        }
+    )
     assert panel.apply_button.isEnabled()
+    assert panel.reset_session_button.isEnabled()
+    assert "result" in panel.reset_session_button.text().lower()
 
     I18nManager.set_language("en")
     panel.retranslate()
@@ -172,9 +182,9 @@ def test_digit_panel_enables_only_a_fully_bounded_martingale_sequence() -> None:
     assert config.martingale_enabled is True
     assert config.martingale_max_steps == 2
     assert config.max_consecutive_losses == 3
-    assert config.martingale_max_stake_minor_units == 2000
-    assert "10.00" in panel.martingale_projection.text()
-    assert "50.00" in panel.martingale_projection.text()
+    assert config.martingale_max_stake_minor_units == 5000
+    assert "11.11" in panel.martingale_projection.text()
+    assert "40.00" in panel.martingale_projection.text()
     panel.close()
 
 
@@ -194,5 +204,6 @@ def test_digit_panel_hides_internal_martingale_safety_bounds() -> None:
         assert TRANSLATIONS["MARTINGALE_MAX_STAKE_LABEL"][language] not in visible_text
     assert not hasattr(panel, "martingale_steps_input")
     assert not hasattr(panel, "martingale_max_stake_input")
-    assert panel.current_config() == _config()
+    assert panel.current_config() is not None
+    assert panel.current_config().martingale_max_stake_minor_units == 5000
     panel.close()

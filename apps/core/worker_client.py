@@ -7,6 +7,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Protocol
 from uuid import uuid4
@@ -15,13 +16,14 @@ from packages.domain.market import (
     BrokerAccountBalance,
     BrokerCapabilities,
     BrokerClockSnapshot,
+    BrokerProposalQuote,
     ContractMetadata,
     MarketCandle,
     MarketHistoryBatch,
     MarketSymbol,
     MarketTick,
 )
-from packages.domain.models import BrokerOrderEvent, OrderCommand, OrderStatusQuery
+from packages.domain.models import Broker, BrokerOrderEvent, Money, OrderCommand, OrderStatusQuery
 from packages.market_data import DigitFrequencySnapshot
 from packages.observability.events import EventSink, NullEventSink
 from packages.protocol.codec import encode_envelope
@@ -62,6 +64,81 @@ class WorkerDispatchError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.delivery = delivery
+
+
+def _decimal_money_to_minor_units(value: Decimal, currency: str) -> int:
+    if currency != "USD":
+        raise WorkerDispatchError(
+            ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+            DeliveryCertainty.NOT_SENT,
+            "broker quote currency is unsupported",
+        )
+    cents = value * Decimal(100)
+    if cents != cents.to_integral_value():
+        raise WorkerDispatchError(
+            ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+            DeliveryCertainty.NOT_SENT,
+            "broker quote monetary value has unsupported precision",
+        )
+    return int(cents)
+
+
+def _proposal_quote_from_payload(
+    payload: Mapping[str, object],
+    received_monotonic: float,
+) -> BrokerProposalQuote:
+    required = (
+        "broker_symbol",
+        "contract_type",
+        "proposal_id",
+        "ask_price",
+        "payout",
+        "net_profit_ratio",
+    )
+    if any(name not in payload for name in required):
+        raise WorkerDispatchError(
+            ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+            DeliveryCertainty.NOT_SENT,
+            "broker quote payload is incomplete",
+        )
+    broker_symbol = payload["broker_symbol"]
+    contract_type = payload["contract_type"]
+    proposal_id = payload["proposal_id"]
+    currency = payload.get("currency", "USD")
+    barrier = payload.get("barrier")
+    if (
+        not isinstance(broker_symbol, str)
+        or not isinstance(contract_type, str)
+        or not isinstance(proposal_id, str)
+        or not isinstance(currency, str)
+        or (barrier is not None and (type(barrier) is not int or not 0 <= barrier <= 9))
+    ):
+        raise WorkerDispatchError(
+            ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+            DeliveryCertainty.NOT_SENT,
+            "broker quote identity is invalid",
+        )
+    try:
+        ask = Decimal(str(payload["ask_price"]))
+        payout = Decimal(str(payload["payout"]))
+        ratio = Decimal(str(payload["net_profit_ratio"]))
+    except (InvalidOperation, ValueError) as exc:
+        raise WorkerDispatchError(
+            ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+            DeliveryCertainty.NOT_SENT,
+            "broker quote decimal payload is invalid",
+        ) from exc
+    return BrokerProposalQuote(
+        broker=Broker.DERIV,
+        broker_symbol=broker_symbol,
+        contract_type=contract_type.upper(),
+        barrier=barrier,
+        ask_price=Money(_decimal_money_to_minor_units(ask, currency), currency),
+        payout=Money(_decimal_money_to_minor_units(payout, currency), currency),
+        proposal_id=proposal_id,
+        received_monotonic=received_monotonic,
+        payout_return_ratio=ratio,
+    )
 
 
 class OrderSubmissionPort(Protocol):
@@ -407,6 +484,7 @@ class SocketWorkerClient:
             message_id=result.response_message_id,
             correlation_id=result.correlation_id,
             outcome=result.outcome.value,
+            reason_code=result.reason_code,
         )
         return result
 
@@ -497,6 +575,80 @@ class SocketWorkerClient:
     def broker_capabilities(self) -> BrokerCapabilities:
         response = self._read_only_request(MessageType.BROKER_CAPABILITIES_REQUEST, {})
         return parse_broker_capabilities_response(response)
+
+    def quote_digit_contract(
+        self,
+        *,
+        product: str,
+        symbol: str,
+        amount_minor_units: int,
+        currency: str,
+        prediction_digit: int | None,
+    ) -> Decimal:
+        payload: dict[str, object] = {
+            "product": product,
+            "symbol": symbol,
+            "amount_minor_units": amount_minor_units,
+            "currency": currency,
+        }
+        if prediction_digit is not None:
+            payload["prediction_digit"] = prediction_digit
+        response = self._read_only_request(MessageType.BROKER_QUOTE_REQUEST, payload)
+        if response.message_type is not MessageType.BROKER_QUOTE_RESPONSE:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_UNKNOWN_MESSAGE_TYPE,
+                DeliveryCertainty.NOT_SENT,
+                "broker quote response is invalid",
+            )
+        raw_ratio = response.payload.get("net_profit_ratio")
+        if not isinstance(raw_ratio, str):
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                DeliveryCertainty.NOT_SENT,
+                "broker quote ratio is missing",
+            )
+        try:
+            ratio = Decimal(raw_ratio)
+        except InvalidOperation as exc:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                DeliveryCertainty.NOT_SENT,
+                "broker quote ratio is invalid",
+            ) from exc
+        if not ratio.is_finite() or ratio <= 0:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                DeliveryCertainty.NOT_SENT,
+                "broker quote ratio is not positive",
+            )
+        return ratio
+
+    def quote_digit_contract_details(
+        self,
+        *,
+        product: str,
+        symbol: str,
+        amount_minor_units: int,
+        currency: str,
+        prediction_digit: int | None,
+        received_monotonic: float,
+    ) -> BrokerProposalQuote:
+        payload: dict[str, object] = {
+            "product": product,
+            "symbol": symbol,
+            "amount_minor_units": amount_minor_units,
+            "currency": currency,
+        }
+        if prediction_digit is not None:
+            payload["prediction_digit"] = prediction_digit
+        response = self._read_only_request(MessageType.BROKER_QUOTE_REQUEST, payload)
+        if response.message_type is not MessageType.BROKER_QUOTE_RESPONSE:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_UNKNOWN_MESSAGE_TYPE,
+                DeliveryCertainty.NOT_SENT,
+                "broker quote response is invalid",
+            )
+        return _proposal_quote_from_payload(response.payload, received_monotonic)
 
     def market_symbols(self) -> tuple[MarketSymbol, ...]:
         response = self._read_only_request(MessageType.MARKET_SYMBOLS_REQUEST, {})
@@ -708,6 +860,17 @@ class SocketWorkerClient:
             )
 
     def request_health(self) -> str:
+        response = self.request_health_snapshot()
+        status = response.get("status")
+        if not isinstance(status, str):
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                DeliveryCertainty.NOT_SENT,
+                "worker health status is invalid",
+            )
+        return status
+
+    def request_health_snapshot(self) -> dict[str, object]:
         message_id = str(uuid4())
         envelope = Envelope(
             protocol_version=PROTOCOL_VERSION,
@@ -735,7 +898,7 @@ class SocketWorkerClient:
                 DeliveryCertainty.NOT_SENT,
                 "worker health status is invalid",
             )
-        return status
+        return dict(response.payload)
 
     def shutdown(self, timeout: float) -> bool:
         if not self.is_ready:

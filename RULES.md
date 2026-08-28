@@ -184,8 +184,10 @@ Kill da janela não equivale a “Encerrar com segurança” e não autoriza aba
   usar assertividade curta como prova de vantagem.
 - **R-CAT-016:** Seleção automática de ativo DEVE respeitar elegibilidade, cooldown, ordem em voo e
   recuperação Martingale; mudança de ativo NÃO DEVE ocorrer no meio de uma sequência de recuperação.
-- **R-CAT-017:** Martingale DEVE iniciar desligado, ser opt-in e respeitar simultaneamente
-  multiplicador, passos, stake máxima e perda projetada dentro do stop diário.
+- **R-CAT-017:** Martingale DEVE iniciar desligado, ser opt-in e calcular recuperação a partir de
+  proposta atual do broker, respeitando simultaneamente passos, stake máxima, exposição e orçamento
+  de perda restante dentro do stop diário. Retorno inválido ou recuperação inviável DEVE falhar
+  fechado sem clamp silencioso.
 
 ## 11. Testes
 

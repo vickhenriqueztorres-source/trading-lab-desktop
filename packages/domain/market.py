@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from packages.domain.models import Broker, require_aware_utc
+from packages.domain.models import Broker, Money, require_aware_utc
 
 
 class BrokerConnectionMode(StrEnum):
@@ -28,6 +28,46 @@ class BrokerClockHealth(StrEnum):
     UNSYNCHRONIZED = "UNSYNCHRONIZED"
     HEALTHY = "HEALTHY"
     STALE = "STALE"
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerProposalQuote:
+    """Immutable, redacted broker proposal evidence.
+
+    The proposal id is a quote handle, not an authorization credential. Account
+    identifiers, tokens and raw broker payloads deliberately stay outside this
+    model.
+    """
+
+    broker: Broker
+    broker_symbol: str
+    contract_type: str
+    barrier: int | None
+    ask_price: Money
+    payout: Money
+    proposal_id: str
+    received_monotonic: float
+    payout_return_ratio: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.broker_symbol.strip() or not self.contract_type.strip():
+            raise ValueError("proposal quote identity is required")
+        if self.barrier is not None and not 0 <= self.barrier <= 9:
+            raise ValueError("proposal quote barrier is invalid")
+        if self.ask_price.currency != self.payout.currency:
+            raise ValueError("proposal quote currency mismatch")
+        if self.ask_price.minor_units <= 0 or self.payout.minor_units <= self.ask_price.minor_units:
+            raise ValueError("proposal quote prices are invalid")
+        if not self.proposal_id.strip():
+            raise ValueError("proposal id is required")
+        if self.received_monotonic < 0:
+            raise ValueError("proposal monotonic timestamp is invalid")
+        if (
+            not isinstance(self.payout_return_ratio, Decimal)
+            or not self.payout_return_ratio.is_finite()
+            or self.payout_return_ratio <= 0
+        ):
+            raise ValueError("proposal payout return ratio is invalid")
 
 
 def _required_str(payload: Mapping[str, object], name: str) -> str:

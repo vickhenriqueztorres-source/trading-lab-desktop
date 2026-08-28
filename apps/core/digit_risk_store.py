@@ -33,6 +33,15 @@ class DigitRiskConfigStore:
                 currency=raw["currency"],
                 auto_select_symbol=raw.get("auto_select_symbol", True),
                 active_strategy_id=raw.get("active_strategy_id", "tail-probability-edge"),
+                enabled_strategy_ids=frozenset(
+                    raw.get(
+                        "enabled_strategy_ids",
+                        (raw.get("active_strategy_id", "tail-probability-edge"),),
+                    )
+                ),
+                stress_test_all_strategies_enabled=raw.get(
+                    "stress_test_all_strategies_enabled", False
+                ),
                 martingale_enabled=raw["martingale_enabled"],
                 martingale_multiplier=Decimal(raw["martingale_multiplier"]),
                 martingale_max_steps=raw["martingale_max_steps"],
@@ -59,6 +68,8 @@ class DigitRiskConfigStore:
             "currency": config.currency,
             "auto_select_symbol": config.auto_select_symbol,
             "active_strategy_id": config.active_strategy_id,
+            "enabled_strategy_ids": sorted(config.enabled_strategy_ids),
+            "stress_test_all_strategies_enabled": config.stress_test_all_strategies_enabled,
             "martingale_enabled": config.martingale_enabled,
             "martingale_multiplier": str(config.martingale_multiplier),
             "martingale_max_steps": config.martingale_max_steps,

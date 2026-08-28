@@ -39,6 +39,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
     },
     "APPLY_CONFIG_BTN": {"en": "Apply Parameters", "es": "Aplicar Parámetros"},
+    "RESET_DEMO_SESSION_BTN": {
+        "en": "Reset Bot Results",
+        "es": "Reiniciar Resultados del Bot",
+    },
     "DIGIT_SYMBOL_LABEL": {"en": "Deriv Synthetic Index", "es": "Índice Sintético Deriv"},
     "DIGIT_CONFIDENCE_DISCLAIMER": {
         "en": "Statistical threshold; it is not a profit forecast or result guarantee.",
@@ -46,8 +50,20 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "DIGIT_CONFIG_VALID": {"en": "Configuration is valid.", "es": "Configuración válida."},
     "DIGIT_CONFIG_INVALID": {
-        "en": "Review the monetary fields; minimum stake is USD 0.35.",
-        "es": "Revise los campos monetarios; el stake mínimo es USD 0,35.",
+        "en": "Review the configuration fields.",
+        "es": "Revise los campos de configuración.",
+    },
+    "DIGIT_CONFIG_STAKE_INVALID": {
+        "en": "Stake must be a broker-valid amount of at least USD 0.35.",
+        "es": "El stake debe ser válido para el broker y de al menos USD 0,35.",
+    },
+    "DIGIT_CONFIG_STOP_INVALID": {
+        "en": "Daily Stop Loss must be greater than zero.",
+        "es": "El Stop Loss diario debe ser mayor que cero.",
+    },
+    "DIGIT_CONFIG_TAKE_INVALID": {
+        "en": "Take Profit must be greater than zero.",
+        "es": "El Take Profit debe ser mayor que cero.",
     },
     "DIGIT_CONFIG_APPLIED": {
         "en": "Configuration applied by the Core",
@@ -61,6 +77,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Configured take-profit / stop-loss ratio: {ratio}",
         "es": "Relación configurada take-profit / stop-loss: {ratio}",
     },
+    "DIFFERS_SESSION_EXPECTED_TOLL": {
+        "en": "Differs Session expected cost: USD {amount} per entry (EV -1.9%)",
+        "es": "Costo esperado Sessão Differs: USD {amount} por entrada (EV -1,9%)",
+    },
     "DIGIT_RISK_PROJECTION_UNAVAILABLE": {
         "en": "Risk/return projection unavailable until all fields are valid.",
         "es": "Proyección riesgo/retorno no disponible hasta validar todos los campos.",
@@ -70,8 +90,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Martingale",
     },
     "MARTINGALE_MULTIPLIER_LABEL": {
-        "en": "Multiplier",
-        "es": "Multiplicador",
+        "en": "Recovery calculation",
+        "es": "Cálculo de recuperación",
     },
     "MARTINGALE_STEPS_LABEL": {
         "en": "Recovery steps",
@@ -86,8 +106,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Martingale Delimitado DESACTIVADO · stake fija activa.",
     },
     "MARTINGALE_PROJECTION": {
-        "en": "Bounded sequence: {sequence} · maximum projected sequence loss USD {loss}",
-        "es": "Secuencia delimitada: {sequence} · pérdida máxima proyectada USD {loss}",
+        "en": (
+            "Quote-aware recovery · example at {ratio}% net: USD {recovery} · "
+            "remaining daily stop after base loss: USD {remaining}"
+        ),
+        "es": (
+            "Recuperación por cotización · ejemplo con {ratio}% neto: USD {recovery} · "
+            "stop diario restante tras la pérdida base: USD {remaining}"
+        ),
     },
     "MARTINGALE_PROJECTION_UNAVAILABLE": {
         "en": "Martingale projection unavailable until all caps are valid.",
@@ -601,6 +627,30 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "error.resume_message": {
         "en": "Could not resume entries: {error}",
         "es": "No se pudieron reanudar las entradas: {error}",
+    },
+    "error.resume_blocked_message": {
+        "en": "The bot remains off because a safety rule is active: {reason}",
+        "es": "El bot sigue apagado porque hay una protección activa: {reason}",
+    },
+    "demo.reset.title": {"en": "Reset bot results", "es": "Reiniciar resultados del bot"},
+    "demo.reset.confirm": {
+        "en": (
+            "Reset the displayed bot results, loss counter, daily limits, cooldown and "
+            "Martingale for a new Demo test? Audit history is preserved and the bot remains off."
+        ),
+        "es": (
+            "¿Reiniciar los resultados visibles, pérdidas, límites diarios, pausa y Martingale "
+            "para una nueva prueba Demo? El historial de auditoría se conserva y el bot sigue "
+            "apagado."
+        ),
+    },
+    "demo.reset.success": {
+        "en": "Bot results reset. You can now start a new Demo test.",
+        "es": "Resultados del bot reiniciados. Ahora puede iniciar una nueva prueba Demo.",
+    },
+    "demo.reset.rejected": {
+        "en": "The Demo session could not be reset: {reason}",
+        "es": "No se pudo reiniciar la sesión Demo: {reason}",
     },
     # Health Gates
     "gates.title": {

@@ -22,6 +22,7 @@ from packages.persistence.writer import (
     ReservationReleaseBlocked,
     SingleDatabaseWriter,
 )
+from packages.protocol.messages import WorkerSubmissionResult
 
 
 def build_coordinator(
@@ -145,6 +146,40 @@ def test_confirmed_dispatch_state_survives_restart(
         reader.one("outbox_messages", "message_id", persisted.message_id)["state"] == "DISPATCHED"
     )
     restarted_writer.close()
+
+
+def test_confirmed_rejection_reason_is_persisted_for_diagnostics(
+    tmp_path: Path,
+    order_request: OrderRequest,
+) -> None:
+    class RejectedWorker:
+        def submit_order(self, command):
+            return WorkerSubmissionResult(
+                outcome=WorkerOutcome.REJECTED,
+                broker_order_id=None,
+                response_message_id="response-rejected",
+                correlation_id=command.correlation_id,
+                causation_id=command.message_id,
+                reason_code="DERIV_INVALID_REQUEST",
+            )
+
+    db_path = tmp_path / "state.db"
+    writer = SingleDatabaseWriter(db_path)
+    reader = StateReader(db_path)
+    coordinator = OrderCoordinator(writer, RejectedWorker(), HealthGate())
+
+    persisted = coordinator.submit(order_request)
+
+    outbox = reader.one("outbox_messages", "message_id", persisted.message_id)
+    assert outbox is not None
+    assert outbox["state"] == "DISPATCHED"
+    assert outbox["state_reason"] == "DERIV_INVALID_REQUEST"
+    assert reader.one("orders", "order_id", persisted.order_id)["state"] == "REJECTED"
+    assert (
+        reader.one("risk_reservations", "reservation_id", persisted.reservation_id)["state"]
+        == "RELEASED"
+    )
+    writer.close()
 
 
 def test_timeout_becomes_ambiguous_and_keeps_exposure(

@@ -8,6 +8,10 @@ from packages.signal_arbitration.models import (
     ArbitratedSignal,
     ArbitrationDecision,
     ArbitrationReason,
+    RankedArbitrationDecision,
+    RankedRejectionReason,
+    RankedSignalCandidate,
+    RankedSignalRejection,
 )
 from packages.strategies.models import ArbitrationKey, StrategySignal
 from packages.strategy_catalog.catalog import StrategyCatalog
@@ -23,15 +27,60 @@ def canonicalize_symbol(symbol: str) -> str:
 
 
 class SignalArbiter:
-    def __init__(self, catalog: StrategyCatalog, *, audit_capacity: int = 1024) -> None:
+    def __init__(self, catalog: StrategyCatalog | None, *, audit_capacity: int = 1024) -> None:
         if audit_capacity <= 0:
             raise ValueError("audit_capacity must be positive")
         self._catalog = catalog
         self._audit: deque[ArbitrationDecision] = deque(maxlen=audit_capacity)
+        self._ranked_audit: deque[RankedArbitrationDecision] = deque(maxlen=audit_capacity)
 
     @property
     def audit(self) -> tuple[ArbitrationDecision, ...]:
         return tuple(self._audit)
+
+    @property
+    def ranked_audit(self) -> tuple[RankedArbitrationDecision, ...]:
+        return tuple(self._ranked_audit)
+
+    def arbitrate_ranked(
+        self, candidates: tuple[RankedSignalCandidate, ...]
+    ) -> RankedArbitrationDecision:
+        """Select one digit candidate deterministically without multiplying exposure."""
+
+        unique = {item.signal_id: item for item in candidates}
+        ordered = tuple(
+            sorted(
+                unique.values(),
+                key=lambda item: (
+                    -item.conservative_margin,
+                    -item.conditional_sample,
+                    item.strategy_id,
+                    item.symbol,
+                    item.signal_id,
+                ),
+            )
+        )
+        if not ordered:
+            decision = RankedArbitrationDecision((), None, ())
+            self._ranked_audit.append(decision)
+            return decision
+        winner = ordered[0]
+        rejected: list[RankedSignalRejection] = []
+        for item in ordered[1:]:
+            if item.conservative_margin < winner.conservative_margin:
+                reason = RankedRejectionReason.LOST_TO_HIGHER_MARGIN
+            elif item.conditional_sample < winner.conditional_sample:
+                reason = RankedRejectionReason.LOST_TO_LARGER_SAMPLE
+            else:
+                reason = RankedRejectionReason.LOST_TO_STABLE_STRATEGY_ID
+            rejected.append(RankedSignalRejection(item.signal_id, reason))
+        decision = RankedArbitrationDecision(
+            tuple(item.signal_id for item in ordered),
+            winner.signal_id,
+            tuple(rejected),
+        )
+        self._ranked_audit.append(decision)
+        return decision
 
     def arbitrate_all(
         self,
@@ -39,6 +88,8 @@ class SignalArbiter:
         *,
         now: datetime,
     ) -> tuple[ArbitrationDecision, ...]:
+        if self._catalog is None:
+            raise RuntimeError("catalog is required for governed signal arbitration")
         groups: dict[ArbitrationKey, list[StrategySignal]] = defaultdict(list)
         seen: set[str] = set()
         for signal in signals:
@@ -60,6 +111,8 @@ class SignalArbiter:
         now: datetime,
     ) -> tuple[ArbitrationDecision, ...]:
         """Cross-broker arbitration grouping by canonical symbol and timeframe."""
+        if self._catalog is None:
+            raise RuntimeError("catalog is required for governed signal arbitration")
         groups: dict[tuple[str, int], list[StrategySignal]] = defaultdict(list)
         seen: set[str] = set()
         for signal in signals:
@@ -155,6 +208,7 @@ class SignalArbiter:
         signals: tuple[StrategySignal, ...],
         now: datetime,
     ) -> ArbitrationDecision:
+        assert self._catalog is not None
         considered = tuple(sorted(signal.signal_id for signal in signals))
         eligible = tuple(
             signal

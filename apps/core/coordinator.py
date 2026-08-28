@@ -9,7 +9,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from apps.core.health import HealthGate
-from apps.core.risk import RiskLedger
+from apps.core.risk import PersistedActiveExposurePort, RiskLedger
 from apps.core.worker_client import DeliveryCertainty, OrderSubmissionPort, WorkerDispatchError
 from packages.domain.models import Broker, OrderCommand, OrderRequest, WorkerOutcome, utc_now
 from packages.persistence.health import DatabaseFailureReason
@@ -121,6 +121,7 @@ class OutboxDispatcher:
         if command.deadline_at <= dispatch_time:
             self._writer.cancel_expired_before_dispatch(command, dispatch_time)
             return command
+        reason_code: str | None = None
         try:
             result = self._worker.submit_order(command)
         except WorkerDispatchError as exc:
@@ -143,10 +144,12 @@ class OutboxDispatcher:
         else:
             outcome = result.outcome
             broker_order_id = result.broker_order_id
+            reason_code = result.reason_code
         self._writer.record_dispatch_result(
             command,
             outcome.value,
             broker_order_id=broker_order_id,
+            reason_code=reason_code,
             now=utc_now(),
         )
         if outcome is WorkerOutcome.TIMEOUT_AFTER_POSSIBLE_SEND:
@@ -179,6 +182,8 @@ class OrderCoordinator:
         self._health_gate = health_gate
         self._serializer = serializer or AccountCommandSerializer()
         self._risk_ledger = risk_ledger or RiskLedger()
+        if not self._risk_ledger.has_active_exposure_port:
+            self._risk_ledger.configure_active_exposure_port(PersistedActiveExposurePort(writer))
         self._entry_authorizer = entry_authorizer
 
     def submit(self, request: OrderRequest, *, dispatch: bool = True) -> PersistedOrder:
@@ -223,6 +228,7 @@ class OrderCoordinator:
                     created_at=created_at,
                     global_max_exposure_minor_units=self._risk_ledger.config.global_max_exposure_minor_units,
                     max_exposure_per_symbol_minor_units=self._risk_ledger.config.max_exposure_per_symbol_minor_units,
+                    reference_currency=self._risk_ledger.config.reference_currency,
                 )
             except AccountBusyError:
                 raise
@@ -231,13 +237,6 @@ class OrderCoordinator:
             except PersistenceError:
                 self._health_gate.fail_database(DatabaseFailureReason.DB_WRITE_FAILED)
                 raise
-            self._risk_ledger.register_active_reservation(
-                reservation_id,
-                request.broker.value,
-                request.account_id,
-                request.symbol,
-                request.amount,
-            )
             if dispatch:
                 self._dispatcher.dispatch_next(
                     broker=request.broker.value, account_id=request.account_id

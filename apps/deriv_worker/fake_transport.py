@@ -8,6 +8,7 @@ from enum import StrEnum
 
 from apps.deriv_worker.request_allowlist import DerivOperation, validate_read_only_request
 from apps.deriv_worker.schema import DerivErrorCategory, DerivWorkerError
+from apps.deriv_worker.websocket_client import TransportHealthSnapshot
 
 
 class FakeDerivScenario(StrEnum):
@@ -61,10 +62,14 @@ class FakeDerivTransport:
         self._stream_events: queue.Queue[dict[str, object]] = queue.Queue(maxsize=128)
         self._account_events: queue.Queue[dict[str, object]] = queue.Queue(maxsize=32)
         self._contract_events: queue.Queue[dict[str, object]] = queue.Queue(maxsize=64)
+        self._proposal_events: queue.Queue[dict[str, object]] = queue.Queue(maxsize=64)
         self.stream_events_dropped = 0
 
     def reconnect(self) -> None:
         self.reconnect_count += 1
+
+    def health_snapshot(self) -> TransportHealthSnapshot:
+        return TransportHealthSnapshot(0, 0, 0, 0, 0, 0, 0, None)
 
     def request(
         self,
@@ -370,6 +375,17 @@ class FakeDerivTransport:
                 "proposal_open_contract": record,
                 "subscription": {"id": f"fake-poc-sub-{cid}"},
             }
+        if operation is DerivOperation.PORTFOLIO:
+            contracts = [
+                dict(record)
+                for record in self._contracts.values()
+                if int(str(record.get("is_sold", 0))) != 1
+                and int(str(record.get("is_expired", 0))) != 1
+            ]
+            return {
+                "msg_type": "portfolio",
+                "portfolio": {"contracts": contracts},
+            }
         if operation is DerivOperation.STATEMENT:
             return {
                 "msg_type": "statement",
@@ -389,16 +405,24 @@ class FakeDerivTransport:
         if operation is DerivOperation.PROPOSAL:
             proposal_id = f"fake-proposal-{len(self._proposals) + 1}"
             self._proposals[proposal_id] = dict(payload)
-            return {
+            ask = Decimal(str(payload.get("amount", "10.00")))
+            contract_type = str(payload.get("contract_type", "")).upper()
+            net_ratio = Decimal("0.10") if contract_type == "DIGITDIFF" else Decimal("0.95")
+            response: dict[str, object] = {
                 "msg_type": "proposal",
                 "proposal": {
                     "id": proposal_id,
-                    "ask_price": str(payload.get("amount", "10.00")),
-                    "payout": "19.50",
+                    "ask_price": str(ask),
+                    "payout": str(ask * (Decimal("1") + net_ratio)),
                     "spot": "1.08500",
                     "spot_time": self.server_epoch,
                 },
             }
+            if payload.get("subscribe") == 1:
+                response["subscription"] = {"id": proposal_id}
+                with contextlib.suppress(queue.Full):
+                    self._proposal_events.put_nowait(dict(response))
+            return response
         raise AssertionError(f"fake operation not implemented: {operation}")
 
     def emit_tick(
@@ -472,6 +496,14 @@ class FakeDerivTransport:
             raise ValueError("fake Deriv contract receive timeout cannot be negative")
         try:
             return self._contract_events.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def receive_proposal(self, *, timeout: float) -> dict[str, object] | None:
+        if timeout < 0:
+            raise ValueError("fake Deriv proposal receive timeout cannot be negative")
+        try:
+            return self._proposal_events.get(timeout=timeout)
         except queue.Empty:
             return None
 

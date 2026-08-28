@@ -74,6 +74,13 @@ O Core compõe:
 - `BrokerEventPump`: processamento de eventos financeiros;
 - `ReconciliationCoordinator`: resolução por evidência;
 - `TradingReadinessSnapshot`: disponibilidade, recovery, readiness e ARM separados;
+
+Na Fase 1 multi-estratégia, o `strategy_catalog` mantém manifests locais das estratégias Digit
+Edge e injeta suas factories no engine. `DerivDigitEnginePool` isola buffer e warm-up por símbolo,
+com limite de 12 engines. Todas as estratégias produzem shadow; o conjunto persistido habilitado
+define somente elegibilidade. O `SignalArbiter` escolhe deterministicamente uma candidata antes do
+Portfolio Allocator e do Risk Ledger. O banco continua impondo uma única reserva ativa por conta.
+Modo estresse é exclusivo da Deriv Demo e nenhuma recuperação rearma o bot.
 - supervisores de worker e Auth Agent;
 - serviços de replay, shadow, soak e diagnóstico.
 

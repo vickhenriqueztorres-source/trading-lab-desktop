@@ -207,6 +207,19 @@ por ID.
 
 ## 10. Três estratégias de dígitos em validação Demo
 
+### Fase 1 — registry, isolamento por símbolo e multi-seleção
+
+As três estratégias de ticks são declaradas por manifests locais em um registry do
+`strategy_catalog` e injetadas no engine. `DerivDigitStrategyId` preserva os IDs históricos, mas o
+registry aceita IDs empacotados adicionais. Um `EnginePool` limitado a 12 itens mantém uma engine
+por `(Deriv, símbolo)` e rejeita erro de roteamento sem reiniciar warm-up.
+
+Todas as estratégias registradas são avaliadas em shadow. Em Demo, o conjunto persistido
+`enabled_strategy_ids` define elegibilidade de execução. O modo de estresse habilita todas por
+padrão; Real não aceita esse modo e permanece read-only. A arbitragem determinística escolhe no
+máximo um sinal, sem somar stake, e registra vencedor e descartes. A UI recebe métricas por
+estratégia/símbolo e agregadas do pool.
+
 A aba Deriv acompanha três hipóteses determinísticas. Em dados públicos e conta Real elas permanecem
 `RESEARCH_SHADOW`. Na conta Demo explicitamente conectada, o botão **Ligar Bot** promove somente o
 sinal novo daquela sessão a `PRACTICE_VALIDATION`, passando por alocação, Risk Ledger, commit de

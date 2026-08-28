@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 import pytest
 
@@ -48,6 +48,117 @@ def test_bounded_martingale_resets_after_profit_or_break_even() -> None:
 
     assert allocator.after_settlement(config, progressed, 75) == BoundedMartingaleState()
     assert allocator.after_settlement(config, progressed, 0) == BoundedMartingaleState()
+
+
+@pytest.mark.parametrize(
+    ("ratio", "expected"),
+    ((Decimal("0.10"), 1000), (Decimal("0.09"), 1112)),
+)
+def test_quote_aware_recovery_covers_the_full_outstanding_loss(
+    ratio: Decimal,
+    expected: int,
+) -> None:
+    config = BoundedMartingaleConfig(
+        base_stake=Money(100, "USD"),
+        multiplier=Decimal("2.00"),
+        max_steps=2,
+        max_stake=Money(2000, "USD"),
+        daily_stop_loss=Money(5000, "USD"),
+    )
+
+    stake = BoundedMartingaleAllocator.recovery_stake(
+        config,
+        BoundedMartingaleState(1),
+        outstanding_loss_minor_units=100,
+        net_profit_ratio=ratio,
+        remaining_loss_budget_minor_units=4900,
+    )
+
+    assert stake == Money(expected, "USD")
+    assert Decimal(stake.minor_units) * ratio >= Decimal(100)
+
+
+def test_quote_aware_recovery_never_falls_below_broker_valid_base_stake() -> None:
+    config = _config(cap=1_000)
+
+    stake = BoundedMartingaleAllocator.recovery_stake(
+        config,
+        BoundedMartingaleState(2),
+        outstanding_loss_minor_units=3,
+        net_profit_ratio=Decimal("0.09"),
+        remaining_loss_budget_minor_units=5_000,
+    )
+
+    assert stake == Money(100, "USD")
+    assert Decimal(stake.minor_units) * Decimal("0.09") >= Decimal(3)
+
+
+def test_quote_aware_recovery_divides_safely_or_rejects_instead_of_clamping() -> None:
+    config = BoundedMartingaleConfig(
+        base_stake=Money(100, "USD"),
+        multiplier=Decimal("2.00"),
+        max_steps=2,
+        max_stake=Money(600, "USD"),
+        daily_stop_loss=Money(1000, "USD"),
+    )
+    allocator = BoundedMartingaleAllocator()
+
+    assert allocator.recovery_stake(
+        config,
+        BoundedMartingaleState(1),
+        outstanding_loss_minor_units=100,
+        net_profit_ratio=Decimal("0.10"),
+        remaining_loss_budget_minor_units=900,
+    ) == Money(500, "USD")
+    with pytest.raises(ValueError, match="safety limits"):
+        allocator.recovery_stake(
+            config,
+            BoundedMartingaleState(1),
+            outstanding_loss_minor_units=200,
+            net_profit_ratio=Decimal("0.10"),
+            remaining_loss_budget_minor_units=500,
+        )
+
+
+@pytest.mark.parametrize(
+    "ratio",
+    [Decimal("0.05"), Decimal("0.09"), Decimal("0.10"), Decimal("0.50"), Decimal("0.95")],
+)
+@pytest.mark.parametrize("outstanding", [35, 100, 1_000, 10_000])
+@pytest.mark.parametrize("step", [1, 2, 3, 4])
+def test_quote_aware_recovery_stress_never_under_recovers_or_exceeds_caps(
+    ratio: Decimal,
+    outstanding: int,
+    step: int,
+) -> None:
+    config = BoundedMartingaleConfig(
+        base_stake=Money(35, "USD"),
+        multiplier=Decimal("2.00"),
+        max_steps=4,
+        max_stake=Money(50_000, "USD"),
+        daily_stop_loss=Money(50_000, "USD"),
+    )
+    remaining_budget = 40_000
+    remaining_attempts = config.max_steps - step + 1
+    minimum_target = int(
+        (Decimal(outstanding) / Decimal(remaining_attempts)).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+    )
+    try:
+        result = BoundedMartingaleAllocator.recovery_stake(
+            config,
+            BoundedMartingaleState(step),
+            outstanding_loss_minor_units=outstanding,
+            net_profit_ratio=ratio,
+            remaining_loss_budget_minor_units=remaining_budget,
+        )
+    except ValueError:
+        assert Decimal(minimum_target) / ratio > Decimal(remaining_budget)
+        return
+    assert 0 < result.minor_units <= remaining_budget
+    assert result.minor_units >= config.base_stake.minor_units
+    assert Decimal(result.minor_units) * ratio >= Decimal(minimum_target)
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from packages.domain.models import Direction, require_aware_utc
@@ -14,6 +15,41 @@ class ArbitrationReason(StrEnum):
     OPPOSING_SIGNALS_CANCELLED = "OPPOSING_SIGNALS_CANCELLED"
     ALL_SIGNALS_EXPIRED = "ALL_SIGNALS_EXPIRED"
     ALL_STRATEGIES_INELIGIBLE = "ALL_STRATEGIES_INELIGIBLE"
+    RANKED_HIGHER_MARGIN = "RANKED_HIGHER_MARGIN"
+
+
+class RankedRejectionReason(StrEnum):
+    LOST_TO_HIGHER_MARGIN = "ARBITRATION_LOST_TO_HIGHER_MARGIN"
+    LOST_TO_LARGER_SAMPLE = "ARBITRATION_LOST_TO_LARGER_SAMPLE"
+    LOST_TO_STABLE_STRATEGY_ID = "ARBITRATION_LOST_TO_STABLE_STRATEGY_ID"
+
+
+@dataclass(frozen=True, slots=True)
+class RankedSignalCandidate:
+    signal_id: str
+    strategy_id: str
+    symbol: str
+    conservative_margin: Decimal
+    conditional_sample: int
+
+    def __post_init__(self) -> None:
+        if not self.signal_id.strip() or not self.strategy_id.strip() or not self.symbol.strip():
+            raise ValueError("ranked signal identity cannot be empty")
+        if not self.conservative_margin.is_finite() or self.conditional_sample < 0:
+            raise ValueError("ranked signal evidence is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class RankedSignalRejection:
+    signal_id: str
+    reason: RankedRejectionReason
+
+
+@dataclass(frozen=True, slots=True)
+class RankedArbitrationDecision:
+    considered_signal_ids: tuple[str, ...]
+    winner_signal_id: str | None
+    rejected: tuple[RankedSignalRejection, ...]
 
 
 @dataclass(frozen=True, slots=True)

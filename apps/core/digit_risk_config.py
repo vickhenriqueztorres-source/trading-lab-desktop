@@ -35,6 +35,14 @@ DERIV_DIGIT_STRATEGY_ALLOWLIST = frozenset(
         "tail-probability-edge",
         "selective-differs-edge",
         "parity-regime-edge",
+        "payout-routed-differs-session",
+    }
+)
+DERIV_DEFAULT_DIGIT_STRATEGY_IDS = frozenset(
+    {
+        "tail-probability-edge",
+        "selective-differs-edge",
+        "parity-regime-edge",
     }
 )
 
@@ -53,6 +61,8 @@ class DigitRiskConfig:
     currency: str = "USD"
     auto_select_symbol: bool = True
     active_strategy_id: str = "tail-probability-edge"
+    enabled_strategy_ids: frozenset[str] = DERIV_DEFAULT_DIGIT_STRATEGY_IDS
+    stress_test_all_strategies_enabled: bool = True
     martingale_enabled: bool = False
     martingale_multiplier: Decimal = Decimal("2.00")
     martingale_max_steps: int = 2
@@ -119,6 +129,12 @@ def validate_digit_risk_config(config: DigitRiskConfig) -> tuple[bool, str | Non
         return False, "DIGIT_RISK_AUTO_SYMBOL_INVALID"
     if config.active_strategy_id not in DERIV_DIGIT_STRATEGY_ALLOWLIST:
         return False, "DIGIT_RISK_STRATEGY_NOT_ALLOWED"
+    if not isinstance(
+        config.enabled_strategy_ids, frozenset
+    ) or not config.enabled_strategy_ids.issubset(DERIV_DIGIT_STRATEGY_ALLOWLIST):
+        return False, "DIGIT_RISK_STRATEGY_SELECTION_INVALID"
+    if type(config.stress_test_all_strategies_enabled) is not bool:
+        return False, "DIGIT_RISK_STRESS_MODE_INVALID"
     if type(config.martingale_enabled) is not bool:
         return False, "DIGIT_MARTINGALE_ENABLED_INVALID"
     if (
@@ -140,10 +156,7 @@ def validate_digit_risk_config(config: DigitRiskConfig) -> tuple[bool, str | Non
             return False, "DIGIT_MARTINGALE_MAX_STAKE_INVALID"
         if config.max_consecutive_losses < config.martingale_max_steps + 1:
             return False, "DIGIT_MARTINGALE_LOSS_LIMIT_TOO_LOW"
-        try:
-            projected_loss = sum(projected_martingale_stakes(config))
-        except ValueError:
-            return False, "DIGIT_MARTINGALE_CONFIG_INVALID"
-        if projected_loss > config.daily_stop_loss_minor_units:
-            return False, "DIGIT_MARTINGALE_SEQUENCE_EXCEEDS_STOP_LOSS"
+        # Quote-aware recovery is bounded at allocation time by both this cap and
+        # the remaining daily loss budget.  A geometric projection is no longer
+        # valid because digit products have materially different net payouts.
     return True, None

@@ -463,7 +463,21 @@ class WorkerSupervisor:
             worker_type="SIMULATED",
         )
         if self._temporary_directory is not None:
-            self._temporary_directory.cleanup()
+            # Windows can release a killed worker's SQLite mapping a few
+            # milliseconds after process.wait() returns. Retry only this known
+            # build/test temporary directory instead of reporting a false leak.
+            cleanup_error: PermissionError | None = None
+            for delay in (0.0, 0.05, 0.10, 0.20, 0.40):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    self._temporary_directory.cleanup()
+                    cleanup_error = None
+                    break
+                except PermissionError as exc:
+                    cleanup_error = exc
+            if cleanup_error is not None:
+                raise cleanup_error
             self._temporary_directory = None
 
     def _cleanup_connection(self) -> None:

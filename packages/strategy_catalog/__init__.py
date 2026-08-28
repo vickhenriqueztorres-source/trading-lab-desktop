@@ -4,6 +4,12 @@ from packages.strategy_catalog.catalog import (
     StrategyCatalogError,
     StrategyCatalogReason,
 )
+from packages.strategy_catalog.digit_registry import (
+    DigitStrategyManifest,
+    DigitStrategyProtocol,
+    DigitStrategyRegistration,
+    DigitStrategyRegistry,
+)
 from packages.strategy_catalog.metrics import (
     StrategyPerformanceMetrics,
     TradeOutcomeRecord,
@@ -39,6 +45,10 @@ __all__ = [
     "StrategyCatalog",
     "StrategyCatalogError",
     "StrategyCatalogReason",
+    "DigitStrategyManifest",
+    "DigitStrategyProtocol",
+    "DigitStrategyRegistration",
+    "DigitStrategyRegistry",
     "StrategyManifest",
     "StrategyPerformanceMetrics",
     "TradeOutcomeRecord",
