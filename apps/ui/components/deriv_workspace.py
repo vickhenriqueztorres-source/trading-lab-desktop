@@ -318,6 +318,9 @@ class DerivWorkspaceWidget(QWidget):
                 "BOT_WAITING_FOR_STRATEGY_SIGNAL": "● BOT ATIVO · aguardando sinal",
                 "BOT_NO_POSITIVE_NET_EDGE": "● BOT ATIVO · filtro de qualidade",
                 "BOT_PERFORMANCE_COOLDOWN": "● BOT ATIVO · pausa temporária de desempenho",
+                "BOT_RISK_COOLDOWN_ACTIVE": "● BOT ATIVO · pausa de segurança",
+                "BOT_MARTINGALE_ASSET_PINNED": "● BOT ATIVO · aguardando ativo de recuperação",
+                "BOT_MARTINGALE_PIN_RELEASED": "● BOT ATIVO · seleção normal retomada",
                 "BOT_ORDER_IN_FLIGHT": "● BOT ATIVO · operação em andamento",
                 "BOT_ORDER_SUBMITTED": "● BOT ATIVO · ordem enviada",
             }

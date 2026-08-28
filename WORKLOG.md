@@ -3499,3 +3499,27 @@ selecionada e nenhuma ordem Real foi enviada.
 
 **Artefato:** `dist_pause_fix/TradingLab-Desktop-v1.9.11-PAUSE-RECOVERY-FIX.exe`, SHA-256
 `4525C17A7A916B062D16B7A7AFF21173D4E85E986F82E9A122A2D32A0BD3B231`.
+
+## WL-2026-08-28-21 — Destravamento da retomada pós-loss
+
+**Data/hora:** 2026-08-28 16:00 BRT.
+
+**Causas reproduzidas:** a catraca de desempenho podia exigir uma confiança acima do que a
+estratégia estruturalmente produz; o cooldown de desempenho podia ser renovado sem uma sonda
+liquidada; sinais eram consumidos enquanto o gate apenas bloqueava; e um pino de Martingale podia
+aguardar indefinidamente um ativo sem novo sinal.
+
+**Correções:** adicionados teto configurável de `1.0` ponto percentual à catraca, janela de
+desempenho de 20 operações e 24 horas, concessão explícita de lote de sondas após cada expiração,
+preservação de sinais não julgados, escape monotônico do pino após 300 segundos e ação
+`digit_operator_manual_resume` que persiste o reset transitório sem apagar P&L ou histórico. O
+canal de estado da UI agora mostra exigido, estimado, P&L da janela, quantidade de operações,
+tempo restante e sondas previstas. Nenhum gate, cooldown ou limite de perdas foi removido.
+
+**Validação:** `pytest` **840 passed, 4 skipped**; Ruff check/format, mypy, compileall e
+`git diff --check` aprovados. Nenhuma ordem externa foi enviada nesta alteração; Deriv Real
+permanece read-only.
+
+Os testes de regressão da fatia foram adicionados em `tests/unit/test_post_loss_resume.py` e
+passaram isoladamente (**5 passed**), cobrindo teto da catraca, janela expirada, preservação de
+sinal, retomada manual e transparência do bloqueio.

@@ -482,6 +482,18 @@ class RiskLedger:
         if health_gate is not None:
             health_gate.clear("HG_COOLDOWN_ACTIVE")
 
+    def reset_digit_recovery_state(self, health_gate: HealthGate | None = None) -> None:
+        """Explicitly end a bounded digit recovery sequence.
+
+        This is intentionally narrower than ``reset_daily_pnl``: it clears only
+        the transient cooldown/Martingale state and never erases financial
+        history or the daily P&L ledger.  The Core runtime persists the same
+        transition through ``SingleDatabaseWriter`` before calling this method.
+        """
+
+        with self._lock:
+            self._reset_digit_recovery_state(health_gate)
+
     def digit_entry_stake(
         self,
         health_gate: HealthGate | None = None,

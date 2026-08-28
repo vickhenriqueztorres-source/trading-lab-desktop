@@ -67,6 +67,12 @@ class DigitRiskConfig:
     martingale_multiplier: Decimal = Decimal("2.00")
     martingale_max_steps: int = 2
     martingale_max_stake_minor_units: int = 400
+    # Performance protection remains enabled, but its adaptive ratchet is
+    # bounded so a negative-EV sample cannot silently disable a strategy forever.
+    performance_ratchet_cap_pp: Decimal = Decimal("1.0")
+    performance_window_trades: int = 20
+    performance_window_hours: float = 24.0
+    martingale_pin_timeout_seconds: float = 300.0
 
 
 def bounded_martingale_config(config: DigitRiskConfig) -> BoundedMartingaleConfig:
@@ -159,4 +165,29 @@ def validate_digit_risk_config(config: DigitRiskConfig) -> tuple[bool, str | Non
         # Quote-aware recovery is bounded at allocation time by both this cap and
         # the remaining daily loss budget.  A geometric projection is no longer
         # valid because digit products have materially different net payouts.
+    if (
+        not isinstance(config.performance_ratchet_cap_pp, Decimal)
+        or not config.performance_ratchet_cap_pp.is_finite()
+        or not Decimal("0.0") <= config.performance_ratchet_cap_pp <= Decimal("10.0")
+    ):
+        return False, "DIGIT_PERFORMANCE_RATCHET_CAP_INVALID"
+    if (
+        type(config.performance_window_trades) is not int
+        or not 1 <= config.performance_window_trades <= 1000
+    ):
+        return False, "DIGIT_PERFORMANCE_WINDOW_INVALID"
+    if (
+        isinstance(config.performance_window_hours, bool)
+        or not isinstance(config.performance_window_hours, int | float)
+        or not isfinite(config.performance_window_hours)
+        or config.performance_window_hours <= 0
+    ):
+        return False, "DIGIT_PERFORMANCE_WINDOW_INVALID"
+    if (
+        isinstance(config.martingale_pin_timeout_seconds, bool)
+        or not isinstance(config.martingale_pin_timeout_seconds, int | float)
+        or not isfinite(config.martingale_pin_timeout_seconds)
+        or config.martingale_pin_timeout_seconds <= 0
+    ):
+        return False, "DIGIT_MARTINGALE_PIN_TIMEOUT_INVALID"
     return True, None

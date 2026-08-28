@@ -261,7 +261,13 @@ class CoreLifecycleService:
         runtime = self._require_runtime()
         trader = self._deriv_auto_trader
         if trader is not None:
-            trader.begin_new_run()
+            manual_resume = getattr(trader, "manual_resume", None)
+            if callable(manual_resume) and not manual_resume():
+                self._safe_stop = True
+                self._state = CoreServiceState.READY
+                return False
+            if not callable(manual_resume):
+                trader.begin_new_run()
         accepted = runtime.resume_new_entries()
         if not accepted and self._should_reset_demo_session_before_rearm(runtime):
             reset_accepted, _reason = self.reset_digit_test_session()

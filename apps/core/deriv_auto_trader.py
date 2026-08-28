@@ -52,6 +52,7 @@ class _PerformanceSample:
     order_id: str
     pnl_minor: int
     settled_at: datetime
+    observed_monotonic: float | None = None
 
 
 class DerivDigitAutoTrader:
@@ -115,6 +116,11 @@ class DerivDigitAutoTrader:
         self._performance: dict[tuple[str, str], deque[_PerformanceSample]] = {}
         self._performance_cache_initialized = False
         self._performance_probe_remaining: dict[tuple[str, str], int] = {}
+        self._performance_probe_pending: set[tuple[str, str]] = set()
+        self._performance_cooldown_until: dict[tuple[str, str], float] = {}
+        self._performance_reset_at: dict[tuple[str, str], float] = {}
+        self._performance_gate_details: dict[tuple[str, str], str] = {}
+        self._martingale_pin_started_at: dict[tuple[str, str], float] = {}
         self._notification_generation = 0
         self._evaluated_notification_generation = 0
         self._last_evaluation_at = float("-inf")
@@ -124,6 +130,7 @@ class DerivDigitAutoTrader:
         self._reason_symbol: str | None = None
         self._armed_epoch: int | None = None
         self._rearm_notice = False
+        self._last_reason_detail: str | None = None
         self._last_signal_at = float("-inf")
         self._last_wake_latency_microseconds = 0
         self._last_analysis_latency_microseconds = 0
@@ -143,9 +150,18 @@ class DerivDigitAutoTrader:
             symbol = self._reason_symbol
             armed_epoch = self._armed_epoch
             rearm_notice = self._rearm_notice
+        description = self._reason_description(reason, symbol, rearm_notice)
+        with self._status_lock:
+            detail = self._last_reason_detail
+        if detail and reason in {
+            "BOT_PERFORMANCE_COOLDOWN",
+            "BOT_PERFORMANCE_CACHE_UNAVAILABLE",
+            "BOT_NO_POSITIVE_NET_EDGE",
+        }:
+            description = f"{description} ({detail})"
         return UiBotWaitingStatus(
             reason_code=reason,
-            description=self._reason_description(reason, symbol, rearm_notice),
+            description=description,
             waiting_since_seconds=waited,
             symbol=symbol,
             armed_epoch=armed_epoch,
@@ -214,6 +230,42 @@ class DerivDigitAutoTrader:
             reset_duration=True,
         )
         self._notify()
+
+    def manual_resume(self) -> bool:
+        """Official operator recovery action for a stuck performance pause."""
+
+        previous = self.last_reason
+        reset = getattr(self._runtime, "reset_digit_recovery_state", None)
+        if callable(reset):
+            outcome = reset()
+            accepted = bool(outcome[0]) if isinstance(outcome, tuple) else bool(outcome)
+            if not accepted:
+                return False
+        else:
+            reset_risk = getattr(self._runtime.risk_ledger, "reset_digit_recovery_state", None)
+            if callable(reset_risk):
+                reset_risk(self._runtime.health_gate)
+        now = self._monotonic()
+        config = self._runtime.risk_ledger.digit_config
+        active_strategies = set(config.enabled_strategy_ids) or {config.active_strategy_id}
+        with self._cache_lock:
+            for key in tuple(self._performance):
+                if key[0] in active_strategies:
+                    self._performance.pop(key, None)
+                    self._performance_reset_at[key] = now
+            self._performance_probe_remaining.clear()
+            self._performance_probe_pending.clear()
+            self._performance_cooldown_until.clear()
+            self._performance_gate_details.clear()
+        self._martingale_pin_started_at.clear()
+        self._emit(
+            "digit_operator_manual_resume",
+            reason_code="OPERATOR_MANUAL_RESUME",
+            previous_reason=previous,
+            timestamp_monotonic=str(now),
+        )
+        self.begin_new_run()
+        return True
 
     def evaluate_once(self) -> bool:
         analysis_started = self._monotonic()
@@ -305,8 +357,29 @@ class DerivDigitAutoTrader:
         if martingale_step > 0:
             if recovery_symbol is None:
                 return self._skip("BOT_MARTINGALE_STATE_INCOMPLETE")
+            pin_key = (config.active_strategy_id, recovery_symbol)
+            pin_started = self._martingale_pin_started_at.setdefault(pin_key, self._monotonic())
             candidates = tuple(item for item in candidates if item.symbol == recovery_symbol)
             if not candidates:
+                pinned_for = self._monotonic() - pin_started
+                if pinned_for >= config.martingale_pin_timeout_seconds:
+                    reset_risk = getattr(
+                        self._runtime.risk_ledger,
+                        "reset_digit_recovery_state",
+                        None,
+                    )
+                    if callable(reset_risk):
+                        reset_risk(self._runtime.health_gate)
+                    self._martingale_pin_started_at.pop(pin_key, None)
+                    self._emit(
+                        "digit_martingale_pin_released",
+                        reason_code="MARTINGALE_PIN_TIMEOUT",
+                        symbol=recovery_symbol,
+                        duration_seconds=str(pinned_for),
+                    )
+                    # The sequence is deliberately not transferred to another
+                    # symbol; normal selection resumes at base stake.
+                    return self._skip("BOT_MARTINGALE_PIN_RELEASED")
                 self._set_reason("BOT_MARTINGALE_ASSET_PINNED", symbol=recovery_symbol)
                 return False
 
@@ -326,8 +399,11 @@ class DerivDigitAutoTrader:
         )
         eligible = tuple(item for item, allowed, _reason in decisions if allowed)
         if not eligible:
-            for item in unevaluated:
-                self._remember_signal(item)
+            # A gate block is not a judgement of the signal.  Preserve it for
+            # the next fresh tick/probe; only merit rejections consume epochs.
+            for item, _allowed, item_reason in decisions:
+                if item_reason == "NO_POSITIVE_NET_EDGE":
+                    self._remember_signal(item)
             reason = (
                 "BOT_PERFORMANCE_COOLDOWN"
                 if any(item_reason == "PERFORMANCE_COOLDOWN" for _, _, item_reason in decisions)
@@ -340,6 +416,16 @@ class DerivDigitAutoTrader:
                     else "BOT_NO_POSITIVE_NET_EDGE"
                 )
             )
+            blocked = next(
+                (
+                    item
+                    for item, _allowed, item_reason in decisions
+                    if item_reason in {"PERFORMANCE_COOLDOWN", "PERFORMANCE_CACHE_UNAVAILABLE"}
+                ),
+                None,
+            )
+            if blocked is not None:
+                self._set_performance_reason(blocked, reason)
             return self._skip(reason)
         ranked = tuple(
             RankedSignalCandidate(
@@ -637,24 +723,90 @@ class DerivDigitAutoTrader:
     ) -> tuple[bool, str | None]:
         if candidate.strategy_id == PAYOUT_ROUTED_DIFFERS_STRATEGY_ID:
             return True, None
-        required = candidate.required_probability_pct
         probe_key = (candidate.strategy_id, candidate.symbol)
         with self._cache_lock:
             if not self._performance_cache_initialized:
                 return False, "PERFORMANCE_CACHE_UNAVAILABLE"
             samples = tuple(self._performance.get(probe_key, ()))
+            reset_at = self._performance_reset_at.get(probe_key)
+        if reset_at is not None:
+            samples = tuple(
+                item
+                for item in samples
+                if item.observed_monotonic is None or item.observed_monotonic >= reset_at
+            )
+        # Use the intersection of the count and time windows.  This means an
+        # old losing run cannot punish a new run indefinitely.
+        samples = samples[-self._runtime.risk_ledger.digit_config.performance_window_trades :]
+        cutoff = self._utc_clock() - timedelta(
+            hours=self._runtime.risk_ledger.digit_config.performance_window_hours
+        )
+        samples = tuple(item for item in samples if item.settled_at >= cutoff)
         settled = len(samples)
         total_pnl = sum(item.pnl_minor for item in samples)
+        config = self._runtime.risk_ledger.digit_config
+        required_original = candidate.required_probability_pct
+        raw_required = required_original + edge_floor
         if settled:
             if settled >= 10 and total_pnl <= 0:
-                if self._performance_probe_remaining.get(probe_key, 0) <= 0:
+                if (
+                    self._performance_probe_remaining.get(probe_key, 0) <= 0
+                    and probe_key in self._performance_probe_pending
+                ):
+                    self._performance_gate_details[probe_key] = self._format_gate_detail(
+                        candidate,
+                        required_original + edge_floor,
+                        candidate.estimated_probability_pct,
+                        total_pnl,
+                        settled,
+                        0,
+                        0,
+                    )
+                    return False, "PERFORMANCE_COOLDOWN"
+                if (
+                    self._performance_probe_remaining.get(probe_key, 0) <= 0
+                    and probe_key not in self._performance_probe_pending
+                ):
                     last_settled = samples[-1].settled_at
-                    if (
-                        last_settled is None
-                        or self._utc_clock() - last_settled < self._PERFORMANCE_COOLDOWN
-                    ):
+                    monotonic_now = self._monotonic()
+                    cooldown_until = self._performance_cooldown_until.get(probe_key)
+                    utc_remaining = (
+                        0
+                        if last_settled is None
+                        else int(
+                            max(
+                                0,
+                                (
+                                    last_settled + self._PERFORMANCE_COOLDOWN - self._utc_clock()
+                                ).total_seconds(),
+                            )
+                        )
+                    )
+                    if cooldown_until is None and utc_remaining > 0:
+                        cooldown_until = monotonic_now + utc_remaining
+                        self._performance_cooldown_until[probe_key] = cooldown_until
+                    if cooldown_until is not None and monotonic_now < cooldown_until:
+                        remaining_seconds = max(0, int(cooldown_until - monotonic_now))
+                        self._performance_gate_details[probe_key] = self._format_gate_detail(
+                            candidate,
+                            required_original + edge_floor,
+                            candidate.estimated_probability_pct,
+                            total_pnl,
+                            settled,
+                            remaining_seconds,
+                            self._PERFORMANCE_PROBE_ORDERS,
+                        )
                         return False, "PERFORMANCE_COOLDOWN"
+                    self._performance_cooldown_until.pop(probe_key, None)
                     self._performance_probe_remaining[probe_key] = self._PERFORMANCE_PROBE_ORDERS
+                    self._emit(
+                        "performance_cooldown_probe_granted",
+                        reason_code="PERFORMANCE_COOLDOWN_EXPIRED",
+                        strategy_id=candidate.strategy_id,
+                        symbol=candidate.symbol,
+                        timestamp_monotonic=str(monotonic_now),
+                        probes=self._PERFORMANCE_PROBE_ORDERS,
+                    )
             else:
                 self._performance_probe_remaining.pop(probe_key, None)
             wins = [item.pnl_minor for item in samples if item.pnl_minor > 0]
@@ -664,9 +816,48 @@ class DerivDigitAutoTrader:
                 loss = Decimal(sum(losses)) / Decimal(len(losses))
                 if win > 0 and loss > 0:
                     payout_break_even = loss * Decimal(100) / (loss + win)
-                    required = max(required, payout_break_even)
-        allowed = candidate.estimated_probability_pct >= required + edge_floor
+                    raw_required = max(required_original, payout_break_even) + edge_floor
+        cap = required_original + config.performance_ratchet_cap_pp
+        applied_required = min(raw_required, cap)
+        if raw_required > cap:
+            self._emit(
+                "performance_ratchet_capped",
+                reason_code="PERFORMANCE_RATCHET_CAPPED",
+                strategy_id=candidate.strategy_id,
+                symbol=candidate.symbol,
+                required_raw=str(raw_required),
+                required_applied=str(applied_required),
+                performance_ratchet_capped=True,
+            )
+        self._performance_gate_details[probe_key] = self._format_gate_detail(
+            candidate,
+            applied_required,
+            candidate.estimated_probability_pct,
+            total_pnl,
+            settled,
+            0,
+            self._performance_probe_remaining.get(probe_key, 0),
+        )
+        allowed = candidate.estimated_probability_pct >= applied_required
         return allowed, None if allowed else "NO_POSITIVE_NET_EDGE"
+
+    def _format_gate_detail(
+        self,
+        candidate: _ExecutionCandidate,
+        required: Decimal,
+        estimated: Decimal,
+        pnl_minor: int,
+        settled: int,
+        cooldown_remaining: int,
+        probes: int,
+    ) -> str:
+        minutes, seconds = divmod(max(0, cooldown_remaining), 60)
+        return (
+            f"exigido {required:.2f}% · estimado {estimated:.2f}% · "
+            f"P&L janela USD {Decimal(pnl_minor) / Decimal(100):.2f} · "
+            f"{settled} operações · cooldown {minutes:02d}:{seconds:02d} · "
+            f"{probes} sonda(s) após expiração"
+        )
 
     @staticmethod
     def _settled_at(value: object) -> datetime | None:
@@ -689,6 +880,12 @@ class DerivDigitAutoTrader:
             self._performance_probe_remaining.pop(key, None)
         else:
             self._performance_probe_remaining[key] = remaining - 1
+        self._performance_probe_pending.add(key)
+
+    def _set_performance_reason(self, candidate: _ExecutionCandidate, reason: str) -> None:
+        detail = self._performance_gate_details.get((candidate.strategy_id, candidate.symbol))
+        with self._status_lock:
+            self._last_reason_detail = detail
 
     def _remember_signal(self, candidate: _ExecutionCandidate) -> None:
         key = (candidate.symbol, candidate.strategy_id, candidate.epoch)
@@ -764,6 +961,7 @@ class DerivDigitAutoTrader:
                                         event.observed_at,
                                     )
                                 )
+                                self._performance_probe_pending.discard(scope)
                     self._order_scope.pop(order_id, None)
                 else:
                     self._inflight_order_ids.add(order_id)
@@ -854,6 +1052,7 @@ class DerivDigitAutoTrader:
                         str(row["order_id"]),
                         int(row["realized_pnl_minor"]),
                         settled_at,
+                        self._monotonic(),
                     )
                 )
         except Exception:
@@ -903,6 +1102,12 @@ class DerivDigitAutoTrader:
             if changed or reset_duration:
                 self._reason_since = self._monotonic()
             self._last_reason = reason
+            if changed and reason not in {
+                "BOT_PERFORMANCE_COOLDOWN",
+                "BOT_PERFORMANCE_CACHE_UNAVAILABLE",
+                "BOT_NO_POSITIVE_NET_EDGE",
+            }:
+                self._last_reason_detail = None
             if changed or symbol is not None:
                 self._reason_symbol = symbol
             if changed or armed_epoch is not None:
@@ -946,6 +1151,10 @@ class DerivDigitAutoTrader:
             "BOT_RISK_COOLDOWN_ACTIVE": (
                 "Pausa de segurança após a sequência de perdas. A contagem é atualizada "
                 "a cada tick e a análise volta automaticamente quando o prazo termina."
+            ),
+            "BOT_MARTINGALE_PIN_RELEASED": (
+                "O pino de recuperação expirou; a sequência foi encerrada e a seleção "
+                "normal voltou."
             ),
             "BOT_NO_POSITIVE_NET_EDGE": (
                 "O filtro de qualidade não encontrou vantagem estatística suficiente."

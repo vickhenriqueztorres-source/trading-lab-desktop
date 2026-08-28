@@ -401,6 +401,29 @@ class CoreRuntime:
         self.event_sink.emit("digit_test_session_reset", reason_code="OPERATOR_DEMO_RESET")
         return True, None
 
+    def reset_digit_recovery_state(self) -> tuple[bool, str | None]:
+        """Persistently clear transient digit cooldown/Martingale state.
+
+        Order history and the daily P&L remain intact.  The writer performs the
+        reset in one transaction so a restart cannot resurrect the old sequence.
+        """
+
+        if self.reader.has_nonterminal_deriv_digit_order():
+            return False, "DIGIT_RECOVERY_RESET_BLOCKED_EXPOSURE"
+        try:
+            self.writer.configure_digit_risk_runtime(
+                self.risk_ledger.digit_runtime_policy(),
+                reset_active_sequence=True,
+            )
+            self.risk_ledger.reset_digit_recovery_state(self.health_gate)
+        except (PersistenceError, RuntimeError, ValueError):
+            return False, "DIGIT_RECOVERY_RESET_FAILED"
+        self.event_sink.emit(
+            "digit_operator_recovery_reset",
+            reason_code="OPERATOR_MANUAL_RESUME",
+        )
+        return True, None
+
     def attach_deriv_worker(
         self,
         worker: FinancialWorkerPort,
