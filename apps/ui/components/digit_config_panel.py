@@ -112,8 +112,14 @@ class DigitConfigPanelWidget(QFrame):
 
         strategy_row = QHBoxLayout()
         strategy_row.setSpacing(12)
-        self.stress_mode_input = QCheckBox("Modo estresse Demo · todas")
-        self.stress_mode_input.setChecked(True)
+        self.selection_mode_input = QComboBox()
+        self.selection_mode_input.addItem("Modo único · uma estratégia", "single")
+        self.selection_mode_input.addItem("Modo conjunto · estratégias escolhidas", "multi")
+        self.selection_mode_input.addItem("Teste de carga · somente Demo", "stress")
+        self.selection_mode_input.currentIndexChanged.connect(self._selection_mode_changed)
+        strategy_row.addWidget(self.selection_mode_input)
+        self.stress_mode_input = QCheckBox("Teste de carga (todas — somente Demo)")
+        self.stress_mode_input.setChecked(False)
         self.stress_mode_input.setToolTip(
             "Avalia todas as estratégias, mas mantém no máximo uma ordem em voo."
         )
@@ -128,7 +134,11 @@ class DigitConfigPanelWidget(QFrame):
         ):
             checkbox = QCheckBox(display_label)
             checkbox.setChecked(True)
-            checkbox.toggled.connect(self._strategy_selection_changed)
+            checkbox.toggled.connect(
+                lambda checked, selected=strategy_id: self._strategy_checkbox_changed(
+                    selected, checked
+                )
+            )
             self._strategy_inputs[strategy_id] = checkbox
             strategy_row.addWidget(checkbox)
         strategy_row.addStretch()
@@ -319,8 +329,13 @@ class DigitConfigPanelWidget(QFrame):
                 currency="USD",
                 auto_select_symbol=self.auto_symbol_input.isChecked(),
                 active_strategy_id=self._active_strategy_id,
-                enabled_strategy_ids=frozenset(self._enabled_strategy_ids),
-                stress_test_all_strategies_enabled=self.stress_mode_input.isChecked(),
+                enabled_strategy_ids=frozenset(
+                    set(self._strategy_inputs)
+                    if self.selection_mode_input.currentData() == "stress"
+                    else self._enabled_strategy_ids
+                ),
+                selection_mode=str(self.selection_mode_input.currentData()),
+                stress_test_all_strategies_enabled=False,
                 martingale_enabled=self.martingale_enabled_input.isChecked(),
                 martingale_multiplier=Decimal(str(self.martingale_multiplier_input.currentData())),
                 martingale_max_steps=self._martingale_max_steps,
@@ -337,9 +352,17 @@ class DigitConfigPanelWidget(QFrame):
         self._loading = True
         self._active_strategy_id = config.active_strategy_id
         self._enabled_strategy_ids = set(config.enabled_strategy_ids)
-        self.stress_mode_input.setChecked(config.stress_test_all_strategies_enabled)
+        mode = config.selection_mode
+        mode_index = self.selection_mode_input.findData(mode)
+        if mode_index >= 0:
+            self.selection_mode_input.setCurrentIndex(mode_index)
+        self.stress_mode_input.setChecked(mode == "stress")
         for strategy_id, checkbox in self._strategy_inputs.items():
-            checkbox.setChecked(strategy_id in self._enabled_strategy_ids)
+            checkbox.setChecked(
+                mode == "stress"
+                or strategy_id
+                in ({config.active_strategy_id} if mode == "single" else self._enabled_strategy_ids)
+            )
         self.stake_input.setText(_money_text(config.stake_minor_units))
         self.stop_loss_input.setText(_money_text(config.daily_stop_loss_minor_units))
         self.take_profit_input.setText(_money_text(config.daily_take_profit_minor_units))
@@ -393,11 +416,16 @@ class DigitConfigPanelWidget(QFrame):
         if self._loading:
             return
         if checked:
-            self._enabled_strategy_ids = set(self._strategy_inputs)
             self._loading = True
+            stress_index = self.selection_mode_input.findData("stress")
+            if stress_index >= 0:
+                self.selection_mode_input.setCurrentIndex(stress_index)
+            self._enabled_strategy_ids = set(self._strategy_inputs)
             for checkbox in self._strategy_inputs.values():
                 checkbox.setChecked(True)
             self._loading = False
+        elif self.selection_mode_input.currentData() == "stress":
+            self._set_selection_mode("single")
         self._mark_dirty_and_validate()
 
     def _strategy_selection_changed(self) -> None:
@@ -413,6 +441,51 @@ class DigitConfigPanelWidget(QFrame):
         self.stress_mode_input.setChecked(all_enabled)
         self._loading = False
         self._mark_dirty_and_validate()
+
+    def _strategy_checkbox_changed(self, strategy_id: str, checked: bool) -> None:
+        if self._loading:
+            return
+        if self.selection_mode_input.currentData() == "single" and checked:
+            self._loading = True
+            self._active_strategy_id = strategy_id
+            for item_id, checkbox in self._strategy_inputs.items():
+                if item_id != strategy_id:
+                    checkbox.setChecked(False)
+            self._loading = False
+        elif self.selection_mode_input.currentData() == "single" and not checked:
+            if not any(item.isChecked() for item in self._strategy_inputs.values()):
+                self._active_strategy_id = ""
+        self._strategy_selection_changed()
+
+    def _set_selection_mode(self, mode: str) -> None:
+        index = self.selection_mode_input.findData(mode)
+        if index < 0:
+            return
+        self._loading = True
+        self.selection_mode_input.setCurrentIndex(index)
+        self.stress_mode_input.setChecked(mode == "stress")
+        if mode == "single":
+            for item_id, checkbox in self._strategy_inputs.items():
+                checkbox.setChecked(item_id == self._active_strategy_id)
+        elif mode == "stress":
+            for checkbox in self._strategy_inputs.values():
+                checkbox.setChecked(True)
+        self._loading = False
+
+    def _selection_mode_changed(self, _index: int) -> None:
+        if self._loading:
+            return
+        mode = str(self.selection_mode_input.currentData())
+        self._set_selection_mode(mode)
+        self._mark_dirty_and_validate()
+
+    def _execution_strategy_ids(self) -> set[str]:
+        mode = str(self.selection_mode_input.currentData())
+        if mode == "stress":
+            return set(self._strategy_inputs)
+        if mode == "single":
+            return {self._active_strategy_id} if self._active_strategy_id else set()
+        return set(self._enabled_strategy_ids)
 
     def set_apply_result(self, accepted: bool, reason: str | None = None) -> None:
         self.validation_status.setText(

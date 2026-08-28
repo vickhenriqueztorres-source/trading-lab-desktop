@@ -11,6 +11,10 @@ from decimal import Decimal
 from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot, DerivTelemetrySource
+from apps.core.digit_risk_config import (
+    DERIV_DIGIT_STRATEGY_ALLOWLIST,
+    StrategySelectionMode,
+)
 from apps.core.payout_routed_differs import (
     PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
     PayoutRoutedDiffersProposalCache,
@@ -306,8 +310,7 @@ class DerivDigitAutoTrader:
         if (
             snapshot is not None
             and snapshot.source is DerivTelemetrySource.REAL_LIVE
-            and config.stress_test_all_strategies_enabled
-            and len(config.enabled_strategy_ids) > 1
+            and config.selection_mode is StrategySelectionMode.STRESS
         ):
             return self._skip("BOT_STRESS_MODE_REQUIRES_DEMO")
         if (
@@ -316,16 +319,19 @@ class DerivDigitAutoTrader:
             or not snapshot.connected
         ):
             return self._skip("BOT_DERIV_ACCOUNT_NOT_CONNECTED")
-        payout_session_enabled = (
-            self._proposal_cache is not None
-            and PAYOUT_ROUTED_DIFFERS_STRATEGY_ID in config.enabled_strategy_ids
+        execution_ids = self._execution_strategy_ids(config)
+        if execution_ids is None:
+            return self._skip("BOT_NO_STRATEGY_SELECTED")
+        payout_session_enabled = self._proposal_cache is not None and (
+            PAYOUT_ROUTED_DIFFERS_STRATEGY_ID in execution_ids
+            or config.selection_mode is StrategySelectionMode.STRESS
         )
         frequency = snapshot.digit_frequency
         if not payout_session_enabled and (
             frequency is None or frequency.total_ticks < self._minimum_ticks
         ):
             return self._skip("BOT_WARMING_UP_TICKS")
-        if not config.enabled_strategy_ids:
+        if config.selection_mode is StrategySelectionMode.MULTI and not config.enabled_strategy_ids:
             return self._skip("BOT_NO_STRATEGY_SELECTED")
         shadow_candidates = self._execution_candidates(
             snapshot, automatic=config.auto_select_symbol
@@ -333,7 +339,7 @@ class DerivDigitAutoTrader:
         candidate_list = [
             replace(item, signal_state=ShadowSignalState.EXECUTABLE_SIGNAL)
             for item in shadow_candidates
-            if item.strategy_id in config.enabled_strategy_ids
+            if item.strategy_id in execution_ids
         ]
         payout_skip_reason: str | None = None
         if payout_session_enabled:
@@ -703,6 +709,25 @@ class DerivDigitAutoTrader:
             and item.estimated_probability_pct is not None
             and item.required_probability_pct is not None
         )
+
+    @staticmethod
+    def _execution_strategy_ids(config: object) -> frozenset[str] | None:
+        mode = getattr(config, "selection_mode", StrategySelectionMode.SINGLE)
+        if not isinstance(mode, StrategySelectionMode):
+            try:
+                mode = StrategySelectionMode(str(mode))
+            except ValueError:
+                return None
+        if mode is StrategySelectionMode.SINGLE:
+            active = str(getattr(config, "active_strategy_id", ""))
+            enabled = frozenset(getattr(config, "enabled_strategy_ids", frozenset()))
+            if not enabled or active not in DERIV_DIGIT_STRATEGY_ALLOWLIST:
+                return None
+            return frozenset({active})
+        if mode is StrategySelectionMode.MULTI:
+            enabled = frozenset(getattr(config, "enabled_strategy_ids", frozenset()))
+            return enabled or None
+        return frozenset(DERIV_DIGIT_STRATEGY_ALLOWLIST)
 
     @staticmethod
     def _configured_edge_floor(confidence_pct: Decimal) -> Decimal:

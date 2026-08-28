@@ -5,7 +5,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
-from apps.core.digit_risk_config import DigitRiskConfig
+from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
 from apps.core.digit_risk_store import DigitRiskConfigStore
 
 
@@ -55,3 +55,40 @@ def test_digit_risk_store_migrates_existing_profile_to_demo_auto_selection(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert DigitRiskConfigStore(path).load().auto_select_symbol is True
+
+
+def test_digit_risk_store_persists_strategy_selection(tmp_path: Path) -> None:
+    store = DigitRiskConfigStore(tmp_path / "digit_risk_config.json")
+    config = replace(
+        DigitRiskConfig(),
+        selection_mode=StrategySelectionMode.MULTI,
+        active_strategy_id="selective-differs-edge",
+        enabled_strategy_ids=frozenset({"selective-differs-edge", "parity-regime-edge"}),
+    )
+
+    store.save(config)
+
+    assert store.load() == config
+
+
+def test_legacy_stress_profile_migrates_by_account_type(tmp_path: Path) -> None:
+    path = tmp_path / "digit_risk_config.json"
+    store = DigitRiskConfigStore(path)
+    legacy = DigitRiskConfig()
+    store.save(legacy)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("selection_mode")
+    payload["stress_test_all_strategies_enabled"] = True
+    payload["enabled_strategy_ids"] = [
+        "tail-probability-edge",
+        "parity-regime-edge",
+    ]
+    payload["active_strategy_id"] = "tail-probability-edge"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    demo = store.load(account_type="demo")
+    real = store.load(account_type="real")
+
+    assert demo.selection_mode is StrategySelectionMode.STRESS
+    assert real.selection_mode is StrategySelectionMode.SINGLE
+    assert real.active_strategy_id == "parity-regime-edge"

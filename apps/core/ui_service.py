@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
-from apps.core.digit_risk_config import DigitRiskConfig
+from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
 from apps.core.readiness import TradingReadinessSnapshot
 from apps.core.runtime import CoreRuntime
 from apps.core.worker_supervisor import WorkerHealthState
@@ -104,6 +104,7 @@ def _to_ui_digit_config(config: DigitRiskConfig) -> UiDigitRiskConfig:
         auto_select_symbol=config.auto_select_symbol,
         active_strategy_id=config.active_strategy_id,
         enabled_strategy_ids=config.enabled_strategy_ids,
+        selection_mode=config.selection_mode.value,
         stress_test_all_strategies_enabled=config.stress_test_all_strategies_enabled,
         martingale_enabled=config.martingale_enabled,
         martingale_multiplier=config.martingale_multiplier,
@@ -125,6 +126,7 @@ def _from_ui_digit_config(config: UiDigitRiskConfig) -> DigitRiskConfig:
         auto_select_symbol=config.auto_select_symbol,
         active_strategy_id=config.active_strategy_id,
         enabled_strategy_ids=config.enabled_strategy_ids,
+        selection_mode=StrategySelectionMode(config.selection_mode),
         stress_test_all_strategies_enabled=config.stress_test_all_strategies_enabled,
         martingale_enabled=config.martingale_enabled,
         martingale_multiplier=config.martingale_multiplier,

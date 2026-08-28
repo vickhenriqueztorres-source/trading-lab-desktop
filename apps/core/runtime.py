@@ -57,6 +57,7 @@ class CoreRuntime:
         worker_event_queue_size: int = 128,
         entry_authorizer_factory: Callable[[HealthGate], EntryAuthorizationPort] | None = None,
         deferred_reconciliation_brokers: frozenset[Broker] = frozenset(),
+        digit_account_type: str | None = None,
     ) -> None:
         self.profile_directory = profile_directory
         self.database_path = profile_directory / "state.db"
@@ -70,6 +71,7 @@ class CoreRuntime:
         self.health_gate = HealthGate(self.database_health, self.event_sink)
         self.instance_guard = CoreInstanceGuard(profile_directory, self.event_sink)
         self.worker = worker
+        self._digit_account_type = digit_account_type
         self.worker_scenario = worker_scenario
         self.simulated_broker_store_path = (
             simulated_broker_store_path or profile_directory / "simulated_broker_state.db"
@@ -164,7 +166,9 @@ class CoreRuntime:
             )
             report = recovery.recover()
             risk_ledger = RiskLedger(
-                digit_config=self._digit_risk_config_store.load(),
+                digit_config=self._digit_risk_config_store.load(
+                    account_type=self._digit_account_type
+                ),
                 digit_runtime_expirer=writer.expire_digit_cooldown,
             )
             self._configure_digit_risk_runtime_for_startup(writer, reader, risk_ledger)

@@ -12,6 +12,7 @@ from apps.core.deriv_telemetry import (
     DerivTelemetryMonitor,
     DerivTelemetrySource,
 )
+from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
 from apps.core.payout_routed_differs import (
     PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
     PayoutRoutedDiffersProposalCache,
@@ -135,6 +136,13 @@ class CoreLifecycleService:
             runtime = CoreRuntime(
                 self._profile_dir / "core",
                 deferred_reconciliation_brokers=frozenset({Broker.DERIV}),
+                digit_account_type=(
+                    "demo"
+                    if self._deriv_transport == "live-demo"
+                    else "real"
+                    if self._deriv_transport == "live-real"
+                    else None
+                ),
                 entry_authorizer_factory=lambda gate: DerivTokenEntryAuthorizer(
                     CoreLeaseEntryAuthorizer(
                         self._auth,
@@ -201,7 +209,7 @@ class CoreLifecycleService:
                     self.resume,
                     self._request_ui_shutdown,
                     deriv_demo_connect=self.connect_deriv_selected_account,
-                    digit_risk_config_update=runtime.update_digit_risk_config,
+                    digit_risk_config_update=self._update_digit_risk_config,
                     digit_test_session_reset=self.reset_digit_test_session,
                 )
                 ui_service.start()
@@ -301,6 +309,20 @@ class CoreLifecycleService:
         if accepted:
             self._safe_stop = True
         return accepted, "DIGIT_TEST_SESSION_RESET" if accepted else reason or "RESET_REJECTED"
+
+    def _update_digit_risk_config(
+        self,
+        config: DigitRiskConfig,
+    ) -> tuple[bool, str | None]:
+        """Apply selection config while enforcing Demo-only stress mode."""
+
+        if (
+            self._deriv_transport == "live-real"
+            and config.selection_mode is StrategySelectionMode.STRESS
+        ):
+            return False, "DIGIT_STRESS_MODE_REQUIRES_DEMO"
+        runtime = self._require_runtime()
+        return runtime.update_digit_risk_config(config)
 
     def _request_ui_shutdown(self) -> None:
         self._ui_shutdown_requested = True
@@ -791,8 +813,17 @@ class CoreLifecycleService:
             proposal_cache,
             supervisor.client.quote_digit_contract_details,
             enabled=lambda: (
-                PAYOUT_ROUTED_DIFFERS_STRATEGY_ID
-                in runtime.risk_ledger.digit_config.enabled_strategy_ids
+                runtime.risk_ledger.digit_config.selection_mode is StrategySelectionMode.STRESS
+                or (
+                    runtime.risk_ledger.digit_config.selection_mode is StrategySelectionMode.MULTI
+                    and PAYOUT_ROUTED_DIFFERS_STRATEGY_ID
+                    in runtime.risk_ledger.digit_config.enabled_strategy_ids
+                )
+                or (
+                    runtime.risk_ledger.digit_config.selection_mode is StrategySelectionMode.SINGLE
+                    and runtime.risk_ledger.digit_config.active_strategy_id
+                    == PAYOUT_ROUTED_DIFFERS_STRATEGY_ID
+                )
             ),
         )
         proposal_feeder.start()

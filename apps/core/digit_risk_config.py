@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 from math import isfinite
 
 from packages.domain.models import Money
@@ -47,6 +48,14 @@ DERIV_DEFAULT_DIGIT_STRATEGY_IDS = frozenset(
 )
 
 
+class StrategySelectionMode(StrEnum):
+    """Which persisted strategy field is authoritative for execution."""
+
+    SINGLE = "single"
+    MULTI = "multi"
+    STRESS = "stress"
+
+
 @dataclass(frozen=True, slots=True)
 class DigitRiskConfig:
     """Immutable Core-owned limits shared by the three Deriv digit strategies."""
@@ -62,7 +71,10 @@ class DigitRiskConfig:
     auto_select_symbol: bool = True
     active_strategy_id: str = "tail-probability-edge"
     enabled_strategy_ids: frozenset[str] = DERIV_DEFAULT_DIGIT_STRATEGY_IDS
-    stress_test_all_strategies_enabled: bool = True
+    selection_mode: StrategySelectionMode = StrategySelectionMode.SINGLE
+    # Legacy compatibility field.  It is read only by the config migration;
+    # selection_mode is the sole execution authority after loading.
+    stress_test_all_strategies_enabled: bool = False
     martingale_enabled: bool = False
     martingale_multiplier: Decimal = Decimal("2.00")
     martingale_max_steps: int = 2
@@ -133,7 +145,10 @@ def validate_digit_risk_config(config: DigitRiskConfig) -> tuple[bool, str | Non
         return False, "DIGIT_RISK_CURRENCY_NOT_SUPPORTED"
     if type(config.auto_select_symbol) is not bool:
         return False, "DIGIT_RISK_AUTO_SYMBOL_INVALID"
-    if config.active_strategy_id not in DERIV_DIGIT_STRATEGY_ALLOWLIST:
+    if (
+        config.active_strategy_id
+        and config.active_strategy_id not in DERIV_DIGIT_STRATEGY_ALLOWLIST
+    ):
         return False, "DIGIT_RISK_STRATEGY_NOT_ALLOWED"
     if not isinstance(
         config.enabled_strategy_ids, frozenset
@@ -141,6 +156,8 @@ def validate_digit_risk_config(config: DigitRiskConfig) -> tuple[bool, str | Non
         return False, "DIGIT_RISK_STRATEGY_SELECTION_INVALID"
     if type(config.stress_test_all_strategies_enabled) is not bool:
         return False, "DIGIT_RISK_STRESS_MODE_INVALID"
+    if not isinstance(config.selection_mode, StrategySelectionMode):
+        return False, "DIGIT_RISK_SELECTION_MODE_INVALID"
     if type(config.martingale_enabled) is not bool:
         return False, "DIGIT_MARTINGALE_ENABLED_INVALID"
     if (

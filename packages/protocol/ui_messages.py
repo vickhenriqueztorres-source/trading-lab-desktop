@@ -376,7 +376,9 @@ class UiDigitRiskConfig:
             "payout-routed-differs-session",
         }
     )
-    stress_test_all_strategies_enabled: bool = True
+    selection_mode: str = "single"
+    # Deprecated wire compatibility field; selection_mode is authoritative.
+    stress_test_all_strategies_enabled: bool = False
     martingale_enabled: bool = False
     martingale_multiplier: Decimal = Decimal("2.00")
     martingale_max_steps: int = 2
@@ -414,7 +416,7 @@ class UiDigitRiskConfig:
             raise ValueError("digit currency is unsupported")
         if type(self.auto_select_symbol) is not bool:
             raise ValueError("digit automatic symbol selection is invalid")
-        if self.active_strategy_id not in {
+        if self.active_strategy_id and self.active_strategy_id not in {
             "tail-probability-edge",
             "selective-differs-edge",
             "parity-regime-edge",
@@ -435,6 +437,8 @@ class UiDigitRiskConfig:
             raise ValueError("digit enabled strategies are invalid")
         if type(self.stress_test_all_strategies_enabled) is not bool:
             raise ValueError("digit stress mode is invalid")
+        if self.selection_mode not in {"single", "multi", "stress"}:
+            raise ValueError("digit strategy selection mode is invalid")
         if type(self.martingale_enabled) is not bool:
             raise ValueError("digit martingale opt-in is invalid")
         if (
@@ -471,6 +475,7 @@ class UiDigitRiskConfig:
             "auto_select_symbol": self.auto_select_symbol,
             "active_strategy_id": self.active_strategy_id,
             "enabled_strategy_ids": sorted(self.enabled_strategy_ids),
+            "selection_mode": self.selection_mode,
             "stress_test_all_strategies_enabled": self.stress_test_all_strategies_enabled,
             "stake_minor_units": self.stake_minor_units,
             "martingale_enabled": self.martingale_enabled,
@@ -501,6 +506,7 @@ class UiDigitRiskConfig:
         active_strategy_keys = {"active_strategy_id"}
         multi_strategy_keys = {
             "enabled_strategy_ids",
+            "selection_mode",
             "stress_test_all_strategies_enabled",
         }
         optional_keys = (
@@ -522,6 +528,7 @@ class UiDigitRiskConfig:
         active_strategy_id = payload.get("active_strategy_id", "tail-probability-edge")
         enabled_strategy_ids = payload.get("enabled_strategy_ids", [active_strategy_id])
         stress_mode = payload.get("stress_test_all_strategies_enabled", False)
+        selection_mode = payload.get("selection_mode", "single")
         if (
             type(stake) is not int
             or type(stop) is not int
@@ -539,6 +546,7 @@ class UiDigitRiskConfig:
             or not isinstance(enabled_strategy_ids, list)
             or not all(isinstance(item, str) for item in enabled_strategy_ids)
             or type(stress_mode) is not bool
+            or not isinstance(selection_mode, str)
         ):
             raise _invalid()
         try:
@@ -554,6 +562,7 @@ class UiDigitRiskConfig:
                 auto_select_symbol=auto_select_symbol,
                 active_strategy_id=active_strategy_id,
                 enabled_strategy_ids=frozenset(enabled_strategy_ids),
+                selection_mode=selection_mode,
                 stress_test_all_strategies_enabled=stress_mode,
                 martingale_enabled=martingale_enabled,
                 martingale_multiplier=Decimal(martingale_multiplier),

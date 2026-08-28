@@ -3523,3 +3523,46 @@ permanece read-only.
 Os testes de regressão da fatia foram adicionados em `tests/unit/test_post_loss_resume.py` e
 passaram isoladamente (**5 passed**), cobrindo teto da catraca, janela expirada, preservação de
 sinal, retomada manual e transparência do bloqueio.
+
+## WL-2026-08-28-22 — Seleção individual de estratégia e estresse explícito
+
+**Data/hora:** 2026-08-28 17:00 BRT.
+
+**Decisão:** o modo de seleção agora é único, conjunto ou estresse. `SINGLE` é o padrão e
+`active_strategy_id` governa exclusivamente a execução; `MULTI` usa somente o conjunto escolhido;
+`STRESS` considera todas as estratégias registradas e continua restrito à conta Demo. O campo
+legado `stress_test_all_strategies_enabled` permanece apenas para compatibilidade de wire/persistência
+e não compete com `selection_mode`.
+
+**Migração/UI:** perfis antigos com a flag legada verdadeira podem ser carregados como STRESS quando
+o tipo Demo for informado; em Real são reduzidos a SINGLE com o primeiro id determinístico. A tela
+de configuração ganhou seletor de modo, seleção exclusiva no modo único, checkboxes no modo conjunto
+e toggle de teste de carga rotulado como Demo-only. Seleção vazia ou id órfão falha fechado.
+
+**Validação:** regressões de seleção **6 passed**; conjunto focado (config/store/UI/Core) **53
+passed**; suíte completa **851 passed, 4 skipped**; Ruff, formatação, mypy, compileall e
+`git diff --check` aprovados. Nenhuma matemática de estratégia, arbitragem ou proteção de risco foi
+alterada; máximo de uma ordem em voo e Deriv Real read-only permanecem vigentes.
+
+## WL-2026-08-28-23 — Revisão final e build da seleção de estratégias
+
+**Data/hora:** 2026-08-28 18:20 BRT.
+
+**Correção final:** removida a compatibilidade que inferia estresse a partir de uma configuração
+antiga. O motor agora obedece exclusivamente a `selection_mode`: SINGLE executa apenas o id ativo,
+MULTI executa somente os ids habilitados e STRESS é bloqueado quando o ambiente é Real. O tipo de
+conta é encaminhado ao carregamento do perfil para que a migração Demo/Real seja determinística.
+Sinais não selecionados continuam disponíveis apenas como sombra e não geram rejeições artificiais.
+
+**Validação local:** `pytest` **853 passed, 4 skipped**; Ruff check, Ruff format check, mypy,
+compileall e `git diff --check` aprovados. Os testes cobrem seleção SINGLE/MULTI/STRESS, ids órfãos,
+persistência, migração da flag legada por ambiente e bloqueio de estresse em Real. Nenhuma ordem foi
+enviada por esta alteração.
+
+**Build:** pipeline canônico PyInstaller onedir concluído em `dist_strategy_selection_final/TradingLab`,
+scanner limpo, manifesto com 453 arquivos (SHA-256
+`f6951543ca7c8e46c26e55482fac3ee8cfdc236d963e88ae62394ab6e2f2fcbe`) e health check compilado com
+saída 0. Portátil final:
+`dist_strategy_selection_final/TradingLab-Desktop-v1.9.11-STRATEGY-SELECTION.exe`, SHA-256
+`94F7F871C9AC6B0F862E8421FBD9BB89FF40DD957D240CBBDBA1E075570AC0A2`. O artefato não contém
+credenciais, bancos ou perfil pessoal.

@@ -11,7 +11,7 @@ import pytest
 
 from apps.core.deriv_auto_trader import DerivDigitAutoTrader
 from apps.core.deriv_telemetry import DerivTelemetrySource
-from apps.core.digit_risk_config import DigitRiskConfig
+from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
 from packages.domain.market import MarketTick
 from packages.strategies.deriv_digits import (
     DerivDigitEnginePool,
@@ -625,7 +625,7 @@ def test_historical_shadow_only_records_are_preserved() -> None:
 
 def test_stress_mode_requires_demo_account() -> None:
     runtime = _Runtime()
-    runtime.risk_ledger.digit_config = DigitRiskConfig()
+    runtime.risk_ledger.digit_config = DigitRiskConfig(selection_mode=StrategySelectionMode.STRESS)
     real_snapshot = replace(
         _telemetry(),
         source=DerivTelemetrySource.REAL_LIVE,
