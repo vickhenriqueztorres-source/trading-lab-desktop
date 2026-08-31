@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 
 class MigrationError(RuntimeError):
@@ -23,11 +26,60 @@ class Migration:
     version: int
     name: str
     statements: tuple[str, ...]
+    expand_fn: Callable[[Any], None] | None = None
+    migrate_fn: Callable[[Any], None] | None = None
+    contract_fn: Callable[[Any], None] | None = None
 
     @property
     def checksum(self) -> str:
         source = "\n".join(self.statements).encode("utf-8")
         return hashlib.sha256(source).hexdigest()
+
+    def expand(self, connection: Any = None) -> None:
+        if self.expand_fn is not None:
+            self.expand_fn(connection)
+
+    def migrate(self, connection: Any = None) -> None:
+        if self.migrate_fn is not None:
+            self.migrate_fn(connection)
+
+    def contract(self, connection: Any = None) -> None:
+        if self.contract_fn is not None:
+            self.contract_fn(connection)
+
+
+class MigrationPhase(StrEnum):
+    EXPAND = "EXPAND"
+    MIGRATE = "MIGRATE"
+    CONTRACT = "CONTRACT"
+
+
+class SchemaMigrator:
+    """Phase-aware facade that leaves published SQLite migrations untouched."""
+
+    def __init__(
+        self, connection: Any = None, migrations: tuple[Migration, ...] | None = None
+    ) -> None:
+        self.connection = connection
+        self._migrations = {item.version: item for item in (migrations or MIGRATIONS)}
+        self.current_version = 0
+        self._applied_phases: set[tuple[int, MigrationPhase]] = set()
+
+    @property
+    def versions(self) -> tuple[int, ...]:
+        return tuple(sorted(self._migrations))
+
+    def migrate_to(self, version: int, phase: MigrationPhase = MigrationPhase.EXPAND) -> int:
+        if version < 0:
+            raise ValueError("version must not be negative")
+        for item in self.versions:
+            if item > version or (item, phase) in self._applied_phases:
+                continue
+            migration = self._migrations[item]
+            getattr(migration, phase.value.lower())(self.connection)
+            self._applied_phases.add((item, phase))
+            self.current_version = max(self.current_version, item)
+        return self.current_version
 
 
 INITIAL_STATE = Migration(

@@ -3623,3 +3623,27 @@ foram expostos.
 renovação, expiração, fencing, failover, promoção e reconciliação. Suíte completa: **876 passed,
 4 skipped**. Ruff, formatação, mypy, compileall e `git diff --check` aprovados. Nenhuma conta Real ou
 ordem externa foi utilizada.
+
+## WL-2026-08-31-04 — Enterprise Operacional (Fase 3)
+
+**Data/hora:** 2026-08-31 16:30 BRT.
+
+**Objetivo:** adicionar observabilidade SLO, deploy reversível, migrações por fases, auditoria
+imutável, fault injection local, sonda de throughput, backup/restore operacional e runbooks, sem
+alterar a matemática das estratégias nem habilitar execução Real.
+
+**Implementação:** `apps/core/observability/slo.py` calcula burn rate, orçamento restante,
+projeção de breach e severidade para os sete SLOs da fase. `apps/core/security/audit_log.py`
+mantém cadeia SHA-256 com assinatura HMAC e consulta filtrável. A API expand/migrate/contract foi
+incorporada ao módulo de migrações SQLite existente para preservar imports; nenhuma migração
+publicada foi modificada. `apps/core/resilience/chaos.py` limita cenários e garante callback de
+recuperação. Scripts em `deploy/` e `operations/` exigem caminhos explícitos, checksum e não
+incluem vault/token; o backup exige chave externa e cifra AES-256-CBC via OpenSSL; documentação de
+SLO, deploy, DR e doze runbooks foi adicionada.
+
+**Validação:** testes novos de SLO, auditoria, caos e throughput local: **7 passed**. Ruff check,
+Ruff format, mypy e compileall aprovados. O teste de carga é local, bounded e não envia mensagens a
+corretora. Nenhuma conta Real, credencial ou ordem externa foi utilizada.
+
+**Limitações:** os scripts shell são templates para execução controlada pela operação; não foram
+executados contra PostgreSQL/Redis/S3 nesta máquina Windows. O canary permanece read-only/shadow.
