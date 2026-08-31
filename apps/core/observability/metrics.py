@@ -13,6 +13,9 @@ class Metrics:
         self.order_unknown_total = 0
         self.order_reconciliation_total = 0
         self.api_errors_total = 0
+        self.leader_lease_remaining_seconds = 0.0
+        self.fencing_rejections_total = 0
+        self.failover_total = 0
         self.orders_by_state: dict[str, int] = defaultdict(int)
         self.order_latency_seconds: list[float] = []
 
@@ -31,6 +34,18 @@ class Metrics:
         with self._lock:
             self.api_errors_total += 1
 
+    def record_fencing_rejection(self) -> None:
+        with self._lock:
+            self.fencing_rejections_total += 1
+
+    def record_failover(self) -> None:
+        with self._lock:
+            self.failover_total += 1
+
+    def set_leader_lease_remaining(self, seconds: float) -> None:
+        with self._lock:
+            self.leader_lease_remaining_seconds = max(0.0, seconds)
+
     def snapshot(self) -> dict[str, object]:
         with self._lock:
             return {
@@ -39,6 +54,9 @@ class Metrics:
                 "order_unknown_total": self.order_unknown_total,
                 "order_reconciliation_total": self.order_reconciliation_total,
                 "api_errors_total": self.api_errors_total,
+                "leader_lease_remaining_seconds": self.leader_lease_remaining_seconds,
+                "fencing_rejections_total": self.fencing_rejections_total,
+                "failover_total": self.failover_total,
                 "order_latency_seconds": tuple(self.order_latency_seconds),
             }
 

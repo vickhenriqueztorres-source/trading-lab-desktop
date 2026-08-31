@@ -6,6 +6,7 @@ import asyncio
 import time
 from enum import StrEnum
 
+from apps.core.orchestrator.leader_lease import LeaderLease
 from apps.iqoption_worker.connection_manager import ConnectionManager
 from apps.iqoption_worker.order_reconciler import OrderReconciler
 
@@ -32,10 +33,12 @@ class WorkerProcess:
         reconciler: OrderReconciler,
         *,
         startup_timeout: float = 30.0,
+        leader_lease: LeaderLease | None = None,
     ) -> None:
         self.connection_manager = connection_manager
         self.reconciler = reconciler
         self.startup_timeout = startup_timeout
+        self.leader_lease = leader_lease
         self._state = WorkerState.HALTED
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -100,13 +103,15 @@ class WorkerProcess:
             self._state = WorkerState.SYNCING
             self._state = WorkerState.RECONCILING
             result = await self.reconciler.reconcile()
-            if result.trading_allowed:
+            if result.trading_allowed and (
+                self.leader_lease is None or await self.leader_lease.acquire()
+            ):
                 self.connection_manager.mark_synchronized()
                 self._state = WorkerState.READY
             else:
                 self._state = WorkerState.READ_ONLY
             self._ready_event.set()
-            await self._stop_event.wait()
+            await self._standby_or_leader_loop()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -115,8 +120,28 @@ class WorkerProcess:
             self._ready_event.set()
             await self._stop_event.wait()
         finally:
+            if self.leader_lease is not None:
+                await self.leader_lease.release()
             if self.connection_manager.is_connected():
                 await self.connection_manager.disconnect()
+
+    async def _standby_or_leader_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), 1.0)
+            except TimeoutError:
+                if self.leader_lease is None:
+                    continue
+                if self.leader_lease.is_leader():
+                    if not await self.leader_lease.renew():
+                        self._state = WorkerState.READ_ONLY
+                    continue
+                if await self.leader_lease.acquire():
+                    self._state = WorkerState.RECONCILING
+                    result = await self.reconciler.reconcile()
+                    if result.trading_allowed:
+                        self.connection_manager.mark_synchronized()
+                        self._state = WorkerState.READY
 
 
 __all__ = ["WorkerProcess", "WorkerState"]

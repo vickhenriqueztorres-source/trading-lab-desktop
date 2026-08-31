@@ -3603,3 +3603,23 @@ normaliza erros do adapter.
 reconciliação, divergência, single writer, idempotência e backpressure. Suíte completa: **870
 passed, 4 skipped**. Ruff, formatação, mypy, compileall e `git diff --check` aprovados. Nenhuma
 execução Real ou ordem externa foi realizada.
+
+## WL-2026-08-31-03 — Alta Disponibilidade IQ Option (Fase 2)
+
+**Data/hora:** 2026-08-31 15:30 BRT.
+
+**Implementação:** adicionados `PostgresStore` assíncrono com migração versionada e `RedisStore`
+assíncrono com chaves separadas para leases, sinais e estado efêmero. `LeaderLease` implementa
+aquisição/renovação/liberação com `SET NX EX`, fencing token monotônico e intervalo mínimo entre
+trocas. `WorkerProcess` agora aceita standby: mantém conexão e health, não envia ordens e promove-se
+somente após adquirir a lease e reconciliar.
+
+**Supervisão e observabilidade:** criado `SupervisorClient` com heartbeat funcional e detector de
+crash-loop; documentação systemd, Docker Compose e Kubernetes adicionada em
+`docs/supervisor_systemd.md`. Métricas de lease/fencing/failover e campos de lease no health check
+foram expostos.
+
+**Validação:** testes de integração adicionados para PostgreSQL/Redis, aquisição concorrente,
+renovação, expiração, fencing, failover, promoção e reconciliação. Suíte completa: **876 passed,
+4 skipped**. Ruff, formatação, mypy, compileall e `git diff --check` aprovados. Nenhuma conta Real ou
+ordem externa foi utilizada.
