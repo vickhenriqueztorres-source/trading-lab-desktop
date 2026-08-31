@@ -149,6 +149,20 @@ class SQLiteStateStore:
             reconciliation_id=row["reconciliation_id"],
         )
 
+    def list_orders(self, account_id: str | None = None) -> list[Order]:
+        with self._lock:
+            if account_id is None:
+                rows = self._connection.execute(
+                    "SELECT internal_order_id FROM orders ORDER BY internal_order_id"
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    "SELECT internal_order_id FROM orders "
+                    "WHERE account_id=? ORDER BY internal_order_id",
+                    (account_id,),
+                ).fetchall()
+        return [order for row in rows if (order := self.get_order(str(row[0]))) is not None]
+
     def save_event(self, event: OrderEvent) -> None:
         with self._lock, self._connection:
             self._connection.execute(

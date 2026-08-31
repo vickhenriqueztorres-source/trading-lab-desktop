@@ -3582,3 +3582,24 @@ Resultado da execução completa: **861 passed, 4 skipped**; os 4 skips são tes
 Ruff check/format, mypy (228 arquivos), compileall e `git diff --check` aprovados. A primeira
 execução completa encontrou um timeout transitório de subprocesso do Auth Agent; o teste isolado e
 a execução subsequente passaram sem alteração no Auth Agent.
+
+## WL-2026-08-31-02 — Worker Seguro IQ Option (Fase 1)
+
+**Data/hora:** 2026-08-31 12:30 BRT.
+
+**Implementação:** criado `WorkerProcess` assíncrono com estados de ciclo de vida, shutdown
+gracioso e health check separado. O `ConnectionManager` tornou-se o único dono de conexão e
+reconexão, usando backoff exponencial com jitter completo, limites configuráveis e reset somente
+após sincronização. Foram adicionados circuit breakers independentes para conexão, autenticação,
+dados, consultas de conta e submissão.
+
+**Estado e recuperação:** `OrderReconciler` consulta saldo, ordens abertas/liquidadas e posições,
+com janela configurável e fail-closed em divergência. `OrderQueue` é uma PriorityQueue limitada e
+o `OrderCoordinator` serializa por conta/ativo, verifica liderança, conexão, breaker e idempotência,
+persistindo ordem e reserva antes do dispatch. `BrokerAdapterWrapper` aplica timeout por operação e
+normaliza erros do adapter.
+
+**Validação:** testes de integração adicionados para processo, conexão/backoff, circuit breaker,
+reconciliação, divergência, single writer, idempotência e backpressure. Suíte completa: **870
+passed, 4 skipped**. Ruff, formatação, mypy, compileall e `git diff --check` aprovados. Nenhuma
+execução Real ou ordem externa foi realizada.

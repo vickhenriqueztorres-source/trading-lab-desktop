@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 
 from packages.brokers.port import (
+    BrokerError,
     BrokerPort,
     BrokerProtocolError,
     CapabilityMap,
@@ -148,6 +149,8 @@ class IQOptionAdapter(BrokerPort):
 
     @staticmethod
     def _map_error(exc: Exception) -> Exception:
+        if isinstance(exc, BrokerError):
+            return exc
         text = str(exc).lower()
         if "rate" in text or "429" in text:
             return RateLimitedError("IQOPTION_RATE_LIMITED")
