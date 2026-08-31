@@ -3700,3 +3700,8 @@ hash `A23C1E49191CB6AEBEFC252079F2230557261CA22AFC3E7065BF084CAA370061`.
 **Checks:** scanner de segredos limpo, manifesto auto-verificado e health check compilado com
 sucesso. O build mantém UI windowed, Safe Stop inicial e nenhuma capacidade de ordem Real. IQ Option
 permanece apenas com a fundação isolada; login e execução externa não foram habilitados.
+
+**Launcher portátil:** compilado `TradingLab-Desktop-v1.9.11-ENTERPRISE-PHASE4.exe` com o payload
+onedir incorporado como recurso. Health check do arquivo único retornou código 0. Hash SHA-256:
+`B8C02E1154D786B735319182F8BCACBEFBFDAE193AE5826A10714C84F1FD5EC2`. O arquivo único é a opção
+recomendada para evitar o erro de abrir somente o `TradingLab.exe` sem sua pasta `_internal`.
