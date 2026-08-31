@@ -3647,3 +3647,23 @@ corretora. Nenhuma conta Real, credencial ou ordem externa foi utilizada.
 
 **Limitações:** os scripts shell são templates para execução controlada pela operação; não foram
 executados contra PostgreSQL/Redis/S3 nesta máquina Windows. O canary permanece read-only/shadow.
+
+## WL-2026-08-31-05 — Prontidão Controlada (Fase 4)
+
+**Data/hora:** 2026-08-31 18:00 BRT.
+
+**Objetivo:** fechar a validação de prontidão sem execução Real automática, documentando Demo,
+segurança, dependências, aprovação operacional e habilitação gradual.
+
+**Implementação:** criado `tests/e2e/test_demo_validation.py` com 24 horas simuladas, lease/fencing,
+supervisor/crash-loop, invariantes de duplicidade e UNKNOWN, divergência fail-closed, checksum e
+contagem de restore, auditoria sem segredos, SLO e inventário de runbooks. Adicionados
+`docs/demo_validation_report.md`, `docs/security_review.md`, `docs/dependencies_review.md`,
+`docs/operational_approval.md`, `docs/gradual_enablement.md` e `docs/final_documentation.md`.
+
+**Validação:** E2E e testes de Fase 3/HA: **9 passed**; Ruff check/format, mypy, compileall e
+`git diff --check` aprovados. Nenhuma credencial, conta Real ou ordem externa foi usada.
+
+**Limitações e aprovação:** o E2E é local/simulado; soak Demo externo, pip-audit/Safety no CI,
+restore contra infraestrutura e assinaturas operacionais permanecem pendentes. A conta Real segue
+somente leitura e não há habilitação automática.
