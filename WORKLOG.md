@@ -3684,3 +3684,19 @@ temp/artefatos e falhas DPAPI, já documentadas, portanto não foi declarada apr
 **Estado de release:** a branch contém dois commits locais à frente do remoto. PR, aprovação,
 merge em `main`, tag e publicação de release exigem autenticação GitHub e aprovação humana; não
 foram executados automaticamente. Nenhuma ordem ou conta Real foi usada.
+
+## WL-2026-08-31-07 — Build EXE Enterprise Fases 0–4
+
+**Data/hora:** 2026-08-31 19:45 BRT.
+
+**Build:** pipeline canônico PyInstaller onedir/windowed executado com a branch atual. O artefato
+ficou em `dist_enterprise_phase4/TradingLab/TradingLab.exe`; manifesto com 482 arquivos e hash
+`638C206A45F6A9C6172318E74FF9AD62EC60EA701E7C16155D839B9F0D5CA602`. O executável tem hash
+`A2665A353524602BB55EB7651A0A03C7EB5F58BA38C597EE8D3F3448E8CEB332`.
+
+**Distribuição:** ZIP onedir `dist_enterprise_phase4/TradingLab-Desktop-v1.9.11-ENTERPRISE-PHASE4.zip`,
+hash `A23C1E49191CB6AEBEFC252079F2230557261CA22AFC3E7065BF084CAA370061`.
+
+**Checks:** scanner de segredos limpo, manifesto auto-verificado e health check compilado com
+sucesso. O build mantém UI windowed, Safe Stop inicial e nenhuma capacidade de ordem Real. IQ Option
+permanece apenas com a fundação isolada; login e execução externa não foram habilitados.
