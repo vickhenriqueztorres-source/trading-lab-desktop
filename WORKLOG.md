@@ -3667,3 +3667,20 @@ contagem de restore, auditoria sem segredos, SLO e inventário de runbooks. Adic
 **Limitações e aprovação:** o E2E é local/simulado; soak Demo externo, pip-audit/Safety no CI,
 restore contra infraestrutura e assinaturas operacionais permanecem pendentes. A conta Real segue
 somente leitura e não há habilitação automática.
+
+## WL-2026-08-31-06 — Merge, Release e Pronto para Produção Controlada (Fase 5)
+
+**Data/hora:** 2026-08-31 19:00 BRT.
+
+**Implementação:** adicionados workflow `.github/workflows/ci.yml` com testes, Ruff, mypy,
+compileall, diff check, pip-audit, secret scanning, build e staging read-only. Criados
+`docs/production_readiness.md`, `docs/pull_request_enterprise_ready.md` e
+`RELEASE_NOTES_v1.0.0-enterprise-ready.md`.
+
+**Validação:** os testes focados das Fases 3–4 permanecem verdes. A suíte histórica completa
+continua dependente de um runner Windows limpo: o host local apresentou falhas de permissão em
+temp/artefatos e falhas DPAPI, já documentadas, portanto não foi declarada aprovação falsa.
+
+**Estado de release:** a branch contém dois commits locais à frente do remoto. PR, aprovação,
+merge em `main`, tag e publicação de release exigem autenticação GitHub e aprovação humana; não
+foram executados automaticamente. Nenhuma ordem ou conta Real foi usada.
