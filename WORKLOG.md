@@ -3566,3 +3566,19 @@ saída 0. Portátil final:
 `dist_strategy_selection_final/TradingLab-Desktop-v1.9.11-STRATEGY-SELECTION.exe`, SHA-256
 `94F7F871C9AC6B0F862E8421FBD9BB89FF40DD957D240CBBDBA1E075570AC0A2`. O artefato não contém
 credenciais, bancos ou perfil pessoal.
+
+## WL-2026-08-31-01 — Fundação Enterprise IQ Option (Fase 0)
+
+**Data/hora:** 2026-08-31 11:00 BRT.
+
+**Escopo:** adicionados os contratos de domínio independentes para a futura integração IQ Option:
+estados de ordem, intenções, resultados de execução e eventos tipados; `BrokerPort`, mapa de
+capabilities e adapter IQ Option com mapeamento de erros; SQLite State Store versionado com índices
+únicos, reservas e idempotência; máquina de transições, dedupe determinístico, logging JSON com
+redaction e métricas mínimas. A camada é Practice/Demo-only e não habilita execução Real.
+
+**Validação:** testes novos de estado, deduplicação, porta/adapter e a suíte existente passaram.
+Resultado da execução completa: **861 passed, 4 skipped**; os 4 skips são testes opcionais/externos.
+Ruff check/format, mypy (228 arquivos), compileall e `git diff --check` aprovados. A primeira
+execução completa encontrou um timeout transitório de subprocesso do Auth Agent; o teste isolado e
+a execução subsequente passaram sem alteração no Auth Agent.
