@@ -7,11 +7,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from apps.iqoption_worker.schema import IQOptionErrorCategory, IQOptionWorkerError
-from packages.brokers.iqoption.fake_transport import FakeIQOptionTransport
+from packages.brokers.iqoption.community_read_only import IQOptionExternalError
 from packages.brokers.iqoption.validators import validate_iqoption_order_command
 from packages.domain.models import (
     Broker,
@@ -45,12 +45,24 @@ class TrackedIQOptionOrder:
         return self._sequence
 
 
+class IQOptionOrderTransport(Protocol):
+    def request(
+        self,
+        name: str,
+        msg: Mapping[str, Any],
+        *,
+        timeout: float = 2.0,
+    ) -> dict[str, Any]: ...
+
+    def receive_contract(self, *, timeout: float = 0.1) -> dict[str, Any] | None: ...
+
+
 class IQOptionOrderSession:
     """Manages order submission and contract event streaming for IQ Option practice."""
 
     def __init__(
         self,
-        transport: FakeIQOptionTransport,
+        transport: IQOptionOrderTransport,
         *,
         account_id: str = "PRACTICE_ACCOUNT",
         practice_mode: bool = True,
@@ -70,36 +82,35 @@ class IQOptionOrderSession:
         self._events: queue.Queue[BrokerOrderEvent] = queue.Queue(maxsize=1024)
 
     def submit_order(self, command: OrderCommand) -> WorkerSubmissionResult:
-        validate_iqoption_order_command(command)
-        stake_decimal = Decimal(command.amount.minor_units) / Decimal(100)
-        stake_str = f"{stake_decimal:.2f}"
-
-        payload = {
-            "active": command.symbol,
-            "direction": command.direction.value.lower(),
-            "price": stake_str,
-            "client_order_id": command.order_id,
-            "correlation_id": command.correlation_id,
-        }
-
-        tracked = TrackedIQOptionOrder(
-            order_id=command.order_id,
-            correlation_id=command.correlation_id,
-            client_order_ref=command.order_id,
-            broker_order_id=None,
-            symbol=command.symbol,
-            direction=command.direction,
-            amount=command.amount,
-            product=command.product,
-            account_id=command.account_id,
-            created_at_utc=datetime.now(UTC),
-            last_status=ExternalOrderStatus.ACCEPTED,
-        )
-        with self._lock:
-            self._tracked_by_ref[command.order_id] = tracked
-
         try:
-            response = self._transport.request("buy", payload, timeout=2.0)
+            validate_iqoption_order_command(command)
+            stake_decimal = Decimal(command.amount.minor_units) / Decimal(100)
+            stake_str = f"{stake_decimal:.2f}"
+            payload = {
+                "active": command.symbol,
+                "direction": command.direction.value.lower(),
+                "price": stake_str,
+                "client_order_id": command.order_id,
+                "correlation_id": command.correlation_id,
+                "duration": command.duration,
+            }
+            tracked = TrackedIQOptionOrder(
+                order_id=command.order_id,
+                correlation_id=command.correlation_id,
+                client_order_ref=command.order_id,
+                broker_order_id=None,
+                symbol=command.symbol,
+                direction=command.direction,
+                amount=command.amount,
+                product=command.product,
+                account_id=command.account_id,
+                created_at_utc=datetime.now(UTC),
+                last_status=ExternalOrderStatus.ACCEPTED,
+            )
+            with self._lock:
+                self._tracked_by_ref[command.order_id] = tracked
+
+            response = self._transport.request("buy", payload, timeout=8.0)
             if not response.get("status"):
                 with self._lock:
                     self._tracked_by_ref.pop(command.order_id, None)
@@ -113,7 +124,12 @@ class IQOptionOrderSession:
                     reason_code=str(reason),
                 )
 
-            contract_id = str(response.get("id", response.get("result", {}).get("id")))
+            raw_result = response.get("result")
+            nested_id = raw_result.get("id") if isinstance(raw_result, Mapping) else None
+            raw_contract_id = response.get("id", nested_id)
+            if raw_contract_id is None or str(raw_contract_id).strip() in {"", "None"}:
+                raise IQOptionExternalError("IQOPTION_ORDER_RESPONSE_INVALID")
+            contract_id = str(raw_contract_id)
             tracked.broker_order_id = contract_id
             with self._lock:
                 self._tracked[contract_id] = tracked
@@ -127,7 +143,7 @@ class IQOptionOrderSession:
                 reason_code=None,
             )
 
-        except IQOptionWorkerError as exc:
+        except (IQOptionWorkerError, IQOptionExternalError) as exc:
             if exc.reason_code in ("IQOPTION_REQUEST_TIMEOUT", "IQOPTION_NETWORK_ERROR"):
                 outcome = WorkerOutcome.TIMEOUT_AFTER_POSSIBLE_SEND
             else:
@@ -164,7 +180,7 @@ class IQOptionOrderSession:
         return count
 
     def process_raw_contract_message(self, msg: Mapping[str, Any]) -> BrokerOrderEvent | None:
-        contract_id = str(msg.get("id", msg.get("contract_id", "")))
+        contract_id = str(msg.get("id", msg.get("option_id", msg.get("contract_id", ""))))
         client_order_id = str(msg.get("client_order_id", ""))
         status_str = str(msg.get("status", "")).lower()
         win_str = str(msg.get("win", "")).lower()
@@ -182,7 +198,7 @@ class IQOptionOrderSession:
         elif status_str in ("win", "loose") or win_str in ("win", "loose"):
             external_status = ExternalOrderStatus.SETTLED
             is_settled = True
-            win_amount_str = str(msg.get("win_amount", "0.00"))
+            win_amount_str = str(msg.get("win_amount", msg.get("profit_amount", "0.00")))
             win_decimal = Decimal(win_amount_str)
             stake_decimal = Decimal(tracked.amount.minor_units) / Decimal(100)
             pnl_decimal = win_decimal - stake_decimal

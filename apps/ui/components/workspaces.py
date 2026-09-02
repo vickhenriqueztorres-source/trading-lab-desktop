@@ -15,10 +15,18 @@ from PySide6.QtWidgets import (
 )
 
 from apps.ui.components.broker_card import BrokerCardWidget
+from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
+from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummaryWidget
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import t
-from packages.protocol.ui_messages import BrokerCardStatus, OrderSummary, UiAccountMode
+from packages.protocol.ui_messages import (
+    BrokerCardStatus,
+    OrderSummary,
+    UiAccountMode,
+    UiIqOptionAssetRank,
+    UiIqOptionRiskConfig,
+)
 
 
 def _mode_text(mode: UiAccountMode) -> str:
@@ -30,6 +38,7 @@ class BrokerWorkspaceWidget(QWidget):
     """Broker-isolated projection with honest, read-only configuration guidance."""
 
     deriv_demo_connect_requested = Signal()
+    iqoption_login_requested = Signal()
 
     def __init__(
         self,
@@ -54,6 +63,9 @@ class BrokerWorkspaceWidget(QWidget):
         self._tabs.setAccessibleName(display_name)
         layout.addWidget(self._tabs)
 
+        status_scroll = QScrollArea()
+        status_scroll.setWidgetResizable(True)
+        status_scroll.setFrameShape(QFrame.Shape.NoFrame)
         status_page = QWidget()
         status_layout = QVBoxLayout(status_page)
         status_layout.setContentsMargins(14, 14, 14, 14)
@@ -64,9 +76,19 @@ class BrokerWorkspaceWidget(QWidget):
         status_layout.addWidget(self._intro)
         self.card = BrokerCardWidget(display_name)
         status_layout.addWidget(self.card)
+
+        self.strategy_summary: IqOptionStrategySummaryWidget | None = None
+        self.asset_radar: IqOptionAssetRadarWidget | None = None
+        if broker_key == "IQOPTION":
+            self.strategy_summary = IqOptionStrategySummaryWidget()
+            status_layout.addWidget(self.strategy_summary)
+            self.asset_radar = IqOptionAssetRadarWidget()
+            status_layout.addWidget(self.asset_radar)
+
         self.orders = OrderTableView()
         status_layout.addWidget(self.orders, 1)
-        self._tabs.addTab(status_page, "")
+        status_scroll.setWidget(status_page)
+        self._tabs.addTab(status_scroll, "")
 
         configuration_page = QScrollArea()
         configuration_page.setWidgetResizable(True)
@@ -89,6 +111,9 @@ class BrokerWorkspaceWidget(QWidget):
         guidance_layout.addWidget(self._configuration_body)
         self._deriv_connect_button: QPushButton | None = None
         self._deriv_connect_status: QLabel | None = None
+        self._iqoption_login_button: QPushButton | None = None
+        self._iqoption_login_status: QLabel | None = None
+        self._iqoption_login_title: QLabel | None = None
         if broker_key == "DERIV":
             self._deriv_connect_button = QPushButton()
             self._deriv_connect_button.setObjectName("PrimaryButton")
@@ -98,6 +123,25 @@ class BrokerWorkspaceWidget(QWidget):
             self._deriv_connect_status.setWordWrap(True)
             self._deriv_connect_status.setObjectName("Subtitle")
             guidance_layout.addWidget(self._deriv_connect_status)
+        elif broker_key == "IQOPTION":
+            login_frame = QFrame()
+            login_frame.setObjectName("LoginSurface")
+            login_layout = QVBoxLayout(login_frame)
+            login_layout.setContentsMargins(12, 12, 12, 12)
+            login_layout.setSpacing(8)
+            login_title = QLabel()
+            login_title.setObjectName("Title")
+            login_layout.addWidget(login_title)
+            self._iqoption_login_title = login_title
+            self._iqoption_login_button = QPushButton()
+            self._iqoption_login_button.setObjectName("PrimaryButton")
+            self._iqoption_login_button.clicked.connect(self.iqoption_login_requested.emit)
+            login_layout.addWidget(self._iqoption_login_button)
+            self._iqoption_login_status = QLabel()
+            self._iqoption_login_status.setWordWrap(True)
+            self._iqoption_login_status.setObjectName("Subtitle")
+            login_layout.addWidget(self._iqoption_login_status)
+            guidance_layout.addWidget(login_frame)
         self._scope = QLabel()
         self._scope.setObjectName("Subtitle")
         guidance_layout.addWidget(self._scope)
@@ -134,13 +178,35 @@ class BrokerWorkspaceWidget(QWidget):
         )
 
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
-        self.orders.update_orders(tuple(item for item in orders if item.broker == self.broker_key))
+        filtered = tuple(item for item in orders if item.broker == self.broker_key)
+        self.orders.update_orders(filtered)
+        if self.strategy_summary is not None:
+            self.strategy_summary.update_orders(filtered)
+
+    def update_iqoption_radar(self, ranking: Sequence[UiIqOptionAssetRank]) -> None:
+        if self.asset_radar is not None:
+            self.asset_radar.update_ranking(ranking)
+
+    def update_iqoption_risk(self, config: UiIqOptionRiskConfig | None) -> None:
+        if self.strategy_summary is not None:
+            self.strategy_summary.update_config(config)
 
     def set_deriv_connect_busy(self, busy: bool, message: str | None = None) -> None:
         if self._deriv_connect_button is None or self._deriv_connect_status is None:
             return
         self._deriv_connect_button.setEnabled(not busy)
         self._deriv_connect_status.setText(message or t("deriv.connect.status.ready"))
+
+    def set_iqoption_login_busy(self, busy: bool, message: str | None = None) -> None:
+        if self._iqoption_login_button is None or self._iqoption_login_status is None:
+            return
+        self._iqoption_login_button.setEnabled(not busy)
+        if message is not None:
+            self._iqoption_login_status.setText(message)
+
+    def set_iqoption_login_status(self, message: str) -> None:
+        if self._iqoption_login_status is not None:
+            self._iqoption_login_status.setText(message)
 
     def tab_label(self) -> str:
         if self._last_status is None:
@@ -161,6 +227,12 @@ class BrokerWorkspaceWidget(QWidget):
             self._deriv_connect_button.setText(t("deriv.connect.button"))
         if self._deriv_connect_status is not None and not self._deriv_connect_status.text():
             self._deriv_connect_status.setText(t("deriv.connect.status.ready"))
+        if self._iqoption_login_title is not None:
+            self._iqoption_login_title.setText(t("iq_option.login.title"))
+        if self._iqoption_login_button is not None:
+            self._iqoption_login_button.setText(t("iq_option.login.button"))
+        if self._iqoption_login_status is not None and not self._iqoption_login_status.text():
+            self._iqoption_login_status.setText(t("iq_option.login.status"))
         self._scope.setText(f"{t('config.scope')}: {self._display_name}")
         if self._last_status is None:
             mode = t("config.waiting_projection")

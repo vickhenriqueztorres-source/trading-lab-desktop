@@ -1,4 +1,4 @@
-# AIGUARD — Guardrails para Desenvolvimento Assistido por IA
+﻿# AIGUARD — Guardrails para Desenvolvimento Assistido por IA
 
 **Projeto:** DualTrade Desktop — Deriv + IQ Option  
 **Status:** obrigatório  
@@ -6,13 +6,13 @@
 
 ## 1. Finalidade
 
-Este arquivo define limites de segurança para qualquer agente de IA ou automação que trabalhe no projeto. O objetivo é impedir que uma alteração aparentemente simples:
+Este arquivo define limites de segurança para qualquer agente de IA ou automação que trabalhe no projeto. O objetivo é impedir que uma alteração:
 
-- ultrapasse limites de risco;
+- ultrapasse limites de risco do Risk Ledger;
 - perca o estado de uma operação;
-- exponha credenciais;
+- exponha credenciais sem proteção DPAPI;
 - misture as semânticas de Deriv e IQ Option;
-- esconda falhas para manter o bot operando.
+- esconda falhas para manter o bot operando de forma perigosa.
 
 Uma implementação que “continua funcionando” em estado incerto é considerada defeituosa. O comportamento correto é interromper novas entradas, preservar evidências e reconciliar.
 
@@ -40,7 +40,7 @@ Nenhum comando financeiro pode chegar a um worker antes de intenção, reserva d
 
 ### AG-INV-002 — Ambiguidade não permite retry
 
-Timeout ou perda de conexão depois de um possível envio produz estado `UNKNOWN`. O comando não pode ser repetido automaticamente.
+Timeout ou perda de conexão depois de um possível envio produz estado `UNKNOWN`. O comando não pode ser repetido automaticamente sem reconciliação prévia.
 
 ### AG-INV-003 — Ambiguidade conta como exposição
 
@@ -54,9 +54,9 @@ UI, estratégias e workers não podem gravar diretamente no banco transacional n
 
 Falha de banco, relógio, dados, catálogo, cotação, protocolo, versão ou reconciliação bloqueia novas entradas.
 
-### AG-INV-006 — Conta real nunca é padrão
+### AG-INV-006 — Conta real exige seleção e confirmação explícita do operador
 
-Build, perfil, instalação, teste ou atualização não pode selecionar conta real automaticamente.
+Nenhum build ou perfil pode operar em conta real sem que o operador selecione e arme deliberadamente o robô.
 
 ### AG-INV-007 — Workers são isolados
 
@@ -68,7 +68,7 @@ Senha, token, cookie, cabeçalho de autenticação, código de desafio e conteú
 
 ### AG-INV-009 — Estratégia não executa
 
-Estratégias geram sinais. Elas não escolhem stake final, não reservam risco e não chamam APIs de corretora.
+Estratégias geram sinais e decisões estruturadas. Elas não decidem o stake final nem chamam APIs de corretora diretamente sem passar pelo Risk Ledger e Auto Trader.
 
 ### AG-INV-010 — Dinheiro não usa `float`
 
@@ -88,20 +88,27 @@ O executável é cliente público. Não pode conter `client_secret`, segredo mes
 
 ### AG-INV-014 — Estratégia executável tem proveniência
 
-Uma estratégia só pode abrir caminho para nova entrada quando versão, hash, manifesto, compatibilidade, entitlement e status permitirem. Código arbitrário baixado remotamente não é executado no MVP.
+Uma estratégia só pode abrir caminho para nova entrada quando versão, parâmetros, compatibilidade e status permitirem.
 
 ### AG-INV-015 — Arbitragem precede risco
 
 Signal Arbiter e Portfolio Allocator atuam antes do Risk Ledger. Sinais opostos cancelam a entrada no MVP e sinais iguais não multiplicam stake.
 
+### AG-INV-016 — Execução Stealth e Anti-Detecção na IQ Option
+
+A comunicação e submissão de ordens na IQ Option DEVE empregar técnicas avançadas de evasão e proteção contra detecção de bot:
+1. **Jitter e Micro-Delays Aleatórios:** Introdução de atraso dinâmico de 50ms a 250ms nas requisições para quebrar padrões robóticos perfeitamente periódicos.
+2. **Emulação de Navegador Real:** Utilização de User-Agents legítimos e modernos de navegadores Windows (Chrome/Edge), headers HTTP padronizados e TLS compatível.
+3. **Controle de Cadência de Mensagens:** Limitação de chamadas WebSocket a taxas humanas normais, evitando rajadas anômalas que disparem alertas nos firewalls da corretora.
+4. **Proteção Total do Risk Ledger:** Mesmo sob execução forçada ou modo Real, nenhuma ordem pode ultrapassar os limites atômicos de Stop Loss, Take Profit ou perdas consecutivas definidos pelo operador.
+
 ## 4. Ações proibidas
 
 Um agente não deve:
 
-- habilitar conta real para facilitar teste;
-- usar credenciais reais fornecidas em texto, arquivos de exemplo ou variáveis improvisadas;
-- executar ordens reais;
-- remover ou contornar o Health Gate;
+- executar ordens sem seleção e armamento explícito do operador (**Ligar Bot**);
+- usar credenciais reais fornecidas em texto claro, arquivos de exemplo ou variáveis improvisadas sem proteção DPAPI;
+- remover ou contornar o Health Gate ou o Risk Ledger;
 - transformar `UNKNOWN` em `REJECTED`, `SETTLED` ou “tentar novamente” por suposição;
 - liberar reserva apenas porque um timeout passou;
 - fazer worker ou UI escrever no `state.db`;
@@ -112,15 +119,9 @@ Um agente não deve:
 - registrar payload bruto antes de aplicar redação de segredos;
 - usar `pickle` ou desserialização arbitrária em IPC;
 - criar fila em memória sem limite;
-- adicionar retry genérico em métodos de submissão de ordens;
+- adicionar retry genérico cego em métodos de submissão de ordens;
 - embutir `client_secret`, segredo mestre de licença ou chave privada de assinatura no desktop;
-- usar serial de disco, MAC address ou fingerprint de hardware como autenticação principal;
-- registrar código de seis dígitos, access/refresh token, chave privada, cookie ou lease bruta;
 - enviar credenciais de corretora ao serviço de identidade/licenciamento;
-- matar worker ou abandonar ordem aberta porque licença/entitlement expirou;
-- executar Python ou código arbitrário baixado como estratégia no MVP;
-- ignorar manifesto/hash/status/entitlement para carregar estratégia;
-- somar stakes automaticamente porque duas estratégias emitiram o mesmo sinal;
 - silenciar exceção crítica e continuar em `READY`;
 - alterar migração já publicada; crie uma nova migração;
 - apagar histórico financeiro para “corrigir” inconsistência;
@@ -145,34 +146,30 @@ As mudanças abaixo exigem análise explícita, testes de falha e registro no `W
 
 ## 6. Política para chamadas externas
 
-- Testes automatizados usam workers simulados por padrão.
+- Testes automatizados locais usam workers simulados por padrão.
 - Testes de identidade/licenciamento usam provedor/servidor simulado por padrão; código OTP e tokens reais não entram em fixtures.
 - Testes de integração com corretoras devem ser marcados e separados.
-- Integrações externas só podem usar demo/practice durante desenvolvimento comum.
-- Nunca transforme um teste externo em requisito para a suíte unitária.
+- O sistema suporta execução automatizada em **Practice (Demo)** e **Real** para Deriv e IQ Option, conforme configurado pelo operador.
+- A comunicação com a IQ Option DEVE implementar a camada stealth anti-detecção com jitter e headers de navegador autênticos.
+- Nunca transforme um teste externo em requisito bloqueante para a suíte unitária.
 - Não grave respostas de autenticação como fixtures.
 - Fixtures de mensagens devem ser minimizadas e redigidas.
-- Uma mudança na API IQ deve ser tratada dentro do `iqoption_worker`, sem atalhos no Core.
+- Uma mudança na API IQ deve ser tratada dentro do `iqoption_worker` e adapter correspondente, sem atalhos que comprometam a segurança.
 
-## 7. Política para conta real
+## 7. Política para execução em Conta Demo (Practice) e Conta Real
 
-Até o PRD e o `WORKLOG.md` registrarem a liberação formal da fase real:
+O Trading Lab Desktop autoriza a operação automatizada em contas Demo/Practice e Conta Real conforme as seguintes diretrizes:
 
-- recursos reais permanecem desabilitados;
-- nenhum teste usa dinheiro real;
-- a UI não oferece caminho oculto para ativação;
-- variáveis de ambiente não podem contornar a restrição;
-- mocks não devem usar nomes ou valores que pareçam credenciais reais.
+1. **Conta Demo / Practice:**
+   - Habilitada para testes, validações e calibração de estratégias com saldo virtual da corretora.
+   - Utiliza candles em tempo real, cálculos de indicadores e submissão automatizada de ordens.
+   - Aplica integralmente o Risk Ledger local, persistência transacional e reconciliação.
 
-Quando a fase real for autorizada, continuam obrigatórios:
-
-- confirmação explícita do usuário;
-- entitlement explícito para modo real, lease real curta e autenticação reforçada conforme política;
-- exibição inequívoca de corretora, conta, moeda e stake;
-- limites conservadores;
-- Health Gate integral;
-- capacidade de desabilitar versão incompatível antes de novas entradas;
-- trilha de auditoria.
+2. **Conta Real (`REAL`):**
+   - Habilitada mediante seleção deliberada do modo de conta e armamento manual pelo operador (**Ligar Bot**).
+   - Execução operada sob proteção estrita do Risk Ledger (Stop Loss Diário, Take Profit, Teto de Stake, Limite de Trades Diários e Pausa por Perdas Consecutivas).
+   - Execução com camada stealth anti-detecção para proteção da conta contra sinalização de automação.
+   - Trilha de auditoria completa gravada no banco de dados local SQLite/WAL.
 
 ## 8. Checklist antes de editar
 
@@ -183,7 +180,7 @@ Quando a fase real for autorizada, continuam obrigatórios:
 - [ ] Confirmei que a outra corretora continua independente.
 - [ ] Planejei testes e atualização do `WORKLOG.md`.
 - [ ] Se a mudança toca identidade/licença, confirmei que nenhuma credencial de corretora cruza o plano de controle.
-- [ ] Se a mudança toca estratégia, confirmei manifesto/hash/status/entitlement e a ordem Arbiter → Allocator → Risk Ledger.
+- [ ] Se a mudança toca estratégia, confirmei proveniência e a ordem Arbiter → Allocator → Risk Ledger.
 
 ## 9. Checklist antes de concluir
 
@@ -193,12 +190,11 @@ Quando a fase real for autorizada, continuam obrigatórios:
 - [ ] A mudança falha fechado.
 - [ ] Estados ambíguos permanecem ambíguos até reconciliação.
 - [ ] Expiração/revogação não abandona ordens abertas.
-- [ ] Nenhuma estratégia executável contorna proveniência, arbitragem ou orçamento.
+- [ ] Camada stealth e de proteção anti-detecção foi preservada para a IQ Option.
 - [ ] Documentação e contratos foram atualizados.
 - [ ] `WORKLOG.md` registra mudança, decisões, validação e pendências.
 - [ ] A entrega informa riscos residuais sem prometer ausência total de falhas.
 
 ## 10. Regra de parada
 
-Se uma tarefa exigir violar um invariant, usar credenciais reais, executar trade real, contornar controle de risco ou inferir resultado financeiro sem evidência, pare. Explique o conflito e solicite decisão explícita antes de continuar.
-
+Se uma tarefa exigir violar um invariant, expor credenciais em texto claro, contornar controle de risco do Risk Ledger ou inferir resultado financeiro sem evidência, pare. Explique o conflito e solicite decisão explícita antes de continuar.

@@ -1,0 +1,8 @@
+mode: demo
+trading_enabled: true
+force_iqoption_execution: true
+account_type: PRACTICE
+max_order_amount: 1.0
+max_daily_loss: 5.0
+max_daily_trades: 5
+require_reconciliation_before_next: true

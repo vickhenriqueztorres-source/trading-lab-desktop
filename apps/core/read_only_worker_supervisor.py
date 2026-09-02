@@ -13,6 +13,7 @@ from apps.core.worker_supervisor import WorkerHealthState
 from packages.protocol.envelope import EndpointRole
 from packages.protocol.errors import ProtocolError, ProtocolErrorCode
 from packages.protocol.transport import FramedSocket
+from packages.security import without_broker_credentials
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,7 @@ class ReadOnlyWorkerSupervisor:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=without_broker_credentials(),
         )
         try:
             connection, address = listener.accept()
@@ -176,7 +178,10 @@ class ReadOnlyWorkerSupervisor:
             and client.capabilities.supports_order_status_query
             and client.capabilities.supports_reconciliation
             and client.capabilities.supports_order_events
-            and client.capabilities.connection_mode == financial_mode
+            and (
+                client.capabilities.connection_mode == financial_mode
+                or financial_mode in (client.capabilities.connection_mode or "")
+            )
         ):
             client.close()
             self._terminate_process()
@@ -233,6 +238,13 @@ class ReadOnlyWorkerSupervisor:
             if process.poll() is not None:
                 self._on_disconnect(ProtocolErrorCode.WORKER_CRASHED)
                 return
+            # Broker workers dispatch requests serially.  Do not enqueue a
+            # heartbeat behind a bounded long-running login/reconciliation
+            # request and then misclassify that queueing delay as a dead
+            # worker.  The in-flight request has its own response deadline;
+            # heartbeat resumes immediately after it completes or times out.
+            if client.pending_request_count:
+                continue
             try:
                 client.ping(self._heartbeat_timeout)
             except WorkerDispatchError:

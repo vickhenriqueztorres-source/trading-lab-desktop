@@ -5,7 +5,7 @@ from typing import cast
 
 from apps.ui.controller import UiController
 from apps.ui.ipc_client import UiIpcClient, UiIpcUnavailable
-from packages.protocol import UiProjectionSnapshot
+from packages.protocol import UiIqOptionLoginAck, UiProjectionSnapshot
 
 
 class _TransientProjectionClient:
@@ -60,3 +60,32 @@ def test_projection_poll_recovers_after_transient_ipc_failure() -> None:
         controller.stop()
 
     assert client.closed is True
+
+
+def test_iqoption_login_refreshes_balance_projection_before_returning() -> None:
+    initial = cast(UiProjectionSnapshot, object())
+    connected = cast(UiProjectionSnapshot, object())
+
+    class Client:
+        projection_calls = 0
+
+        def login_iqoption(self, account_mode: str) -> UiIqOptionLoginAck:
+            assert account_mode == "practice"
+            return UiIqOptionLoginAck(True, True, "IQOPTION_PRACTICE_CONNECTED")
+
+        def projection(self) -> UiProjectionSnapshot:
+            self.projection_calls += 1
+            return initial if self.projection_calls == 1 else connected
+
+        def close(self) -> None:
+            return None
+
+    client = Client()
+    controller = UiController(cast(UiIpcClient, client))
+    controller.refresh()
+
+    ack = controller.login_iqoption("practice")
+
+    assert ack.connected is True
+    assert controller.snapshot is connected
+    assert client.projection_calls == 2

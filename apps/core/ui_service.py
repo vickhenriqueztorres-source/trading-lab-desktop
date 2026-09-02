@@ -12,9 +12,11 @@ from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
+from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.readiness import TradingReadinessSnapshot
 from apps.core.runtime import CoreRuntime
 from apps.core.worker_supervisor import WorkerHealthState
+from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
 from packages.observability.diagnostic import DiagnosticBundleResult
 from packages.protocol import (
     PROTOCOL_VERSION,
@@ -38,10 +40,16 @@ from packages.protocol import (
     UiHandshakeRequest,
     UiHandshakeResponse,
     UiHandshakeStatus,
+    UiIqOptionAssetRank,
+    UiIqOptionBotControlCommand,
+    UiIqOptionLoginAck,
+    UiIqOptionLoginCommand,
+    UiIqOptionRiskConfig,
     UiMultiStrategyMetrics,
     UiProjectionSnapshot,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
+    UiUpdateIqOptionRiskConfigCommand,
     require_empty_payload,
 )
 from packages.protocol.codec import encode_envelope
@@ -135,6 +143,40 @@ def _from_ui_digit_config(config: UiDigitRiskConfig) -> DigitRiskConfig:
     )
 
 
+def _to_ui_iqoption_config(config: IqOptionRiskConfig) -> UiIqOptionRiskConfig:
+    return UiIqOptionRiskConfig(
+        strategy_id=config.strategy_id,
+        symbol=config.symbol,
+        timeframe_seconds=config.timeframe_seconds,
+        duration_seconds=config.duration_seconds,
+        stake_minor_units=config.stake_minor_units,
+        daily_stop_loss_minor_units=config.daily_stop_loss_minor_units,
+        daily_take_profit_minor_units=config.daily_take_profit_minor_units,
+        max_consecutive_losses=config.max_consecutive_losses,
+        cooldown_seconds_after_loss=config.cooldown_seconds_after_loss,
+        max_daily_trades=config.max_daily_trades,
+        max_concurrent_positions=config.max_concurrent_positions,
+        currency=config.currency,
+    )
+
+
+def _from_ui_iqoption_config(config: UiIqOptionRiskConfig) -> IqOptionRiskConfig:
+    return IqOptionRiskConfig(
+        strategy_id=config.strategy_id,
+        symbol=config.symbol,
+        timeframe_seconds=config.timeframe_seconds,
+        duration_seconds=config.duration_seconds,
+        stake_minor_units=config.stake_minor_units,
+        daily_stop_loss_minor_units=config.daily_stop_loss_minor_units,
+        daily_take_profit_minor_units=config.daily_take_profit_minor_units,
+        max_consecutive_losses=config.max_consecutive_losses,
+        cooldown_seconds_after_loss=config.cooldown_seconds_after_loss,
+        max_daily_trades=config.max_daily_trades,
+        max_concurrent_positions=config.max_concurrent_positions,
+        currency=config.currency,
+    )
+
+
 def _response(request: Envelope, kind: MessageType, payload: dict[str, object]) -> Envelope:
     return Envelope(
         protocol_version=PROTOCOL_VERSION,
@@ -167,16 +209,30 @@ class CoreUiProjectionBuilder:
         *,
         deriv_health: Callable[[], WorkerHealthState | None],
         deriv_telemetry: Callable[[], DerivTelemetrySnapshot | None] = lambda: None,
+        deriv_bot_armed: Callable[[], bool] = lambda: False,
         deriv_bot_reason: Callable[[], str] = lambda: "BOT_WAITING_FOR_LIVE_DERIV",
         deriv_bot_waiting_status: Callable[[], UiBotWaitingStatus | None] = lambda: None,
         iqoption_health: Callable[[], WorkerHealthState | None] = lambda: None,
+        iqoption_balance: Callable[[], BrokerAccountBalance | None] = lambda: None,
+        iqoption_clock: Callable[[], BrokerClockSnapshot | None] = lambda: None,
+        iqoption_risk_config: Callable[[], IqOptionRiskConfig] = IqOptionRiskConfig,
+        iqoption_bot_armed: Callable[[], bool] = lambda: False,
+        iqoption_bot_reason: Callable[[], str] = lambda: "IQOPTION_BOT_DISARMED",
+        iqoption_asset_ranking: Callable[[], tuple[UiIqOptionAssetRank, ...]] = lambda: (),
     ) -> None:
         self._runtime = runtime
         self._deriv_health = deriv_health
         self._deriv_telemetry = deriv_telemetry
+        self._deriv_bot_armed = deriv_bot_armed
         self._deriv_bot_reason = deriv_bot_reason
         self._deriv_bot_waiting_status = deriv_bot_waiting_status
         self._iqoption_health = iqoption_health
+        self._iqoption_balance = iqoption_balance
+        self._iqoption_clock = iqoption_clock
+        self._iqoption_risk_config = iqoption_risk_config
+        self._iqoption_bot_armed = iqoption_bot_armed
+        self._iqoption_bot_reason = iqoption_bot_reason
+        self._iqoption_asset_ranking = iqoption_asset_ranking
 
     def trading_readiness(self) -> TradingReadinessSnapshot:
         gate = self._runtime.health_gate.get_snapshot()
@@ -287,7 +343,9 @@ class CoreUiProjectionBuilder:
         }
 
         iq_state = self._iqoption_health()
-        iq_connected = iq_state is WorkerHealthState.READY
+        iq_balance = self._iqoption_balance()
+        iq_clock = self._iqoption_clock()
+        iq_connected = iq_state is WorkerHealthState.READY and iq_balance is not None
 
         cards = [
             BrokerCardStatus(
@@ -333,13 +391,27 @@ class CoreUiProjectionBuilder:
             ),
             BrokerCardStatus(
                 broker="IQOPTION",
-                account_mode=UiAccountMode.PRACTICE,
+                account_mode=(
+                    UiAccountMode.REAL
+                    if iq_balance is not None and iq_balance.account_type == "REAL"
+                    else UiAccountMode.PRACTICE
+                ),
                 is_connected=iq_connected,
-                balance_minor_units=1000000 if iq_connected else None,
-                currency="USD" if iq_connected else None,
-                clock_synced=iq_connected,
-                connection_label="PRACTICE",
-                clock_latency_ms=45 if iq_connected else None,
+                balance_minor_units=(
+                    iq_balance.balance_minor_units
+                    if iq_connected and iq_balance is not None
+                    else None
+                ),
+                currency=(iq_balance.currency if iq_connected and iq_balance is not None else None),
+                clock_synced=iq_clock is not None and iq_clock.is_synced,
+                connection_label=(
+                    "REAL — SOMENTE LEITURA"
+                    if iq_balance is not None and iq_balance.account_type == "REAL"
+                    else "PRACTICE LIVE"
+                    if iq_connected
+                    else "DESCONECTADO"
+                ),
+                clock_latency_ms=(None if iq_clock is None else iq_clock.round_trip_milliseconds),
             ),
         ]
 
@@ -534,6 +606,11 @@ class CoreUiProjectionBuilder:
                     ),
                 )
             ),
+            iqoption_risk_config=_to_ui_iqoption_config(self._iqoption_risk_config()),
+            iqoption_bot_armed=self._iqoption_bot_armed(),
+            iqoption_bot_reason=self._iqoption_bot_reason(),
+            deriv_bot_armed=self._deriv_bot_armed(),
+            iqoption_asset_ranking=self._iqoption_asset_ranking(),
         )
 
     def _orders(self, *, since_utc: datetime | None = None) -> list[OrderSummary]:
@@ -597,6 +674,11 @@ class CoreUiProjectionService:
             Callable[[DigitRiskConfig], tuple[bool, str | None]] | None
         ) = None,
         digit_test_session_reset: Callable[[], tuple[bool, str]] | None = None,
+        iqoption_login: Callable[[str], tuple[bool, bool, str]] | None = None,
+        iqoption_risk_config_update: (
+            Callable[[IqOptionRiskConfig], tuple[bool, str | None]] | None
+        ) = None,
+        iqoption_bot_control: Callable[[bool], tuple[bool, str]] | None = None,
         *,
         request_timeout: float = 2.0,
     ) -> None:
@@ -613,6 +695,9 @@ class CoreUiProjectionService:
         self._deriv_demo_connect = deriv_demo_connect
         self._digit_risk_config_update = digit_risk_config_update
         self._digit_test_session_reset = digit_test_session_reset
+        self._iqoption_login = iqoption_login
+        self._iqoption_risk_config_update = iqoption_risk_config_update
+        self._iqoption_bot_control = iqoption_bot_control
         self._request_timeout = request_timeout
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -867,6 +952,65 @@ class CoreUiProjectionService:
             return _response(
                 request,
                 MessageType.UI_RESET_DIGIT_TEST_SESSION_ACK,
+                ack.to_payload(),
+            )
+        if request.message_type is MessageType.UI_IQOPTION_LOGIN_COMMAND:
+            iq_command = UiIqOptionLoginCommand.from_payload(request.payload)
+            if self._iqoption_login is None:
+                iq_ack = UiIqOptionLoginAck(
+                    accepted=False,
+                    connected=False,
+                    reason_code="IQOPTION_LOGIN_UNAVAILABLE",
+                )
+            else:
+                try:
+                    accepted, connected, reason = self._iqoption_login(iq_command.account_mode)
+                    iq_ack = UiIqOptionLoginAck(accepted, connected, reason)
+                except (OSError, RuntimeError, ValueError):
+                    iq_ack = UiIqOptionLoginAck(
+                        accepted=False,
+                        connected=False,
+                        reason_code="IQOPTION_LOGIN_REJECTED",
+                    )
+            return _response(request, MessageType.UI_IQOPTION_LOGIN_ACK, iq_ack.to_payload())
+        if request.message_type is MessageType.UI_UPDATE_IQOPTION_RISK_CONFIG_COMMAND:
+            iq_config_command = UiUpdateIqOptionRiskConfigCommand.from_payload(request.payload)
+            if self._iqoption_risk_config_update is None:
+                ack = UiCommandAck(
+                    False,
+                    "IQOPTION_RISK_CONFIG_UPDATE_UNAVAILABLE",
+                    self._safe_stop_state(),
+                )
+            else:
+                accepted, reason = self._iqoption_risk_config_update(
+                    _from_ui_iqoption_config(iq_config_command.config)
+                )
+                ack = UiCommandAck(
+                    accepted,
+                    "IQOPTION_RISK_CONFIG_APPLIED"
+                    if accepted
+                    else reason or "IQOPTION_RISK_CONFIG_REJECTED",
+                    self._safe_stop_state(),
+                )
+            return _response(
+                request,
+                MessageType.UI_UPDATE_IQOPTION_RISK_CONFIG_ACK,
+                ack.to_payload(),
+            )
+        if request.message_type is MessageType.UI_IQOPTION_BOT_CONTROL_COMMAND:
+            iq_control_command = UiIqOptionBotControlCommand.from_payload(request.payload)
+            if self._iqoption_bot_control is None:
+                ack = UiCommandAck(
+                    False,
+                    "IQOPTION_BOT_CONTROL_UNAVAILABLE",
+                    self._safe_stop_state(),
+                )
+            else:
+                accepted, reason = self._iqoption_bot_control(iq_control_command.enabled)
+                ack = UiCommandAck(accepted, reason, self._safe_stop_state())
+            return _response(
+                request,
+                MessageType.UI_IQOPTION_BOT_CONTROL_ACK,
                 ack.to_payload(),
             )
         raise ProtocolError(

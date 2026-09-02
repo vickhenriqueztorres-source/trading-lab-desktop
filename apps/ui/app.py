@@ -4,9 +4,10 @@ import contextlib
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
@@ -23,11 +24,12 @@ from PySide6.QtWidgets import (
 
 from apps.ui.components import (
     BrokerCardWidget,
-    BrokerWorkspaceWidget,
     DerivAssetRadarWidget,
     DerivWorkspaceWidget,
     GlobalRiskGaugeWidget,
     HealthGatePillWidget,
+    IqOptionStrategyConfigWidget,
+    IqOptionWorkspaceWidget,
     OrderTableView,
     ResultsDashboardWidget,
     SettingsWorkspaceWidget,
@@ -51,6 +53,8 @@ from packages.protocol.ui_messages import (
     UiDigitRiskConfig,
     UiDigitRiskConfigStatus,
     UiGlobalState,
+    UiIqOptionLoginAck,
+    UiIqOptionRiskConfig,
 )
 from packages.security import without_broker_credentials
 
@@ -63,6 +67,9 @@ def _window_title(mode: str) -> str:
 
 class TradingLabMainWindow(QMainWindow):
     """Professional Trading Lab Desktop UI (PySide6 / Qt 6)."""
+
+    _iqoption_saved_login_finished = Signal(object)
+    _iqoption_manual_login_finished = Signal(object)
 
     _TAB_OVERVIEW = 0
     _TAB_DERIV = 1
@@ -81,7 +88,9 @@ class TradingLabMainWindow(QMainWindow):
         self._controller = controller
         self._profile_dir = Path(profile_dir or "data/profiles/default")
         self._bot_enabled = False
+        self._iqoption_bot_enabled = False
         self._deriv_real_selected = False
+        self._iqoption_saved_login_started = False
 
         self.setWindowTitle(_window_title(t("app.practice_badge")))
         self.resize(1180, 780)
@@ -98,6 +107,10 @@ class TradingLabMainWindow(QMainWindow):
         self._timer.setInterval(300)
         self._timer.timeout.connect(self._refresh_projection)
         self._timer.start()
+
+        self._iqoption_saved_login_finished.connect(self._on_iqoption_saved_login_finished)
+        self._iqoption_manual_login_finished.connect(self._on_iqoption_manual_login_finished)
+        QTimer.singleShot(300, self._start_iqoption_saved_login)
 
         # Subscribe to language changes
         I18nManager.subscribe(self._on_language_changed)
@@ -148,12 +161,13 @@ class TradingLabMainWindow(QMainWindow):
         self._synthetic_config_panel.test_session_reset_requested.connect(
             self._on_reset_digit_test_session
         )
-        self._iqoption_workspace = BrokerWorkspaceWidget(
-            "IQ_OPTION",
-            "IQ Option",
-            "broker.iq_option.intro",
-            "config.iq_option.body",
+        self._iqoption_workspace = IqOptionWorkspaceWidget()
+        self._iqoption_workspace.iqoption_login_requested.connect(self._on_iqoption_login)
+        self._iqoption_config_panel = IqOptionStrategyConfigWidget()
+        self._iqoption_config_panel.config_apply_requested.connect(
+            self._on_iqoption_risk_config_apply
         )
+        self._iqoption_workspace.add_configuration_widget(self._iqoption_config_panel)
         self._main_tabs.addTab(self._iqoption_workspace, "")
         self._main_tabs.addTab(self._create_activity_page(), "")
         self._settings_workspace = SettingsWorkspaceWidget()
@@ -337,11 +351,16 @@ class TradingLabMainWindow(QMainWindow):
         layout.setContentsMargins(20, 12, 20, 12)
         layout.setSpacing(12)
 
-        # One authoritative automation toggle. OFF is the Core Safe Stop state.
-        self._btn_bot = QPushButton()
-        self._btn_bot.clicked.connect(self._on_toggle_bot)
-        layout.addWidget(self._btn_bot)
-        self._update_bot_button()
+        # Broker-specific controls prevent a Deriv action from arming IQ Option.
+        self._btn_deriv_bot = QPushButton()
+        self._btn_deriv_bot.clicked.connect(self._on_toggle_bot)
+        layout.addWidget(self._btn_deriv_bot)
+        # Compatibility alias for existing UI automation; it always means Deriv.
+        self._btn_bot = self._btn_deriv_bot
+        self._btn_iqoption_bot = QPushButton()
+        self._btn_iqoption_bot.clicked.connect(self._on_toggle_iqoption_bot)
+        layout.addWidget(self._btn_iqoption_bot)
+        self._update_bot_buttons()
 
         # Diagnostic Export Button
         self._btn_diag = QPushButton("📦 " + t("btn.diagnostic"))
@@ -371,7 +390,7 @@ class TradingLabMainWindow(QMainWindow):
         self._lbl_state_title.setText(t("kpi.global_state"))
         self._btn_diag.setText("📦 " + t("btn.diagnostic"))
         self._btn_close.setText("🔒 " + t("btn.safe_close"))
-        self._update_bot_button()
+        self._update_bot_buttons()
         self._risk_gauge.retranslate()
         self._health_pill_widget.retranslate()
         self._order_table_widget.retranslate()
@@ -381,6 +400,7 @@ class TradingLabMainWindow(QMainWindow):
         self._deriv_workspace.retranslate()
         self._asset_radar_panel.retranslate()
         self._iqoption_workspace.retranslate()
+        self._iqoption_config_panel.retranslate()
         self._settings_workspace.retranslate()
         self._retranslate_navigation()
         self._refresh_projection()
@@ -470,7 +490,7 @@ class TradingLabMainWindow(QMainWindow):
                     self.setWindowTitle(_window_title(t("app.practice_badge")))
                     self._lbl_badge.setText(t("app.practice_badge"))
                     self._lbl_badge.setStyleSheet("")
-            elif card_data.broker == "IQ_OPTION":
+            elif card_data.broker == "IQOPTION":
                 self._card_iqoption.update_card(card_data)
                 self._iqoption_workspace.update_status(card_data)
         self._retranslate_navigation()
@@ -495,6 +515,12 @@ class TradingLabMainWindow(QMainWindow):
             snapshot.digit_projected_sequence_loss_minor_units,
         )
         self._iqoption_workspace.update_orders(snapshot.active_orders)
+        self._iqoption_workspace.update_iqoption_radar(snapshot.iqoption_asset_ranking)
+        self._iqoption_workspace.update_iqoption_risk(snapshot.iqoption_risk_config)
+        self._iqoption_workspace.update_bot_state(
+            snapshot.iqoption_bot_armed,
+            snapshot.iqoption_bot_reason,
+        )
         self._settings_workspace.update_risk_projection(
             snapshot.global_exposure_minor_units,
             snapshot.global_max_exposure_minor_units,
@@ -512,11 +538,16 @@ class TradingLabMainWindow(QMainWindow):
             self._synthetic_live_panel.set_strategy(snapshot.digit_risk_config.active_strategy_id)
             self._synthetic_config_panel.set_risk_config(snapshot.digit_risk_config)
         self._synthetic_config_panel.set_cooldown_remaining(snapshot.cooldown_remaining_seconds)
+        if snapshot.iqoption_risk_config is not None:
+            self._iqoption_config_panel.set_config(snapshot.iqoption_risk_config)
 
-        # 7. Bot state is authoritative from the Core Safe Stop projection.
-        self._bot_enabled = not snapshot.safe_stop_active
-        self._btn_bot.setEnabled(connected)
-        self._update_bot_button()
+        # 7. Each broker state is authoritative from its own Core projection.
+        self._bot_enabled = snapshot.deriv_bot_armed
+        self._iqoption_bot_enabled = snapshot.iqoption_bot_armed
+        self._btn_deriv_bot.setEnabled(connected)
+        self._btn_iqoption_bot.setEnabled(connected)
+        self._btn_iqoption_bot.setToolTip(snapshot.iqoption_bot_reason)
+        self._update_bot_buttons()
         deriv_connected = any(
             card.broker == "DERIV" and card.is_connected for card in snapshot.broker_cards
         )
@@ -528,11 +559,26 @@ class TradingLabMainWindow(QMainWindow):
             snapshot.deriv_bot_waiting_status,
         )
 
+    def _update_bot_buttons(self) -> None:
+        self._btn_deriv_bot.setText(
+            t("btn.bot.deriv.stop") if self._bot_enabled else t("btn.bot.deriv.start")
+        )
+        self._btn_deriv_bot.setObjectName(
+            "SafeStopButton" if self._bot_enabled else "BotStartButton"
+        )
+        self._btn_iqoption_bot.setText(
+            t("btn.bot.iq.stop") if self._iqoption_bot_enabled else t("btn.bot.iq.start")
+        )
+        self._btn_iqoption_bot.setObjectName(
+            "SafeStopButton" if self._iqoption_bot_enabled else "BotStartButton"
+        )
+        for button in (self._btn_deriv_bot, self._btn_iqoption_bot):
+            button.style().unpolish(button)
+            button.style().polish(button)
+
     def _update_bot_button(self) -> None:
-        self._btn_bot.setText(t("btn.bot.stop") if self._bot_enabled else t("btn.bot.start"))
-        self._btn_bot.setObjectName("SafeStopButton" if self._bot_enabled else "BotStartButton")
-        self._btn_bot.style().unpolish(self._btn_bot)
-        self._btn_bot.style().polish(self._btn_bot)
+        """Compatibility shim retained for existing UI tests."""
+        self._update_bot_buttons()
 
     def _on_toggle_bot(self) -> None:
         if self._bot_enabled:
@@ -557,6 +603,29 @@ class TradingLabMainWindow(QMainWindow):
                 t("error.safe_stop_title"),
                 t("error.safe_stop_message", error=str(exc)),
             )
+
+    def _on_toggle_iqoption_bot(self) -> None:
+        try:
+            ack = self._controller.control_iqoption_bot(not self._iqoption_bot_enabled)
+            self._refresh_projection()
+            if not ack.accepted:
+                QMessageBox.warning(
+                    self,
+                    "IQ Option",
+                    t("error.resume_blocked_message", reason=ack.reason_code),
+                )
+        except Exception as exc:
+            QMessageBox.warning(self, "IQ Option", str(exc))
+
+    def _on_iqoption_risk_config_apply(self, config: UiIqOptionRiskConfig) -> None:
+        try:
+            if self._iqoption_bot_enabled:
+                self._controller.control_iqoption_bot(False)
+            ack = self._controller.update_iqoption_risk_config(config)
+            self._iqoption_config_panel.set_apply_result(ack.accepted, ack.reason_code)
+            self._refresh_projection()
+        except Exception as exc:
+            self._iqoption_config_panel.set_apply_result(False, str(exc)[:64])
 
     def _on_resume(self) -> None:
         try:
@@ -660,6 +729,7 @@ class TradingLabMainWindow(QMainWindow):
                 if getattr(sys, "frozen", False)
                 else Path(__file__).resolve().parents[2]
             )
+
             result = subprocess.run(
                 command,
                 cwd=helper_cwd,
@@ -721,6 +791,177 @@ class TradingLabMainWindow(QMainWindow):
                 "Falha ao conectar à Deriv",
                 f"{error_message}\n\nCódigo: {exc}",
             )
+
+    def _on_iqoption_login(self) -> None:
+        self._iqoption_workspace.set_iqoption_login_busy(True, "Abrindo conexão protegida…")
+        connection_started = False
+        command = [
+            sys.executable,
+            "-m",
+            "apps.iqoption_login_helper",
+            "--vault-dir",
+            str(self._profile_dir / "broker_credentials"),
+        ]
+        try:
+            helper_cwd = (
+                Path(sys.executable).resolve().parent
+                if getattr(sys, "frozen", False)
+                else Path(__file__).resolve().parents[2]
+            )
+            result = subprocess.run(
+                command,
+                cwd=helper_cwd,
+                env=without_broker_credentials(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return
+            response = json.loads(result.stdout.strip().splitlines()[-1])
+            if not isinstance(response, dict) or response.get("status") != "saved":
+                raise ValueError("IQOPTION_LOGIN_HELPER_INVALID")
+            account_mode = response.get("account_mode")
+            if account_mode not in {"practice", "real"}:
+                raise ValueError("IQOPTION_LOGIN_HELPER_INVALID_MODE")
+            connection_started = True
+            self._iqoption_workspace.set_iqoption_login_busy(
+                True,
+                "Conectando à IQ Option… A interface continuará disponível.",
+            )
+
+            def connect() -> None:
+                try:
+                    result: object = self._controller.login_iqoption(account_mode)
+                except (OSError, RuntimeError, ValueError, UiIpcError) as exc:
+                    result = exc
+                self._iqoption_manual_login_finished.emit((account_mode, result))
+
+            threading.Thread(
+                target=connect,
+                name="iqoption-manual-login",
+                daemon=True,
+            ).start()
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError, UiIpcError) as exc:
+            self._iqoption_workspace.set_iqoption_login_status(
+                "Não foi possível processar as credenciais. Tente novamente."
+            )
+            QMessageBox.warning(self, "Login IQ Option", str(exc))
+        finally:
+            if not connection_started:
+                self._iqoption_workspace.set_iqoption_login_busy(False)
+
+    def _on_iqoption_manual_login_finished(self, result: object) -> None:
+        self._iqoption_workspace.set_iqoption_login_busy(False)
+        if not isinstance(result, tuple) or len(result) != 2:
+            self._iqoption_workspace.set_iqoption_login_status(
+                "A conexão terminou sem uma resposta válida do Core."
+            )
+            return
+        account_mode, outcome = result
+        if isinstance(outcome, UiIqOptionLoginAck) and outcome.connected:
+            self._refresh_projection()
+            connected_message = (
+                "IQ Option Practice conectada."
+                if account_mode == "practice"
+                else "IQ Option Real conectada em modo somente leitura."
+            )
+            self._iqoption_workspace.set_iqoption_login_status(connected_message)
+            QMessageBox.information(self, "IQ Option", connected_message)
+            return
+
+        reason_code = (
+            outcome.reason_code if isinstance(outcome, UiIqOptionLoginAck) else str(outcome)
+        )
+        error_message = {
+            "IQOPTION_AUTH_FAILED": "E-mail ou senha recusados pela IQ Option.",
+            "IQOPTION_2FA_REQUIRED": "A conta exige autenticação em dois fatores.",
+            "IQOPTION_RATE_LIMITED": "Muitas tentativas. Aguarde e tente novamente.",
+            "IQOPTION_CONNECTION_QUARANTINED": (
+                "Limite preventivo de conexão atingido. Aguarde 15 minutos antes de tentar "
+                "novamente. Reiniciar o aplicativo não remove essa proteção."
+            ),
+            "IQOPTION_CONNECTION_SAFETY_STATE_INVALID": (
+                "O estado local de proteção da conexão não pôde ser validado. "
+                "A conexão foi bloqueada com segurança; exporte o diagnóstico."
+            ),
+            "IQOPTION_WEBSOCKET_RECONNECT_LIMIT_REACHED": (
+                "O limite preventivo de reconexões da sessão foi atingido. "
+                "Aguarde antes de reconectar."
+            ),
+            "IQOPTION_ACCOUNT_MODE_UNAVAILABLE": (
+                "A conta selecionada não está disponível neste cadastro."
+            ),
+            "IQOPTION_LOGIN_UNAVAILABLE": "O serviço de login da IQ Option está indisponível.",
+            "IQOPTION_NETWORK_UNREACHABLE": (
+                "O botão funcionou, mas este computador não alcançou os servidores HTTP "
+                "oficiais da IQ Option na porta 443. A tentativa foi encerrada sem enviar ordem."
+            ),
+            "IQOPTION_WEBSOCKET_UNAVAILABLE": "A sessão da IQ Option não pôde ser aberta.",
+            "IQOPTION_AUTH_TIMEOUT": "A IQ Option não confirmou a sessão dentro do prazo.",
+            "IQOPTION_CONNECTION_IN_PROGRESS": (
+                "Já existe uma recuperação da IQ Option em andamento. "
+                "Aguarde a conclusão indicada nesta tela."
+            ),
+        }.get(reason_code, f"Não foi possível conectar: {reason_code}")
+        self._iqoption_workspace.set_iqoption_login_status(error_message)
+        QMessageBox.warning(self, "Login IQ Option", error_message)
+
+    def _start_iqoption_saved_login(self) -> None:
+        """Reconnect a persisted Practice session without reopening the password dialog."""
+
+        if self._iqoption_saved_login_started:
+            return
+        snapshot = self._controller.snapshot
+        if snapshot is None:
+            # The Core may still be opening an authoritative recovery session.
+            # Never start a second broker login before the first projection
+            # identifies whether a durable IQ order already owns recovery.
+            QTimer.singleShot(1_000, self._start_iqoption_saved_login)
+            return
+        if snapshot is not None and any(
+            card.broker == "IQOPTION" and card.is_connected for card in snapshot.broker_cards
+        ):
+            return
+        if snapshot is not None and any(
+            order.broker == "IQOPTION"
+            and order.state in {"ACCEPTED", "OPEN", "UNKNOWN", "SETTLEMENT_UNKNOWN"}
+            for order in snapshot.active_orders
+        ):
+            # Durable order recovery belongs to the Core. A second UI-triggered
+            # login would race the authoritative reconciliation connection.
+            return
+        self._iqoption_saved_login_started = True
+        self._iqoption_workspace.set_iqoption_login_busy(True, t("iq_option.login.reconnecting"))
+
+        def reconnect() -> None:
+            try:
+                result: object = self._controller.login_iqoption("saved")
+            except (OSError, RuntimeError, ValueError, UiIpcError) as exc:
+                result = exc
+            self._iqoption_saved_login_finished.emit(result)
+
+        threading.Thread(
+            target=reconnect,
+            name="iqoption-saved-login",
+            daemon=True,
+        ).start()
+
+    def _on_iqoption_saved_login_finished(self, result: object) -> None:
+        self._iqoption_workspace.set_iqoption_login_busy(False)
+        if isinstance(result, UiIqOptionLoginAck) and result.connected:
+            self._refresh_projection()
+            self._iqoption_workspace.set_iqoption_login_status(t("iq_option.login.reconnected"))
+            return
+        reason = result.reason_code if isinstance(result, UiIqOptionLoginAck) else str(result)
+        if reason == "IQOPTION_CREDENTIALS_NOT_CONFIGURED":
+            self._iqoption_workspace.set_iqoption_login_status(t("iq_option.login.status"))
+        elif reason == "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION":
+            self._iqoption_workspace.set_iqoption_login_status(
+                t("iq_option.login.real_confirmation")
+            )
+        else:
+            self._iqoption_workspace.set_iqoption_login_status(t("iq_option.login.saved_failed"))
 
     def closeEvent(self, event: QCloseEvent) -> None:
         with contextlib.suppress(Exception):

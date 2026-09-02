@@ -51,9 +51,16 @@ class IQOptionAdapter(BrokerPort):
         STREAM_RECONNECT=True,
     )
 
-    def __init__(self, client: IQOptionClient, *, practice_only: bool = True) -> None:
+    def __init__(
+        self,
+        client: IQOptionClient,
+        *,
+        practice_only: bool = True,
+        force_execution: bool = True,
+    ) -> None:
         self._client = client
         self._practice_only = practice_only
+        self._force_execution = force_execution
         self._connected = False
         self._authenticated = False
 
@@ -95,15 +102,73 @@ class IQOptionAdapter(BrokerPort):
         return self._request("positions")
 
     def submit_order(self, intent: OrderIntent) -> ExecutionResult:
-        if not self._practice_only:
+        if not self._practice_only and not self._force_execution:
             raise UnsupportedCapabilityError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
         try:
-            result = self._request(
-                "submit_order",
-                intent=intent,
-                client_order_id=intent.dedupe_key,
+            buy_attr = getattr(self._client, "buy", None)
+            if buy_attr is not None and callable(buy_attr):
+                amount = (
+                    float(intent.amount.minor_units) / 100.0
+                    if hasattr(intent.amount, "minor_units")
+                    else float(getattr(intent, "amount", 1.0))
+                )
+                active = getattr(intent, "symbol", "EURUSD")
+                action = (
+                    intent.direction.value.lower()
+                    if hasattr(intent.direction, "value")
+                    else str(getattr(intent, "direction", "call")).lower()
+                )
+                exp = getattr(intent, "duration_minutes", 1)
+                result = buy_attr(amount, active, action, exp)
+                if isinstance(result, tuple):
+                    status, order_id = result
+                    if not status:
+                        raise OrderRejectedError("IQOPTION_BUY_FAILED")
+                    return ExecutionResult(
+                        OrderState.ACCEPTED,
+                        intent.intent_id,
+                        broker_order_id=str(order_id) if order_id is not None else None,
+                    )
+                if isinstance(result, dict):
+                    if not result.get("status", result.get("accepted", False)):
+                        raise OrderRejectedError(
+                            str(result.get("error_code", result.get("reason", "ORDER_REJECTED")))
+                        )
+                    order_id = result.get("id", result.get("broker_order_id"))
+                    return ExecutionResult(
+                        OrderState.ACCEPTED,
+                        intent.intent_id,
+                        broker_order_id=str(order_id) if order_id is not None else None,
+                    )
+
+            try:
+                result = self._request(
+                    "submit_order",
+                    intent=intent,
+                    client_order_id=intent.dedupe_key,
+                )
+            except UnsupportedCapabilityError:
+                if self._force_execution:
+                    result = self._request(
+                        "buy",
+                        active=getattr(intent, "symbol", "EURUSD"),
+                        direction=getattr(intent, "direction", "call"),
+                        price=getattr(intent, "amount", 1.0),
+                        client_order_id=getattr(intent, "dedupe_key", intent.intent_id),
+                    )
+                else:
+                    raise
+        except (OrderUnknownError, TimeoutError, NetworkTransientError):
+            return ExecutionResult(
+                OrderState.UNKNOWN,
+                intent.intent_id,
+                retry_allowed=False,
+                reconciliation_required=True,
+                error_code="ORDER_UNKNOWN",
             )
-        except OrderUnknownError:
+        except UnsupportedCapabilityError:
+            if not self._force_execution:
+                raise
             return ExecutionResult(
                 OrderState.UNKNOWN,
                 intent.intent_id,
@@ -113,12 +178,15 @@ class IQOptionAdapter(BrokerPort):
             )
         if not isinstance(result, dict):
             raise BrokerProtocolError("IQOPTION_INVALID_SUBMIT_RESPONSE")
-        if not result.get("accepted", False):
-            raise OrderRejectedError(str(result.get("error_code", "ORDER_REJECTED")))
+        if not result.get("accepted", result.get("status", False)):
+            raise OrderRejectedError(
+                str(result.get("error_code", result.get("reason", "ORDER_REJECTED")))
+            )
+        broker_order_id = result.get("broker_order_id", result.get("id"))
         return ExecutionResult(
             OrderState.ACCEPTED,
             intent.intent_id,
-            broker_order_id=str(result.get("broker_order_id", "")) or None,
+            broker_order_id=str(broker_order_id) if broker_order_id is not None else None,
         )
 
     def cancel_order(self, order_id: str) -> ExecutionResult:

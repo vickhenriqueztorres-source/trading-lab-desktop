@@ -5,12 +5,12 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from apps.iqoption_worker.order_session import IQOptionOrderSession
 from apps.iqoption_worker.schema import IQOptionWorkerError
-from packages.brokers.iqoption.fake_transport import FakeIQOptionTransport
+from packages.brokers.iqoption.community_read_only import IQOptionExternalError
 from packages.domain.models import (
     Broker,
     ExternalOrderStatus,
@@ -22,12 +22,22 @@ from packages.domain.models import (
 from packages.protocol.messages import OrderStatusResult
 
 
+class IQOptionReconciliationTransport(Protocol):
+    def request(
+        self,
+        name: str,
+        msg: Mapping[str, Any],
+        *,
+        timeout: float = 2.0,
+    ) -> dict[str, Any]: ...
+
+
 class IQOptionReconciliationHandler:
     """Handles authoritative order status queries and reconciliation for IQ Option."""
 
     def __init__(
         self,
-        transport: FakeIQOptionTransport,
+        transport: IQOptionReconciliationTransport,
         order_session: IQOptionOrderSession,
         *,
         timeout_seconds: float = 2.0,
@@ -57,8 +67,27 @@ class IQOptionReconciliationHandler:
         contract_data: dict[str, Any] | None = None
         raw_bytes: bytes = b""
 
-        # 1. Query by broker_order_id if known
+        # 1. Query the exact broker id through the authoritative binary-option
+        # status route. Recent option history is only a compatibility fallback.
         if query.broker_order_id is not None and query.broker_order_id.strip():
+            try:
+                response = self._transport.request(
+                    "get_betinfo",
+                    {"id": int(query.broker_order_id)},
+                    timeout=self._timeout_seconds,
+                )
+                if response.get("isSuccessful"):
+                    res = response.get("result")
+                    if (
+                        isinstance(res, dict)
+                        and str(res.get("id", res.get("option_id"))) == query.broker_order_id
+                    ):
+                        contract_data = res
+                        raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
+            except (IQOptionWorkerError, IQOptionExternalError, OSError, TimeoutError, ValueError):
+                pass
+
+        if contract_data is None and query.broker_order_id is not None:
             try:
                 response = self._transport.request(
                     "get_options",
@@ -67,13 +96,19 @@ class IQOptionReconciliationHandler:
                 )
                 if response.get("isSuccessful"):
                     res = response.get("result")
-                    if isinstance(res, dict) and str(res.get("id")) == query.broker_order_id:
+                    if (
+                        isinstance(res, dict)
+                        and str(res.get("id", res.get("option_id"))) == query.broker_order_id
+                    ):
                         contract_data = res
                         raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
-            except (IQOptionWorkerError, OSError, TimeoutError, ValueError):
+            except (IQOptionWorkerError, IQOptionExternalError, OSError, TimeoutError, ValueError):
                 pass
 
-        # 2. Query by client_order_id if not found by broker_order_id
+        # 2. Query by the durable client reference when the submit response was
+        # ambiguous and therefore did not yield a broker id. The transport must
+        # return an exact client_order_id match; otherwise reconciliation remains
+        # fail-closed as NOT_FOUND/UNKNOWN.
         if contract_data is None:
             try:
                 response = self._transport.request(
@@ -83,10 +118,13 @@ class IQOptionReconciliationHandler:
                 )
                 if response.get("isSuccessful"):
                     res = response.get("result")
-                    if isinstance(res, dict) and res.get("client_order_id") == query.order_id:
+                    if (
+                        isinstance(res, dict)
+                        and res.get("client_order_id") == query.client_order_ref
+                    ):
                         contract_data = res
                         raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
-            except (IQOptionWorkerError, OSError, TimeoutError, ValueError):
+            except (IQOptionWorkerError, IQOptionExternalError, OSError, TimeoutError, ValueError):
                 pass
 
         if contract_data is None:
@@ -142,7 +180,7 @@ class IQOptionReconciliationHandler:
                 reason_code="IQOPTION_CURRENCY_MISMATCH",
             )
 
-        status_str = str(contract.get("status", "")).lower()
+        status_str = str(contract.get("status", contract.get("result", ""))).lower()
         win_str = str(contract.get("win", "")).lower()
 
         if status_str == "open" or win_str == "equal":
@@ -150,7 +188,7 @@ class IQOptionReconciliationHandler:
             realized_pnl_minor = None
         elif status_str in ("win", "loose") or win_str in ("win", "loose"):
             external_status = ExternalOrderStatus.SETTLED
-            win_amount_str = str(contract.get("win_amount", "0.00"))
+            win_amount_str = str(contract.get("profit_amount", contract.get("win_amount", "0.00")))
             win_decimal = Decimal(win_amount_str)
             stake_decimal = Decimal(query.amount.minor_units) / Decimal(100)
             pnl_decimal = win_decimal - stake_decimal

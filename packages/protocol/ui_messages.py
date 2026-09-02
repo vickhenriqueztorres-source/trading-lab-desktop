@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from math import isfinite
-from typing import TypeGuard
+from typing import TypeGuard, cast
 
 from packages.domain.models import require_aware_utc
 from packages.market_data import DigitFrequencySnapshot
@@ -20,6 +20,7 @@ _MAX_BROKERS = 4
 _MAX_ORDERS = 100
 _MAX_DERIV_STRATEGIES = 36
 _MAX_DERIV_ASSET_RANKS = 16
+_MAX_IQOPTION_ASSET_RANKS = 32
 
 
 class UiHandshakeStatus(StrEnum):
@@ -44,6 +45,184 @@ class UiAccountMode(StrEnum):
 class UiDigitRiskConfigStatus(StrEnum):
     OK = "OK"
     REJECTED = "REJECTED"
+
+
+@dataclass(frozen=True, slots=True)
+class UiIqOptionLoginCommand:
+    account_mode: str
+
+    def __post_init__(self) -> None:
+        normalized = self.account_mode.strip().lower()
+        if normalized not in {"practice", "real", "saved"}:
+            raise ValueError("IQ Option account mode is invalid")
+        object.__setattr__(self, "account_mode", normalized)
+
+    def to_payload(self) -> dict[str, object]:
+        return {"account_mode": self.account_mode}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionLoginCommand:
+        _exact(payload, {"account_mode"})
+        try:
+            return cls(_string(payload, "account_mode", 16))
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiIqOptionLoginAck:
+    accepted: bool
+    connected: bool
+    reason_code: str
+
+    def __post_init__(self) -> None:
+        if not self.reason_code or len(self.reason_code) > 64:
+            raise ValueError("IQ Option login reason is invalid")
+        if self.connected and not self.accepted:
+            raise ValueError("connected login must be accepted")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "accepted": self.accepted,
+            "connected": self.connected,
+            "reason_code": self.reason_code,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionLoginAck:
+        _exact(payload, {"accepted", "connected", "reason_code"})
+        accepted = payload.get("accepted")
+        connected = payload.get("connected")
+        if not isinstance(accepted, bool) or not isinstance(connected, bool):
+            raise _invalid()
+        try:
+            return cls(accepted, connected, _string(payload, "reason_code", 64))
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiIqOptionRiskConfig:
+    strategy_id: str = "iqoption-rsi-demo"
+    symbol: str = "EURUSD-OTC"
+    timeframe_seconds: int = 60
+    duration_seconds: int = 60
+    stake_minor_units: int = 100
+    daily_stop_loss_minor_units: int = 1_000
+    daily_take_profit_minor_units: int = 1_000
+    max_consecutive_losses: int = 3
+    cooldown_seconds_after_loss: int = 30
+    max_daily_trades: int = 10
+    max_concurrent_positions: int = 1
+    currency: str = "USD"
+
+    def __post_init__(self) -> None:
+        if self.strategy_id != "iqoption-rsi-demo" or not self.symbol.strip():
+            raise ValueError("IQ Option strategy selection is invalid")
+        if self.timeframe_seconds != 60 or self.duration_seconds != 60:
+            raise ValueError("IQ Option RSI interval is invalid")
+        if type(self.stake_minor_units) is not int or not 100 <= self.stake_minor_units <= 10_000:
+            raise ValueError("IQ Option stake is invalid")
+        for value in (self.daily_stop_loss_minor_units, self.daily_take_profit_minor_units):
+            if type(value) is not int or value < self.stake_minor_units or value > 1_000_000:
+                raise ValueError("IQ Option daily limit is invalid")
+        if (
+            type(self.max_consecutive_losses) is not int
+            or not 1 <= self.max_consecutive_losses <= 10
+        ):
+            raise ValueError("IQ Option consecutive loss limit is invalid")
+        if (
+            type(self.cooldown_seconds_after_loss) is not int
+            or not 0 <= self.cooldown_seconds_after_loss <= 3_600
+        ):
+            raise ValueError("IQ Option cooldown is invalid")
+        if type(self.max_daily_trades) is not int or not 1 <= self.max_daily_trades <= 100:
+            raise ValueError("IQ Option daily trade limit is invalid")
+        if self.max_concurrent_positions != 1 or self.currency != "USD":
+            raise ValueError("IQ Option execution constraints are invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "strategy_id": self.strategy_id,
+            "symbol": self.symbol,
+            "timeframe_seconds": self.timeframe_seconds,
+            "duration_seconds": self.duration_seconds,
+            "stake_minor_units": self.stake_minor_units,
+            "daily_stop_loss_minor_units": self.daily_stop_loss_minor_units,
+            "daily_take_profit_minor_units": self.daily_take_profit_minor_units,
+            "max_consecutive_losses": self.max_consecutive_losses,
+            "cooldown_seconds_after_loss": self.cooldown_seconds_after_loss,
+            "max_daily_trades": self.max_daily_trades,
+            "max_concurrent_positions": self.max_concurrent_positions,
+            "currency": self.currency,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionRiskConfig:
+        fields = {
+            "strategy_id",
+            "symbol",
+            "timeframe_seconds",
+            "duration_seconds",
+            "stake_minor_units",
+            "daily_stop_loss_minor_units",
+            "daily_take_profit_minor_units",
+            "max_consecutive_losses",
+            "cooldown_seconds_after_loss",
+            "max_daily_trades",
+            "max_concurrent_positions",
+            "currency",
+        }
+        _exact(payload, fields)
+        integer_fields = fields - {"strategy_id", "symbol", "currency"}
+        if any(type(payload.get(field)) is not int for field in integer_fields):
+            raise _invalid()
+        try:
+            return cls(
+                strategy_id=_string(payload, "strategy_id", 64),
+                symbol=_string(payload, "symbol", 32),
+                timeframe_seconds=cast(int, payload["timeframe_seconds"]),
+                duration_seconds=cast(int, payload["duration_seconds"]),
+                stake_minor_units=cast(int, payload["stake_minor_units"]),
+                daily_stop_loss_minor_units=cast(int, payload["daily_stop_loss_minor_units"]),
+                daily_take_profit_minor_units=cast(int, payload["daily_take_profit_minor_units"]),
+                max_consecutive_losses=cast(int, payload["max_consecutive_losses"]),
+                cooldown_seconds_after_loss=cast(int, payload["cooldown_seconds_after_loss"]),
+                max_daily_trades=cast(int, payload["max_daily_trades"]),
+                max_concurrent_positions=cast(int, payload["max_concurrent_positions"]),
+                currency=_string(payload, "currency", 3),
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiUpdateIqOptionRiskConfigCommand:
+    config: UiIqOptionRiskConfig
+
+    def to_payload(self) -> dict[str, object]:
+        return {"config": self.config.to_payload()}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiUpdateIqOptionRiskConfigCommand:
+        _exact(payload, {"config"})
+        return cls(UiIqOptionRiskConfig.from_payload(_mapping(payload.get("config"))))
+
+
+@dataclass(frozen=True, slots=True)
+class UiIqOptionBotControlCommand:
+    enabled: bool
+
+    def to_payload(self) -> dict[str, object]:
+        return {"enabled": self.enabled}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionBotControlCommand:
+        _exact(payload, {"enabled"})
+        enabled = payload.get("enabled")
+        if type(enabled) is not bool:
+            raise _invalid()
+        return cls(enabled)
 
 
 def _invalid() -> ProtocolError:
@@ -923,6 +1102,72 @@ class UiDerivAssetRank:
 
 
 @dataclass(frozen=True, slots=True)
+class UiIqOptionAssetRank:
+    symbol: str
+    display_name: str
+    rsi: str
+    direction: str | None = None
+    condition: str = "NEUTRAL"
+    selected: bool = False
+    status: str = "MONITORING"
+
+    def __post_init__(self) -> None:
+        for value in (self.symbol, self.display_name, self.rsi, self.condition, self.status):
+            if not value.strip() or len(value) > _MAX_TEXT:
+                raise ValueError("IQ Option asset rank text is invalid")
+        if type(self.selected) is not bool:
+            raise ValueError("IQ Option asset rank selection is invalid")
+        if self.direction is not None and self.direction not in {"CALL", "PUT"}:
+            raise ValueError("IQ Option asset rank direction is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "display_name": self.display_name,
+            "rsi": self.rsi,
+            "direction": self.direction,
+            "condition": self.condition,
+            "selected": self.selected,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionAssetRank:
+        _exact(
+            payload,
+            {
+                "symbol",
+                "display_name",
+                "rsi",
+                "direction",
+                "condition",
+                "selected",
+                "status",
+            },
+        )
+        selected = payload.get("selected")
+        if type(selected) is not bool:
+            raise _invalid()
+        direction = payload.get("direction")
+        if direction is not None and (
+            type(direction) is not str or direction not in {"CALL", "PUT"}
+        ):
+            raise _invalid()
+        try:
+            return cls(
+                symbol=_string(payload, "symbol", 32),
+                display_name=_string(payload, "display_name", 64),
+                rsi=_string(payload, "rsi", 32),
+                direction=direction,
+                condition=_string(payload, "condition", 32),
+                selected=selected,
+                status=_string(payload, "status", 32),
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
 class UiBotWaitingStatus:
     reason_code: str
     description: str
@@ -1075,6 +1320,11 @@ class UiProjectionSnapshot:
     deriv_bot_reason: str = "BOT_WAITING_FOR_LIVE_DERIV"
     deriv_bot_waiting_status: UiBotWaitingStatus | None = None
     multi_strategy_metrics: UiMultiStrategyMetrics | None = None
+    iqoption_risk_config: UiIqOptionRiskConfig | None = None
+    iqoption_bot_armed: bool = False
+    iqoption_bot_reason: str = "IQOPTION_BOT_DISARMED"
+    iqoption_asset_ranking: tuple[UiIqOptionAssetRank, ...] = ()
+    deriv_bot_armed: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.health_gates) <= _MAX_GATES:
@@ -1111,6 +1361,8 @@ class UiProjectionSnapshot:
             raise ValueError("Deriv strategy projection count is outside bounds")
         if len(self.deriv_asset_ranking) > _MAX_DERIV_ASSET_RANKS:
             raise ValueError("Deriv asset ranking count is outside bounds")
+        if len(self.iqoption_asset_ranking) > _MAX_IQOPTION_ASSET_RANKS:
+            raise ValueError("IQ Option asset ranking count is outside bounds")
         for value in (
             self.digit_martingale_step,
             self.digit_next_stake_minor_units,
@@ -1120,6 +1372,16 @@ class UiProjectionSnapshot:
                 raise ValueError("digit martingale projection is invalid")
         if not isinstance(self.deriv_bot_reason, str) or len(self.deriv_bot_reason) > 64:
             raise ValueError("Deriv bot reason is invalid")
+        if type(self.iqoption_bot_armed) is not bool:
+            raise ValueError("IQ Option bot state is invalid")
+        if type(self.deriv_bot_armed) is not bool:
+            raise ValueError("Deriv bot state is invalid")
+        if (
+            not isinstance(self.iqoption_bot_reason, str)
+            or not self.iqoption_bot_reason
+            or len(self.iqoption_bot_reason) > 64
+        ):
+            raise ValueError("IQ Option bot reason is invalid")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -1143,6 +1405,7 @@ class UiProjectionSnapshot:
             ),
             "deriv_strategies": [item.to_payload() for item in self.deriv_strategies],
             "deriv_asset_ranking": [item.to_payload() for item in self.deriv_asset_ranking],
+            "iqoption_asset_ranking": [item.to_payload() for item in self.iqoption_asset_ranking],
             "digit_martingale_step": self.digit_martingale_step,
             "digit_next_stake_minor_units": self.digit_next_stake_minor_units,
             "digit_projected_sequence_loss_minor_units": (
@@ -1159,6 +1422,14 @@ class UiProjectionSnapshot:
                 if self.multi_strategy_metrics is None
                 else self.multi_strategy_metrics.to_payload()
             ),
+            "iqoption_risk_config": (
+                None
+                if self.iqoption_risk_config is None
+                else self.iqoption_risk_config.to_payload()
+            ),
+            "iqoption_bot_armed": self.iqoption_bot_armed,
+            "iqoption_bot_reason": self.iqoption_bot_reason,
+            "deriv_bot_armed": self.deriv_bot_armed,
         }
 
     @classmethod
@@ -1188,6 +1459,11 @@ class UiProjectionSnapshot:
             "deriv_bot_reason",
             "deriv_bot_waiting_status",
             "multi_strategy_metrics",
+            "iqoption_risk_config",
+            "iqoption_bot_armed",
+            "iqoption_bot_reason",
+            "iqoption_asset_ranking",
+            "deriv_bot_armed",
         }
         actual_keys = set(payload)
         if not (
@@ -1208,12 +1484,22 @@ class UiProjectionSnapshot:
         digit_frequency_payload = payload.get("digit_frequency")
         deriv_strategies_payload = payload.get("deriv_strategies", [])
         deriv_asset_ranking_payload = payload.get("deriv_asset_ranking", [])
+        iqoption_asset_ranking_payload = payload.get("iqoption_asset_ranking", [])
         martingale_step = payload.get("digit_martingale_step", 0)
         next_stake = payload.get("digit_next_stake_minor_units", 0)
         projected_sequence_loss = payload.get("digit_projected_sequence_loss_minor_units", 0)
         deriv_bot_reason = payload.get("deriv_bot_reason", "BOT_WAITING_FOR_LIVE_DERIV")
         waiting_status_payload = payload.get("deriv_bot_waiting_status")
         multi_strategy_metrics_payload = payload.get("multi_strategy_metrics")
+        iqoption_config_payload = payload.get("iqoption_risk_config")
+        iqoption_bot_armed = payload.get("iqoption_bot_armed", False)
+        iqoption_bot_reason = payload.get("iqoption_bot_reason", "IQOPTION_BOT_DISARMED")
+        # Compatibility with a pre-isolation Core: only legacy snapshots may
+        # infer Deriv armament from the old global Safe Stop field.
+        deriv_bot_armed = payload.get(
+            "deriv_bot_armed",
+            not safe_stop if isinstance(safe_stop, bool) else False,
+        )
         if (
             not isinstance(safe_stop, bool)
             or type(pnl) is not int
@@ -1226,11 +1512,17 @@ class UiProjectionSnapshot:
             or type(projected_sequence_loss) is not int
             or not isinstance(deriv_bot_reason, str)
             or len(deriv_bot_reason) > 64
+            or type(iqoption_bot_armed) is not bool
+            or type(deriv_bot_armed) is not bool
+            or not isinstance(iqoption_bot_reason, str)
+            or not iqoption_bot_reason
+            or len(iqoption_bot_reason) > 64
             or not _bounded_sequence(gates, 1, _MAX_GATES)
             or not _bounded_sequence(brokers, 1, _MAX_BROKERS)
             or not _bounded_sequence(orders, 0, _MAX_ORDERS)
             or not _bounded_sequence(deriv_strategies_payload, 0, _MAX_DERIV_STRATEGIES)
             or not _bounded_sequence(deriv_asset_ranking_payload, 0, _MAX_DERIV_ASSET_RANKS)
+            or not _bounded_sequence(iqoption_asset_ranking_payload, 0, _MAX_IQOPTION_ASSET_RANKS)
         ):
             raise _invalid()
         try:
@@ -1281,6 +1573,18 @@ class UiProjectionSnapshot:
                         _mapping(multi_strategy_metrics_payload)
                     )
                 ),
+                (
+                    None
+                    if iqoption_config_payload is None
+                    else UiIqOptionRiskConfig.from_payload(_mapping(iqoption_config_payload))
+                ),
+                iqoption_bot_armed,
+                iqoption_bot_reason,
+                tuple(
+                    UiIqOptionAssetRank.from_payload(_mapping(item))
+                    for item in iqoption_asset_ranking_payload
+                ),
+                deriv_bot_armed,
             )
         except ValueError as exc:
             raise _invalid() from exc

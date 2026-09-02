@@ -1,0 +1,24 @@
+# Controlled IQ Option Practice validation. Real execution is always forbidden.
+mode: demo
+trading_enabled: false
+read_only_on_start: true
+account_type: PRACTICE
+broker: iqoption
+credentials_source: windows_dpapi_current_user
+assets_allowed:
+  - EURUSD-OTC
+strategy:
+  id: iqoption-rsi-demo
+  timeframe_seconds: 60
+  duration_seconds: 60
+  rsi_period: 14
+  rsi_call_below: "30"
+  rsi_put_above: "70"
+risk:
+  order_amount: "1.00"
+  max_order_amount: "1.00"
+  max_daily_loss: "10.00"
+  max_concurrent_positions: 1
+  max_daily_trades: 10
+  stop_loss_percent: "5.0"
+  take_profit_percent: "10.0"

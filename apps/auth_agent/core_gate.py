@@ -84,17 +84,25 @@ class CoreLeaseEntryAuthorizer:
 
 
 class DerivTokenEntryAuthorizer:
-    """Treat an authenticated Deriv PAT session as authority for Deriv entries."""
+    """Recognize explicitly authenticated local broker sessions.
+
+    Deriv PAT and IQ Option Practice credentials remain isolated from the
+    product identity plane.  A proven local broker session can authorize its
+    own broker scope, while every other broker/mode still falls back to the
+    signed product lease.
+    """
 
     def __init__(
         self,
         fallback: CoreLeaseEntryAuthorizer,
         health_gate: HealthGate,
         deriv_session_ready: Callable[[], bool],
+        iqoption_practice_session_ready: Callable[[], bool] | None = None,
     ) -> None:
         self._fallback = fallback
         self._health_gate = health_gate
         self._deriv_session_ready = deriv_session_ready
+        self._iqoption_practice_session_ready = iqoption_practice_session_ready or (lambda: False)
 
     def ensure_new_entry_allowed(
         self,
@@ -102,7 +110,10 @@ class DerivTokenEntryAuthorizer:
         strategy_id: str,
         strategy_version: str,
     ) -> None:
-        if broker is Broker.DERIV and self._deriv_session_ready():
+        broker_session_ready = (broker is Broker.DERIV and self._deriv_session_ready()) or (
+            broker is Broker.IQ_OPTION and self._iqoption_practice_session_ready()
+        )
+        if broker_session_ready:
             for reason in AuthorizationReason:
                 if reason is not AuthorizationReason.AUTHORIZED:
                     self._health_gate.clear_if(reason.value)

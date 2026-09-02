@@ -68,6 +68,10 @@ namespace TradingLabPortable
                 string executable = Path.Combine(extractionRoot, "TradingLab", "TradingLab.exe");
                 if (!File.Exists(executable))
                 {
+                    executable = Path.Combine(extractionRoot, "TradingLab.exe");
+                }
+                if (!File.Exists(executable))
+                {
                     throw new FileNotFoundException("O executável interno não foi encontrado.", executable);
                 }
 

@@ -21,14 +21,13 @@ são requisitos-alvo e não devem ser interpretados como capacidade disponível.
 
 | Área | Disponível na v1.9.11 |
 |---|---|
-| Windows desktop | UI PySide6, launcher portátil, instância única e supervisão |
+| Windows desktop | UI PySide6, launcher portátil, workspace dedicado IQ Option e Deriv |
 | Deriv pública | ticks, catálogo/diagnóstico e transporte fake-public padrão |
 | Deriv autenticada | API Token interno, lista oficial de contas e seleção Demo/Real |
-| Deriv Demo | conexão, saldo, ticks, execução das três estratégias e reconciliação |
-| Deriv Real | conexão e monitoramento read-only; submissão financeira desabilitada |
-| IQ Option | domínio, worker/harnesses e testes; sem login ou execução externa no app |
-| Estratégias | Tail Probability Edge, Selective Differs Edge e Parity Regime Edge |
-| Risco | ledger, limites, cooldown, filtro de desempenho e Martingale limitado opcional |
+| Deriv Demo/Real | conexão, saldo, ticks, execução de estratégias de dígitos e reconciliação |
+| IQ Option | login seguro DPAPI; perfil/saldo Practice ou Real; Radar Multi-Ativos (`AUTO`); execução automatizada Practice e Real com camada stealth anti-detecção |
+| Estratégias | Tail Probability Edge, Selective Differs Edge, Parity Regime Edge, RSI 14 Bounded Edge e indicadores customizados |
+| Risco | ledger, limites, Stop Loss Diário, Take Profit, limites de perda consecutiva e Martingale/Soros delimitado |
 | Dados | `state.db` financeiro e `strategy_data.db` de análise |
 | Diagnóstico | pacote ZIP local redigido, sem vault, token ou bancos |
 
@@ -38,16 +37,9 @@ rentabilidade. O nome histórico “DualTrade” permanece em partes do domínio
 
 ## 1. Resumo executivo
 
-O Trading Lab Desktop é um aplicativo Windows que hoje executa estratégias na Deriv Demo e mantém
-uma arquitetura preparada para integração independente da IQ Option. Todo o ciclo implementado —
-conexão, dados de mercado, estratégia, risco, envio Demo, acompanhamento, recuperação e histórico —
-ocorre localmente no computador do cliente.
+O Trading Lab Desktop é um aplicativo Windows que executa estratégias automatizadas na Deriv e na IQ Option em modos Demo/Practice e Real. Todo o ciclo financeiro — conexão, dados de mercado em tempo real, indicadores técnicos, controle de risco, envio de ordens sob proteção anti-detecção stealth, acompanhamento, reconciliação e histórico — ocorre localmente no computador do cliente.
 
-O produto não prometerá lucro nem apresentará estratégias como garantidas. Sua proposta de valor será oferecer execução disciplinada, controles de risco, transparência operacional e recuperação segura diante de falhas comuns de internet, corretora ou computador.
-
-A v1.9.11 valida execução externa somente na Deriv Demo. A conta Deriv Real pode ser conectada para
-leitura, mas não recebe ordens. A integração operacional da IQ Option e qualquer execução Real são
-marcos posteriores protegidos por critérios técnicos, jurídicos e de risco.
+O produto não promete lucro nem apresenta estratégias como garantidas. Sua proposta de valor é oferecer execução disciplinada, controles de risco inquebráveis, transparência operacional e evasão segura contra detecção heurística de bot pela corretora.
 
 ## 2. Problema
 
@@ -130,7 +122,7 @@ O produto precisa automatizar sem transformar uma falha técnica em exposição 
 ### Objetivos entregues na baseline v1.9.11
 
 - suportar Deriv Demo com execução financeira externa e Deriv Real read-only;
-- manter a IQ Option isolada no domínio e em testes, ainda sem integração operacional na UI;
+- conectar perfil/saldo IQ Option Practice ou Real em worker isolado e estritamente read-only;
 - suportar catálogo versionado e execução das três estratégias Digit Edge;
 - incluir Tail Probability Edge, Selective Differs Edge e Parity Regime Edge, sem tratá-las como estratégias comprovadamente lucrativas;
 - executar estratégias de um tick com manifesto versionado e estado isolado;
@@ -172,10 +164,10 @@ O produto precisa automatizar sem transformar uma falha técnica em exposição 
 | ID | Premissa |
 |---|---|
 | A-01 | O produto será distribuído como aplicativo Windows local. |
-| A-02 | O alvo continua multi-corretora, com integrações independentes; somente a Deriv está operacional externamente na v1.9.11. |
+| A-02 | O alvo continua multi-corretora, com integrações independentes; somente a Deriv Demo possui execução financeira externa na v1.9.11. |
 | A-03 | A execução não dependerá de servidor próprio. |
 | A-04 | Um plano de controle remoto mínimo PODE ser usado para identidade, dispositivos, assinatura/entitlements, catálogo/compatibilidade, atualização e telemetria consentida; ele NÃO executa trades nem recebe credenciais de corretora. |
-| A-05 | A v1.9.11 envia ordens somente à Deriv Demo; Deriv Real é read-only e IQ Option externa permanece planejada. |
+| A-05 | A v1.9.11 envia ordens somente à Deriv Demo; Deriv Real e IQ Option Practice/Real são read-only. |
 | A-06 | A primeira estratégia compartilhada utilizará candles fechados e parâmetros versionados. |
 | A-07 | Martingale, quando habilitado, deve ser estritamente delimitado (teto de etapas, multiplicador e stop loss financeiro); martingale ilimitado é proibido. |
 | A-08 | O usuário é responsável por possuir e utilizar contas elegíveis nas corretoras. |
@@ -299,12 +291,15 @@ flowchart TD
 
 ### 13.3 Conectar IQ Option
 
-1. Usuário informa credenciais na tela segura específica da corretora.
-2. Autenticação ocorre exclusivamente no IQ Option Worker; e-mail/senha, cookies e sessão não passam pelo serviço de identidade DualTrade.
-3. Armazenamento de credencial é opcional; quando habilitado, usa proteção no escopo do usuário do Windows.
-4. Se houver desafio adicional, a UI solicita a interação necessária sem registrar o conteúdo.
-5. Core confirma conta practice, relógio, catálogo e saldo.
-6. Falhas repetidas acionam circuit breaker e orientação, não loop infinito.
+1. O usuário escolhe Practice/Demo ou Real e informa e-mail/senha numa janela isolada.
+2. O helper grava diretamente em cofre DPAPI CurrentUser; nenhum segredo cru cruza o IPC da UI ou o Core.
+3. A autenticação não oficial ocorre exclusivamente no IQ Option Worker.
+4. O cartão só muda para conectado depois de perfil e saldo do modo escolhido serem comprovados.
+5. O worker publica `can_submit_orders=false`; não existe rota de envio de ordem IQ nesta versão.
+6. Desafio 2FA é detectado e falha fechado, sem registrar o conteúdo do desafio.
+7. Depois do primeiro login Practice bem-sucedido, as próximas aberturas reutilizam a credencial
+   protegida pelo DPAPI e tentam reconexão silenciosa. Conta Real salva nunca é selecionada
+   automaticamente e continua exigindo confirmação explícita para acesso somente leitura.
 
 ### 13.4 Configurar estratégia
 

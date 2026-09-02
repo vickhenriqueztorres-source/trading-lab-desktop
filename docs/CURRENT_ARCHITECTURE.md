@@ -178,11 +178,30 @@ Seu banco externo simulado é separado do `state.db`. Ele não representa uma co
 
 ## 10. IQ Option Worker
 
-Pacote: `apps/iqoption_worker` e `packages/brokers/iqoption`.
+Pacotes: `apps/iqoption_connection_worker`, `apps/iqoption_worker` e
+`packages/brokers/iqoption`.
 
-Existem contratos, validadores, sessão/harness de ordem e reconciliação para testes. A CLI pública do
-Launcher não oferece `iqoption` como worker selecionável e a aplicação não implementa login ou
-sessão externa. Portanto, esta área é infraestrutura de laboratório, não produto operacional.
+O worker externo isolado autentica a sessão, seleciona explicitamente o saldo, consulta relógio e
+saldo e fornece candles fechados pelo WebSocket da IQ Option. Em **Practice**, ele publica as
+capacidades financeiras somente após o handshake e implementa `MARKET_HISTORY_REQUEST`,
+`ORDER_SUBMIT`, `ORDER_STATUS_REQUEST` e `ORDER_EVENT`.
+
+O `IqOptionAutoTrader` calcula o RSI apenas sobre esses candles do broker. Um sinal novo é consumido
+antes do envio e entra por `CoreRuntime.submit`; intenção, reserva, outbox e ordem são persistidos na
+mesma transação antes do IPC financeiro. Aceite, rejeição e ambiguidade são projetados a partir do
+estado persistido, sem conversão de exceção em sucesso. Eventos de abertura/liquidação voltam ao Core
+e atualizam a ordem e o P&L pelo processador idempotente compartilhado.
+
+Conta Practice salva pode reconectar sem reabrir o diálogo, mas a reconexão não rearma o bot. Conta
+Real salva exige confirmação explícita e o conector compilado desta revisão permanece somente leitura;
+nenhum teste externo Real é autorizado por esta arquitetura operacional.
+
+O `IQOptionConnectionSafetyController` limita inícios externos de sessão e persiste o orçamento no
+profile. O worker mantém o SSID apenas em memória e o reutiliza em até cinco recuperações WebSocket,
+sem repetir login HTTP por timeout de transporte. Falhas de autenticação, 2FA e rate limit abrem
+quarentena preventiva. O `IQOptionMessageBudget` limita as leituras de mercado e preserva capacidade
+separada para eventos e reconciliação. A política completa está em
+`docs/IQOPTION_CONNECTION_SAFETY.md`.
 
 ## 11. IPC v1
 

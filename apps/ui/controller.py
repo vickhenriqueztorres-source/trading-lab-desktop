@@ -8,6 +8,8 @@ from packages.protocol import (
     UiCommandAck,
     UiDigitRiskConfig,
     UiGenerateDiagnosticResponse,
+    UiIqOptionLoginAck,
+    UiIqOptionRiskConfig,
     UiProjectionSnapshot,
     UiUpdateDigitRiskConfigAck,
 )
@@ -86,6 +88,22 @@ class UiController:
 
     def reset_digit_test_session(self) -> UiCommandAck:
         ack = self._client.reset_digit_test_session()
+        self.refresh()
+        return ack
+
+    def login_iqoption(self, account_mode: str) -> UiIqOptionLoginAck:
+        ack = self._client.login_iqoption(account_mode)
+        if ack.connected:
+            self.refresh()
+        return ack
+
+    def update_iqoption_risk_config(self, config: UiIqOptionRiskConfig) -> UiCommandAck:
+        ack = self._client.update_iqoption_risk_config(config)
+        self.refresh()
+        return ack
+
+    def control_iqoption_bot(self, enabled: bool) -> UiCommandAck:
+        ack = self._client.control_iqoption_bot(enabled)
         self.refresh()
         return ack
 

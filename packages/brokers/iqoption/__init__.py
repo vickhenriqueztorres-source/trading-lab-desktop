@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from packages.brokers.iqoption.community_read_only import (
+    IQOptionAccountMode,
+    IQOptionCommunityReadOnlySession,
+    IQOptionExternalError,
+)
 from packages.brokers.iqoption.contracts import (
     IQOptionContractRecord,
     IQOptionContractStatus,
     IQOptionOptionType,
 )
+from packages.brokers.iqoption.credentials import IQOptionCredentials, IQOptionCredentialVault
 from packages.brokers.iqoption.fake_transport import (
     FakeIQOptionScenario,
     FakeIQOptionTransport,
@@ -21,6 +27,11 @@ __all__ = [
     "IQOptionContractRecord",
     "IQOptionContractStatus",
     "IQOptionOptionType",
+    "IQOptionAccountMode",
+    "IQOptionCommunityReadOnlySession",
+    "IQOptionCredentialVault",
+    "IQOptionCredentials",
+    "IQOptionExternalError",
     "IQOptionPracticeSession",
     "validate_iqoption_account",
     "validate_iqoption_order_command",

@@ -261,3 +261,21 @@ nenhum ativo supera o filtro, o estado é explicitamente **sem vantagem/abstenç
 Uma promoção futura para seleção executável exige payout válido e recente por ativo/contrato,
 estimativa calibrada fora da amostra, EV líquido conservador, histerese/cooldown, limites de
 exposição e aprovação explícita no Core. Até lá, a UI apresenta o radar como evidência de pesquisa.
+
+## 11. Candidata RSI para IQ Option Practice
+
+`iqoption-rsi-demo` é a primeira candidata de candle para validação controlada da IQ Option. Ela
+usa somente candles fechados de 60 segundos do contexto selecionado, aquece com 15 fechamentos e
+calcula RSI de Wilder com período 14 usando `Decimal`. RSI estritamente abaixo de 30 produz CALL;
+RSI estritamente acima de 70 produz PUT; a faixa entre os limites não produz sinal.
+
+A implementação é uma função de decisão pura. Ela não recebe credencial, saldo nem stake, não
+seleciona conta e não chama a corretora. O teste E2E local comprova o encadeamento catálogo → runtime
+→ arbitragem → alocação → Risk Ledger → persistência → worker simulado, com uma única intenção e
+uma única reserva. Esse teste não comprova a API comunitária externa.
+
+O arquivo `config/demo_config.yaml` registra o perfil conservador planejado: Practice,
+`EURUSD-OTC`, USD 1 por entrada, uma posição por vez e no máximo dez operações diárias. Ele inicia
+com `trading_enabled: false` e `read_only_on_start: true`. A conexão externa IQ Option existente
+continua read-only até que candles, submissão, eventos e reconciliação sejam comprovados no worker
+isolado; conta Real permanece sem capability financeira.

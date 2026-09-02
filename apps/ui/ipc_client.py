@@ -21,9 +21,14 @@ from packages.protocol import (
     UiHandshakeRequest,
     UiHandshakeResponse,
     UiHandshakeStatus,
+    UiIqOptionBotControlCommand,
+    UiIqOptionLoginAck,
+    UiIqOptionLoginCommand,
+    UiIqOptionRiskConfig,
     UiProjectionSnapshot,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
+    UiUpdateIqOptionRiskConfigCommand,
 )
 from packages.protocol.transport import FramedSocket
 from packages.security import SecretValue
@@ -176,6 +181,35 @@ class UiIpcClient:
             MessageType.UI_RESET_DIGIT_TEST_SESSION_COMMAND,
             MessageType.UI_RESET_DIGIT_TEST_SESSION_ACK,
         )
+
+    def login_iqoption(self, account_mode: str) -> UiIqOptionLoginAck:
+        response = self._round_trip(
+            MessageType.UI_IQOPTION_LOGIN_COMMAND,
+            MessageType.UI_IQOPTION_LOGIN_ACK,
+            payload=UiIqOptionLoginCommand(account_mode).to_payload(),
+            # The Core allows a bounded HTTP fallback, WebSocket opening and a
+            # separate account-confirmation phase.  Keep the UI IPC envelope
+            # outside that worker deadline; this runs on the UI background
+            # login thread and does not freeze the window.
+            timeout=70.0,
+        )
+        return UiIqOptionLoginAck.from_payload(response.payload)
+
+    def update_iqoption_risk_config(self, config: UiIqOptionRiskConfig) -> UiCommandAck:
+        response = self._round_trip(
+            MessageType.UI_UPDATE_IQOPTION_RISK_CONFIG_COMMAND,
+            MessageType.UI_UPDATE_IQOPTION_RISK_CONFIG_ACK,
+            payload=UiUpdateIqOptionRiskConfigCommand(config).to_payload(),
+        )
+        return UiCommandAck.from_payload(response.payload)
+
+    def control_iqoption_bot(self, enabled: bool) -> UiCommandAck:
+        response = self._round_trip(
+            MessageType.UI_IQOPTION_BOT_CONTROL_COMMAND,
+            MessageType.UI_IQOPTION_BOT_CONTROL_ACK,
+            payload=UiIqOptionBotControlCommand(enabled).to_payload(),
+        )
+        return UiCommandAck.from_payload(response.payload)
 
     def close(self) -> None:
         with self._lock:

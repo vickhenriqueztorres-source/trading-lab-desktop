@@ -13,6 +13,14 @@ from apps.core.deriv_telemetry import (
     DerivTelemetrySource,
 )
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
+from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID, IqOptionAutoTrader
+from apps.core.iqoption_connection_safety import (
+    IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS,
+    IQOptionConnectionSafetyController,
+    IQOptionConnectionSafetyStateError,
+    IQOptionConnectionSafetyStore,
+)
+from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
 from apps.core.payout_routed_differs import (
     PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
     PayoutRoutedDiffersProposalCache,
@@ -21,10 +29,13 @@ from apps.core.payout_routed_differs import (
 from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSpec, ReadOnlyWorkerSupervisor
 from apps.core.runtime import CoreRuntime
 from apps.core.ui_service import CoreUiProjectionBuilder, CoreUiProjectionService
+from apps.core.worker_client import WorkerDispatchError
 from apps.core.worker_supervisor import WorkerHealthState
 from packages.brokers.deriv.credentials import DerivCredentialVault
+from packages.brokers.iqoption.credentials import IQOptionCredentialVault
+from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
 from packages.domain.models import Broker
-from packages.protocol import EndpointRole, LifecycleProcessStatus
+from packages.protocol import EndpointRole, LifecycleProcessStatus, ProtocolError, ProtocolErrorCode
 from packages.security import SecretValue
 
 
@@ -45,6 +56,15 @@ _DEMO_TEST_SESSION_BLOCKERS = frozenset(
         "HG_COOLDOWN_ACTIVE",
     }
 )
+
+# PyInstaller cold starts on Windows can take materially longer than the source
+# runtime, especially when launched from the portable wrapper. Keep the IQ
+# worker handshake bounded but generous enough to avoid a false timeout before
+# the subprocess reaches its loopback listener.
+_IQOPTION_WORKER_HANDSHAKE_TIMEOUT_SECONDS = 45.0
+_IQOPTION_WORKER_RESPONSE_TIMEOUT_SECONDS = 65.0
+_IQOPTION_WORKER_HEARTBEAT_TIMEOUT_SECONDS = 10.0
+_IQOPTION_RECOVERY_DELAYS_SECONDS = (0.0, 5.0, 15.0, 30.0, 60.0)
 
 
 class CoreLifecycleService:
@@ -84,6 +104,34 @@ class CoreLifecycleService:
         )
         self._runtime: CoreRuntime | None = None
         self._deriv: ReadOnlyWorkerSupervisor | None = None
+        self._iqoption: ReadOnlyWorkerSupervisor | None = None
+        self._iqoption_connecting: ReadOnlyWorkerSupervisor | None = None
+        self._iqoption_balance: BrokerAccountBalance | None = None
+        self._iqoption_clock: BrokerClockSnapshot | None = None
+        try:
+            self._iqoption_connection_safety: IQOptionConnectionSafetyController | None = (
+                IQOptionConnectionSafetyController(
+                    IQOptionConnectionSafetyStore(self._profile_dir / "core")
+                )
+            )
+        except IQOptionConnectionSafetyStateError:
+            # Corrupt/unwritable protection state must never silently reset the
+            # anti-login-storm counters.  Keep the app available, but fail the
+            # external IQ Option connection closed until the state is repaired.
+            self._iqoption_connection_safety = None
+        self._iqoption_risk_store = IqOptionRiskConfigStore(self._profile_dir / "core")
+        try:
+            self._iqoption_risk_config = self._iqoption_risk_store.load()
+        except ValueError:
+            self._iqoption_risk_config = IqOptionRiskConfig()
+        self._iqoption_bot_armed = False
+        self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+        self._iqoption_auto_trader = IqOptionAutoTrader(
+            supervisor_provider=lambda: self._iqoption,
+            runtime_provider=lambda: self._runtime,
+            risk_config_provider=lambda: self._iqoption_risk_config,
+            operator_armed=lambda: self._iqoption_bot_armed,
+        )
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
         self._deriv_auto_trader: DerivDigitAutoTrader | None = None
@@ -95,8 +143,11 @@ class CoreLifecycleService:
         self._safe_stop = False
         self._restart_counts = {"AUTH_AGENT": 0, "DERIV_WORKER": 0}
         self._deriv_switch_lock = threading.RLock()
+        self._iqoption_switch_lock = threading.RLock()
         self._deriv_recovery_stop = threading.Event()
+        self._iqoption_recovery_stop = threading.Event()
         self._deriv_recovery_thread: threading.Thread | None = None
+        self._iqoption_startup_recovery_thread: threading.Thread | None = None
         self._deriv_generation = 0
         self._pending_deriv_recovery_reason: str | None = None
         self._workers_stopped = False
@@ -130,12 +181,13 @@ class CoreLifecycleService:
             return
         self._state = CoreServiceState.STARTING
         self._deriv_recovery_stop.clear()
+        self._iqoption_recovery_stop.clear()
         try:
             self._auth.start()
             self._startup_sequence.append("AUTH_AGENT")
             runtime = CoreRuntime(
                 self._profile_dir / "core",
-                deferred_reconciliation_brokers=frozenset({Broker.DERIV}),
+                deferred_reconciliation_brokers=frozenset({Broker.DERIV, Broker.IQ_OPTION}),
                 digit_account_type=(
                     "demo"
                     if self._deriv_transport == "live-demo"
@@ -155,6 +207,12 @@ class CoreLifecycleService:
                     deriv_session_ready=lambda: (
                         self._deriv_transport in {"live-demo", "live-real"}
                         and self._deriv is not None
+                    ),
+                    iqoption_practice_session_ready=lambda: (
+                        self._iqoption is not None
+                        and self._iqoption.health_state is WorkerHealthState.READY
+                        and self._iqoption_balance is not None
+                        and self._iqoption_balance.account_type.upper() in {"DEMO", "PRACTICE"}
                     ),
                 ),
             )
@@ -191,6 +249,7 @@ class CoreLifecycleService:
                     deriv_telemetry=lambda: (
                         None if self._deriv_telemetry is None else self._deriv_telemetry.snapshot
                     ),
+                    deriv_bot_armed=lambda: not self._safe_stop,
                     deriv_bot_reason=lambda: (
                         "BOT_WAITING_FOR_LIVE_DERIV"
                         if self._deriv_auto_trader is None
@@ -200,6 +259,23 @@ class CoreLifecycleService:
                         None
                         if self._deriv_auto_trader is None
                         else self._deriv_auto_trader.waiting_status
+                    ),
+                    iqoption_health=lambda: (
+                        None if self._iqoption is None else self._iqoption.health_state
+                    ),
+                    iqoption_balance=lambda: self._iqoption_balance,
+                    iqoption_clock=lambda: self._iqoption_clock,
+                    iqoption_risk_config=lambda: self._iqoption_risk_config,
+                    iqoption_bot_armed=lambda: self._iqoption_bot_armed,
+                    iqoption_bot_reason=lambda: (
+                        self._iqoption_auto_trader.status_reason
+                        if self._iqoption_bot_armed
+                        else self._iqoption_bot_reason
+                    ),
+                    iqoption_asset_ranking=lambda: (
+                        self._iqoption_auto_trader.asset_ranking
+                        if self._iqoption_auto_trader is not None
+                        else ()
                     ),
                 )
                 ui_service = CoreUiProjectionService(
@@ -211,9 +287,13 @@ class CoreLifecycleService:
                     deriv_demo_connect=self.connect_deriv_selected_account,
                     digit_risk_config_update=self._update_digit_risk_config,
                     digit_test_session_reset=self.reset_digit_test_session,
+                    iqoption_login=self.connect_iqoption_selected_account,
+                    iqoption_risk_config_update=self.update_iqoption_risk_config,
+                    iqoption_bot_control=self.control_iqoption_bot,
                 )
                 ui_service.start()
                 self._ui_service = ui_service
+                self._iqoption_auto_trader.start()
         except Exception:
             self._state = CoreServiceState.FAILED
             self.emergency_shutdown()
@@ -231,6 +311,11 @@ class CoreLifecycleService:
             for item in runtime.reader.list_reconciliation_candidates()
         )
         self._schedule_saved_deriv_startup(has_deriv_recovery=has_deriv_recovery)
+        has_iqoption_recovery = any(
+            str(item.get("broker")) == Broker.IQ_OPTION.value
+            for item in runtime.reader.list_reconciliation_candidates()
+        )
+        self._schedule_saved_iqoption_recovery(has_iqoption_recovery=has_iqoption_recovery)
 
     def _schedule_saved_deriv_startup(self, *, has_deriv_recovery: bool) -> None:
         """Reconnect a saved Demo account without ever rearming or auto-selecting Real."""
@@ -255,10 +340,91 @@ class CoreLifecycleService:
             self._deriv_transport = "live-real"
             self._request_deriv_recovery("DERIV_STARTUP_RECONCILIATION_REQUIRED")
 
+    def _schedule_saved_iqoption_recovery(self, *, has_iqoption_recovery: bool) -> None:
+        """Recover a durable Practice order without depending on UI startup timing."""
+
+        if not has_iqoption_recovery:
+            return
+        try:
+            saved_mode = IQOptionCredentialVault(
+                self._profile_dir / "broker_credentials"
+            ).configured_account_mode()
+        except (OSError, RuntimeError, ValueError):
+            return
+        if saved_mode != "practice":
+            # Real remains read-only and is never selected automatically.
+            return
+        current = self._iqoption_startup_recovery_thread
+        if current is not None and current.is_alive():
+            return
+
+        def recover() -> None:
+            terminal_reasons = {
+                "IQOPTION_AUTH_FAILED",
+                "IQOPTION_2FA_REQUIRED",
+                "IQOPTION_RATE_LIMITED",
+                "IQOPTION_CONNECTION_QUARANTINED",
+                "IQOPTION_CONNECTION_SAFETY_STATE_INVALID",
+                "IQOPTION_CREDENTIALS_NOT_CONFIGURED",
+                "IQOPTION_SAVED_LOGIN_UNAVAILABLE",
+                "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION",
+            }
+            attempt = 0
+            while (
+                attempt < IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS
+                and not self._iqoption_recovery_stop.is_set()
+            ):
+                delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
+                    min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
+                ]
+                attempt += 1
+                if self._iqoption_recovery_stop.wait(delay):
+                    return
+                runtime = self._runtime
+                if runtime is None or self._state in {
+                    CoreServiceState.STOPPING,
+                    CoreServiceState.STOPPED,
+                }:
+                    return
+                runtime.event_sink.emit(
+                    "iqoption_startup_recovery_attempt",
+                    attempt=attempt,
+                    delay_ms=int(delay * 1000),
+                )
+                accepted, connected, reason = self.connect_iqoption_selected_account("saved")
+                if accepted and connected:
+                    runtime.event_sink.emit(
+                        "iqoption_startup_recovery_connected",
+                        reason_code=reason,
+                    )
+                    return
+                runtime.event_sink.emit(
+                    "iqoption_startup_recovery_failed",
+                    reason_code=reason,
+                    attempt=attempt,
+                )
+                if reason in terminal_reasons:
+                    return
+            runtime = self._runtime
+            if runtime is not None and not self._iqoption_recovery_stop.is_set():
+                runtime.event_sink.emit(
+                    "iqoption_startup_recovery_exhausted",
+                    reason_code="IQOPTION_AUTOMATED_RECOVERY_LIMIT_REACHED",
+                    attempts=attempt,
+                )
+
+        thread = threading.Thread(
+            target=recover,
+            name="iqoption-startup-recovery",
+            daemon=True,
+        )
+        self._iqoption_startup_recovery_thread = thread
+        thread.start()
+
     def safe_stop(self) -> None:
         runtime = self._require_runtime()
         stop_entries = getattr(runtime, "stop_new_entries", None)
-        if callable(stop_entries):
+        if callable(stop_entries) and not self._iqoption_bot_armed:
             stop_entries()
         self._safe_stop = True
         # Lifecycle READY means the Core/UI control plane is available. Trading
@@ -330,6 +496,236 @@ class CoreLifecycleService:
     def connect_deriv_selected_account(self) -> tuple[bool, str]:
         with self._deriv_switch_lock:
             return self._connect_deriv_selected_account_locked()
+
+    def connect_iqoption_selected_account(self, account_mode: str) -> tuple[bool, bool, str]:
+        """Start the isolated read-only connector for an explicit IQ Option balance."""
+
+        normalized_mode = account_mode.strip().lower()
+        if normalized_mode == "saved":
+            try:
+                saved_mode = IQOptionCredentialVault(
+                    self._profile_dir / "broker_credentials"
+                ).configured_account_mode()
+            except (OSError, RuntimeError, ValueError):
+                return False, False, "IQOPTION_SAVED_LOGIN_UNAVAILABLE"
+            if saved_mode is None:
+                return False, False, "IQOPTION_CREDENTIALS_NOT_CONFIGURED"
+            if saved_mode != "practice":
+                # A persisted Real selection never becomes an automatic startup
+                # selection. The operator must confirm it in the protected dialog.
+                return False, False, "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION"
+            normalized_mode = saved_mode
+        if normalized_mode not in {"practice", "real"}:
+            return False, False, "IQOPTION_ACCOUNT_MODE_INVALID"
+        if self._state in {CoreServiceState.STOPPING, CoreServiceState.STOPPED}:
+            return False, False, "LIFECYCLE_STOPPING"
+        # A durable-order recovery can spend several seconds waiting on the
+        # external authentication endpoint while holding the broker switch
+        # lock.  Do not make a manual UI command wait behind that attempt: the
+        # UI must remain responsive and can report the in-progress state.
+        if self._iqoption_connecting is not None:
+            return False, False, "IQOPTION_CONNECTION_IN_PROGRESS"
+
+        with self._iqoption_switch_lock:
+            if (
+                self._iqoption is not None
+                and self._iqoption.health_state is WorkerHealthState.READY
+                and self._iqoption_balance is not None
+                and (
+                    (
+                        normalized_mode == "practice"
+                        and self._iqoption_balance.account_type == "DEMO"
+                    )
+                    or (normalized_mode == "real" and self._iqoption_balance.account_type == "REAL")
+                )
+            ):
+                return (
+                    True,
+                    True,
+                    "IQOPTION_PRACTICE_ALREADY_CONNECTED"
+                    if normalized_mode == "practice"
+                    else "IQOPTION_REAL_ALREADY_CONNECTED",
+                )
+            connection_safety = self._iqoption_connection_safety
+            if connection_safety is None:
+                return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
+            try:
+                admission = connection_safety.admit_http_login()
+            except IQOptionConnectionSafetyStateError:
+                self._iqoption_connection_safety = None
+                return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
+            if not admission.allowed:
+                runtime = self._require_runtime()
+                runtime.event_sink.emit(
+                    "iqoption_connection_quarantine",
+                    reason_code=admission.reason_code,
+                    attempts_in_window=admission.attempts_in_window,
+                    retry_after_seconds=admission.retry_after_seconds,
+                )
+                return False, False, admission.reason_code
+            self._iqoption_bot_armed = False
+            self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED_AFTER_CONNECTION_CHANGE"
+            runtime = self._require_runtime()
+            self._iqoption_auto_trader.stop()
+            runtime.detach_iqoption_worker()
+            previous = self._iqoption
+            self._iqoption = None
+            self._iqoption_balance = None
+            self._iqoption_clock = None
+            if previous is not None:
+                previous.shutdown(1.0)
+
+            supervisor = ReadOnlyWorkerSupervisor(
+                runtime.health_gate,
+                self._iqoption_spec(normalized_mode),
+                handshake_timeout=_IQOPTION_WORKER_HANDSHAKE_TIMEOUT_SECONDS,
+                response_timeout=_IQOPTION_WORKER_RESPONSE_TIMEOUT_SECONDS,
+                heartbeat_timeout=_IQOPTION_WORKER_HEARTBEAT_TIMEOUT_SECONDS,
+            )
+            self._iqoption_connecting = supervisor
+            try:
+                supervisor.start()
+                if self._iqoption_recovery_stop.is_set() or self._state in {
+                    CoreServiceState.STOPPING,
+                    CoreServiceState.STOPPED,
+                }:
+                    supervisor.shutdown(0.2)
+                    return False, False, "LIFECYCLE_STOPPING"
+                expected_connection_mode = (
+                    "DEMO_AUTH_FINANCIAL"
+                    if normalized_mode == "practice"
+                    else "REAL_AUTH_READ_ONLY"
+                )
+                if supervisor.client.capabilities.connection_mode != expected_connection_mode:
+                    raise RuntimeError("IQOPTION_ACCOUNT_MODE_MISMATCH")
+                balance = supervisor.client.broker_balance()
+                clock: BrokerClockSnapshot | None = None
+                try:
+                    clock = supervisor.client.broker_clock()
+                except WorkerDispatchError as exc:
+                    if exc.code is not ProtocolErrorCode.IQOPTION_CLOCK_UNAVAILABLE:
+                        raise
+                if normalized_mode == "practice":
+                    runtime.attach_iqoption_worker(
+                        supervisor.client,
+                        on_order_event=self._iqoption_auto_trader.notify_order_event,
+                    )
+            except WorkerDispatchError as exc:
+                runtime.detach_iqoption_worker()
+                supervisor.shutdown(1.0)
+                self._record_iqoption_connection_failure(exc.code.value)
+                return False, False, exc.code.value
+            except ProtocolError as exc:
+                runtime.detach_iqoption_worker()
+                supervisor.shutdown(1.0)
+                self._record_iqoption_connection_failure(exc.code.value)
+                return False, False, exc.code.value
+            except (OSError, RuntimeError, ValueError):
+                runtime.detach_iqoption_worker()
+                supervisor.shutdown(1.0)
+                self._record_iqoption_connection_failure("IQOPTION_CONNECT_FAILED")
+                return False, False, "IQOPTION_CONNECT_FAILED"
+            finally:
+                if self._iqoption_connecting is supervisor:
+                    self._iqoption_connecting = None
+
+            try:
+                connection_safety.record_success()
+            except IQOptionConnectionSafetyStateError:
+                runtime.detach_iqoption_worker()
+                supervisor.shutdown(1.0)
+                self._iqoption_connection_safety = None
+                return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
+            self._iqoption = supervisor
+            self._iqoption_balance = balance
+            self._iqoption_clock = clock
+            self._iqoption_bot_reason = "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK"
+            return (
+                True,
+                True,
+                "IQOPTION_PRACTICE_CONNECTED"
+                if normalized_mode == "practice"
+                else "IQOPTION_REAL_READ_ONLY_CONNECTED",
+            )
+
+    def _record_iqoption_connection_failure(self, reason_code: str) -> None:
+        controller = self._iqoption_connection_safety
+        if controller is None:
+            return
+        try:
+            controller.record_failure(reason_code)
+        except IQOptionConnectionSafetyStateError:
+            self._iqoption_connection_safety = None
+
+    def update_iqoption_risk_config(
+        self,
+        config: IqOptionRiskConfig,
+    ) -> tuple[bool, str | None]:
+        """Persist IQ settings only while its independent bot is disarmed."""
+
+        with self._iqoption_switch_lock:
+            if self._iqoption_bot_armed:
+                return False, "IQOPTION_BOT_MUST_BE_DISARMED"
+            try:
+                self._iqoption_risk_store.save(config)
+            except OSError:
+                return False, "IQOPTION_RISK_CONFIG_PERSIST_FAILED"
+            self._iqoption_risk_config = config
+            self._iqoption_bot_reason = "IQOPTION_RISK_CONFIG_APPLIED"
+            return True, None
+
+    def control_iqoption_bot(self, enabled: bool) -> tuple[bool, str]:
+        """Control IQ independently and arm when practice capability is satisfied."""
+
+        with self._iqoption_switch_lock:
+            if not enabled:
+                self._iqoption_bot_armed = False
+                runtime = self._require_runtime()
+                if self._safe_stop:
+                    runtime.stop_new_entries()
+                self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+                return True, self._iqoption_bot_reason
+            supervisor = self._iqoption
+            balance = self._iqoption_balance
+            if supervisor is None or supervisor.health_state is not WorkerHealthState.READY:
+                self._iqoption_bot_reason = "IQOPTION_CONNECTION_REQUIRED"
+                return False, self._iqoption_bot_reason
+            if balance is None or balance.account_type.upper() not in {"DEMO", "PRACTICE"}:
+                self._iqoption_bot_reason = "IQOPTION_PRACTICE_REQUIRED"
+                return False, self._iqoption_bot_reason
+            capabilities = supervisor.client.capabilities
+            capability_ready = all(
+                (
+                    capabilities.can_submit_orders,
+                    capabilities.supports_market_data,
+                    capabilities.supports_reconciliation,
+                    capabilities.supports_order_events,
+                )
+            )
+            if not capability_ready:
+                self._iqoption_bot_reason = "IQOPTION_PRACTICE_TRADING_CAPABILITY_UNAVAILABLE"
+                return False, self._iqoption_bot_reason
+            iq_runtime = self._runtime
+            if iq_runtime is None:
+                self._iqoption_bot_reason = "IQOPTION_CORE_NOT_READY"
+                return False, self._iqoption_bot_reason
+            if not iq_runtime.resume_new_entries_for(
+                Broker.IQ_OPTION,
+                IQOPTION_PRACTICE_ACCOUNT_ID,
+            ):
+                self._iqoption_bot_reason = (
+                    iq_runtime.health_gate.state_for(
+                        Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
+                    ).reason_code
+                    or "IQOPTION_HEALTH_GATE_BLOCKED"
+                )
+                return False, self._iqoption_bot_reason
+            self._iqoption_bot_armed = True
+            if hasattr(self, "_iqoption_auto_trader") and self._iqoption_auto_trader is not None:
+                self._iqoption_auto_trader.begin_new_run()
+                self._iqoption_auto_trader.start()
+            self._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
+            return True, self._iqoption_bot_reason
 
     def _connect_deriv_selected_account_locked(self) -> tuple[bool, str]:
         """Replace the public worker with the explicitly selected authenticated account."""
@@ -573,17 +969,34 @@ class CoreLifecycleService:
         if self._workers_stopped:
             return True
         self._deriv_recovery_stop.set()
+        self._iqoption_recovery_stop.set()
         self._state = CoreServiceState.STOPPING
+        connecting_iqoption = self._iqoption_connecting
+        self._iqoption_connecting = None
+        if connecting_iqoption is not None:
+            connecting_iqoption.shutdown(min(0.5, grace_seconds))
         self._stop_deriv_telemetry()
         runtime = self._require_runtime()
         self._stop_deriv_financial_runtime(runtime)
         if self._deriv is not None:
             self._deriv.shutdown(grace_seconds)
             self._deriv = None
+        if self._iqoption is not None:
+            if hasattr(self, "_iqoption_auto_trader") and self._iqoption_auto_trader is not None:
+                self._iqoption_auto_trader.stop()
+            runtime.detach_iqoption_worker()
+            self._iqoption.shutdown(grace_seconds)
+            self._iqoption = None
+            self._iqoption_balance = None
+            self._iqoption_clock = None
         recovery = self._deriv_recovery_thread
         self._deriv_recovery_thread = None
         if recovery is not None and recovery is not threading.current_thread():
             recovery.join(timeout=grace_seconds)
+        iqoption_recovery = self._iqoption_startup_recovery_thread
+        self._iqoption_startup_recovery_thread = None
+        if iqoption_recovery is not None and iqoption_recovery is not threading.current_thread():
+            iqoption_recovery.join(timeout=min(0.5, grace_seconds))
         drained = runtime.shutdown_workers(grace_seconds)
         self._workers_stopped = True
         return drained
@@ -700,12 +1113,16 @@ class CoreLifecycleService:
                     self._restart_counts["DERIV_WORKER"],
                 )
             )
-        if "iqoption" in self._workers:
+        if "iqoption" in self._workers or self._iqoption is not None:
             statuses.append(
                 self._status(
                     "IQOPTION_WORKER",
-                    None,
-                    WorkerHealthState.STOPPED.value,
+                    None if self._iqoption is None else self._iqoption.process,
+                    (
+                        WorkerHealthState.STOPPED.value
+                        if self._iqoption is None
+                        else self._iqoption.health_state.value
+                    ),
                     0,
                 )
             )
@@ -746,6 +1163,21 @@ class CoreLifecycleService:
             broker="DERIV",
             extra_arguments=extra_arguments,
             allow_demo_financial_submission=self._deriv_transport == "live-demo",
+            allow_real_financial_submission=False,
+        )
+
+    def _iqoption_spec(self, account_mode: str) -> ReadOnlyWorkerSpec:
+        return ReadOnlyWorkerSpec(
+            module="apps.iqoption_connection_worker",
+            role=EndpointRole.IQOPTION_WORKER,
+            broker="IQOPTION",
+            extra_arguments=(
+                "--vault-dir",
+                str(self._profile_dir / "broker_credentials"),
+                "--account-mode",
+                account_mode,
+            ),
+            allow_demo_financial_submission=account_mode == "practice",
             allow_real_financial_submission=False,
         )
 

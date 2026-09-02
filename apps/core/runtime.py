@@ -96,6 +96,7 @@ class CoreRuntime:
         self._broker_event_processor: BrokerEventProcessor | None = None
         self._broker_event_pump: BrokerEventPump | None = None
         self._deriv_event_pump: BrokerEventPump | None = None
+        self._iqoption_event_pump: BrokerEventPump | None = None
         self._deriv_reconciliation_completed: Callable[[], None] | None = None
         self._submission_router: MultiBrokerSubmissionRouter | None = None
 
@@ -479,6 +480,56 @@ class CoreRuntime:
         if status_router is not None and Broker.DERIV in self._deferred_reconciliation_brokers:
             status_router.unregister(Broker.DERIV)
 
+    def attach_iqoption_worker(
+        self,
+        worker: FinancialWorkerPort,
+        *,
+        on_order_event: Callable[[BrokerOrderEvent, BrokerEventApplyResult], None] | None = None,
+        on_reconciliation_completed: Callable[[], None] | None = None,
+    ) -> None:
+        """Route Practice IQ orders through the persistent Core financial path."""
+
+        router = self._submission_router
+        processor = self._broker_event_processor
+        if router is None or processor is None:
+            raise RuntimeError("Core runtime is not started")
+        self.detach_iqoption_worker()
+        self.reconcile_iqoption_worker(worker)
+        router.register(Broker.IQ_OPTION, worker)
+        pump = BrokerEventPump(
+            worker,
+            processor,
+            self.health_gate,
+            self.event_sink,
+            on_processed=on_order_event,
+        )
+        self._iqoption_event_pump = pump
+        pump.start()
+        if on_reconciliation_completed is not None:
+            on_reconciliation_completed()
+
+    def reconcile_iqoption_worker(self, worker: OrderStatusPort) -> None:
+        if Broker.IQ_OPTION not in self._deferred_reconciliation_brokers:
+            return
+        router = self._reconciliation_status_router
+        scheduler = self._reconciliation_scheduler
+        if router is None or scheduler is None:
+            raise RuntimeError("reconciliation scheduler is unavailable")
+        router.register(Broker.IQ_OPTION, worker)
+        scheduler.trigger("iqoption_reconnected")
+
+    def detach_iqoption_worker(self) -> None:
+        pump = self._iqoption_event_pump
+        self._iqoption_event_pump = None
+        if pump is not None:
+            pump.stop()
+        router = self._submission_router
+        if router is not None:
+            router.unregister(Broker.IQ_OPTION)
+        status_router = self._reconciliation_status_router
+        if status_router is not None and Broker.IQ_OPTION in self._deferred_reconciliation_brokers:
+            status_router.unregister(Broker.IQ_OPTION)
+
     def dispatch_pending(self) -> OrderCommand | None:
         if not self.dispatcher_started:
             raise RuntimeError("dispatcher is not started")
@@ -517,13 +568,39 @@ class CoreRuntime:
         )
         return self.dispatcher_started
 
+    def resume_new_entries_for(self, broker: Broker, account_id: str) -> bool:
+        """Arm one broker/account without inheriting another broker's blockers."""
+
+        if self._writer is None:
+            raise RuntimeError("Core runtime is not started")
+        self.risk_ledger.refresh_digit_health_gate(self.health_gate)
+        self.health_gate.clear_if("HG_SAFE_STOP")
+        scoped_state = self.health_gate.state_for(broker.value, account_id)
+        armed = scoped_state.is_open
+        if armed:
+            self.dispatcher_started = True
+        self.event_sink.emit(
+            "trading_arm_evaluated",
+            armed=armed,
+            broker=broker.value,
+            account_id=account_id,
+            reason_code=scoped_state.reason_code,
+        )
+        return armed
+
     def drain_financial_events(self, timeout: float) -> bool:
         """Drain events already accepted by IPC without waiting for future broker outcomes."""
 
         if timeout <= 0:
             raise ValueError("drain timeout must be positive")
         pumps = tuple(
-            pump for pump in (self._broker_event_pump, self._deriv_event_pump) if pump is not None
+            pump
+            for pump in (
+                self._broker_event_pump,
+                self._deriv_event_pump,
+                self._iqoption_event_pump,
+            )
+            if pump is not None
         )
         if not pumps:
             return True
@@ -534,7 +611,11 @@ class CoreRuntime:
     def pending_financial_event_count(self) -> int:
         return sum(
             pump.pending_event_count
-            for pump in (self._broker_event_pump, self._deriv_event_pump)
+            for pump in (
+                self._broker_event_pump,
+                self._deriv_event_pump,
+                self._iqoption_event_pump,
+            )
             if pump is not None
         )
 
@@ -551,6 +632,7 @@ class CoreRuntime:
             self._broker_event_pump.stop()
             self._broker_event_pump = None
         self.detach_deriv_worker()
+        self.detach_iqoption_worker()
         return drained
 
     def shutdown(self) -> None:

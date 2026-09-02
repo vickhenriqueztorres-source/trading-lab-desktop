@@ -18,12 +18,14 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 
 ### Para desenvolvimento e manutenção
 
-1. [Arquitetura atual](CURRENT_ARCHITECTURE.md)
-2. [Referência de componentes](COMPONENT_REFERENCE.md)
-3. [Guia de desenvolvimento, testes e build](DEVELOPMENT_BUILD_AND_TEST.md)
-4. [Persistência e recuperação](PERSISTENCE_AND_RECOVERY.md)
-5. [Protocolo IPC v1](IPC_PROTOCOL_V1.md)
-6. [Segurança](../SECURITY.md)
+1. [Guia universal de desenvolvimento em qualquer IDE](UNIVERSAL_IDE_DEVELOPMENT_GUIDE.md)
+2. [Guia completo de estratégias e execução IQ Option](IQOPTION_FULL_IMPLEMENTATION_AND_STRATEGY_GUIDE.md)
+3. [Arquitetura atual](CURRENT_ARCHITECTURE.md)
+4. [Referência de componentes](COMPONENT_REFERENCE.md)
+5. [Guia de desenvolvimento, testes e build](DEVELOPMENT_BUILD_AND_TEST.md)
+6. [Persistência e recuperação](PERSISTENCE_AND_RECOVERY.md)
+7. [Protocolo IPC v1](IPC_PROTOCOL_V1.md)
+8. [Segurança](../SECURITY.md)
 
 ### Para produto e governança
 
@@ -45,9 +47,10 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 | Deriv API Token/PAT | Implementado com seleção explícita da conta |
 | Deriv Demo | Conexão, saldo, ticks, análise e ordens automatizadas implementados |
 | Deriv Real | Conexão e monitoramento somente leitura; ordens bloqueadas |
-| IQ Option | Modelos, worker/harnesses e testes existem; integração de usuário não operacional |
+| IQ Option | Conexão, saldo, radar multi-ativos, auto-seleção, estratégias e ordens implementados |
 | Estratégias Deriv | Três estratégias de dígitos implementadas |
-| Seleção automática de ativo | Implementada para R_10, R_25, R_50, R_75 e R_100 no radar live |
+| Estratégias IQ Option | RSI 14 Bounded Edge multi-ativos e suporte a novas estratégias implementados |
+| Seleção automática de ativo | Implementada para Deriv (R_10 a R_100) e IQ Option (Radar com todos os pares OTC/Forex) |
 | Martingale | Opcional, delimitado, desativado por padrão |
 | Persistência financeira | SQLite/WAL com writer único, outbox e reconciliação |
 | Diagnóstico | ZIP local redigido, limitado e escaneado contra segredos |

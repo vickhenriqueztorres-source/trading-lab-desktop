@@ -9,6 +9,13 @@ from packages.strategies.deriv_digits import (
     ShadowSignalState,
     TailProbabilityEdgeStrategy,
 )
+from packages.strategies.iqoption_rsi import (
+    IQOPTION_RSI_STRATEGY_ID,
+    IQOptionRsiDemoStrategy,
+    RsiDecision,
+    calculate_wilder_rsi,
+    iqoption_rsi_manifest,
+)
 from packages.strategies.models import (
     RuntimeContext,
     StrategyEvaluation,
@@ -24,6 +31,9 @@ __all__ = [
     "DigitStrategyDecision",
     "DigitStrategyProjection",
     "ParityRegimeEdgeStrategy",
+    "IQOPTION_RSI_STRATEGY_ID",
+    "IQOptionRsiDemoStrategy",
+    "RsiDecision",
     "RuntimeContext",
     "RuntimePhase",
     "StrategyEvaluation",
@@ -36,4 +46,6 @@ __all__ = [
     "SelectiveDiffersEdgeStrategy",
     "TailProbabilityEdgeStrategy",
     "WarmupCheckpoint",
+    "calculate_wilder_rsi",
+    "iqoption_rsi_manifest",
 ]

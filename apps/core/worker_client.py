@@ -317,6 +317,13 @@ class SocketWorkerClient:
     def duplicate_count(self) -> int:
         return self._duplicate_count
 
+    @property
+    def pending_request_count(self) -> int:
+        """Return in-flight IPC requests without exposing their contents."""
+
+        with self._pending_lock:
+            return len(self._pending)
+
     def _reader_loop(self) -> None:
         try:
             while not self._closing.is_set():

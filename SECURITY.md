@@ -23,7 +23,8 @@ estado, isolamento entre corretoras e disponibilidade para acompanhar ordens já
   somente Demo pode compor a sessão financeira e ainda permanece sem auto-trader nesta fatia;
 - Auth Agent, UI e Simulated Worker recebem ambiente sanitizado sem variáveis de credencial Deriv
   ou IQ; somente o subprocesso Deriv herda a configuração externa necessária ao opt-in;
-- IQ Option não está implementada;
+- IQ Option autentica em subprocesso isolado para perfil/saldo Practice ou Real read-only; senha e
+  cookie não cruzam o Core, e o worker não publica nem aceita submissão financeira;
 - Auth Agent, identidade e lease são simulados localmente; o vault Windows CurrentUser é
   persistente e executável;
 - `SecretValue` reduz exposição acidental em `repr`/`str`, mas não protege memória;

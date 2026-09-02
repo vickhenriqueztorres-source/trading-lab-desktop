@@ -144,4 +144,61 @@ class WorkerProcess:
                         self._state = WorkerState.READY
 
 
-__all__ = ["WorkerProcess", "WorkerState"]
+__all__ = ["WorkerProcess", "WorkerState", "main"]
+
+
+def _load_yaml_config(path: str) -> dict[str, object]:
+    from pathlib import Path
+
+    result: dict[str, object] = {}
+    config_file = Path(path)
+    if not config_file.exists():
+        return result
+    for raw_line in config_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+            if val.lower() == "true":
+                result[key] = True
+            elif val.lower() == "false":
+                result[key] = False
+            else:
+                try:
+                    result[key] = float(val) if "." in val else int(val)
+                except ValueError:
+                    result[key] = val
+    return result
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="IQ Option worker process")
+    parser.add_argument("--config", default="config/demo_force_config.yaml", help="Config file")
+    parser.add_argument(
+        "--force-execution",
+        action="store_true",
+        default=False,
+        help="Force execution for testing",
+    )
+    args = parser.parse_args()
+
+    config = _load_yaml_config(args.config)
+    force_exec = args.force_execution or bool(config.get("force_iqoption_execution", False))
+    account_type = str(config.get("account_type", "PRACTICE"))
+
+    print(
+        f"[IQOptionWorkerProcess] Started with config={args.config}, "
+        f"account_type={account_type}, force_execution={force_exec}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

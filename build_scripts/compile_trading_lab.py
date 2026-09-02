@@ -52,6 +52,11 @@ def compile_executable(
     print(f"Target distribution folder: {target_dist}")
     print("==================================================================")
 
+    # 0. Clean prior build artifacts
+    if out.exists():
+        shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+
     # 1. Run PyInstaller if requested
     if not skip_pyinstaller:
         print("[1/5] Running PyInstaller compilation...")

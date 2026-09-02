@@ -13,18 +13,20 @@ from apps.auth_agent import (
     EntryAuthorizationError,
     FakeIdentityService,
 )
+from apps.auth_agent.core_gate import DerivTokenEntryAuthorizer
 from apps.core.coordinator import OrderCoordinator
 from apps.core.health import HealthGate
 from apps.core.runtime import CoreRuntime
 from apps.simulated_worker.worker import SimulatedWorker
 from packages.domain.models import (
+    Broker,
     BrokerOrderEvent,
     ExternalOrderStatus,
     OrderRequest,
     WorkerOutcome,
 )
 from packages.identity import OtpCode
-from packages.licensing import AuthorizationReason, LeaseVerifier
+from packages.licensing import AuthorizationDecision, AuthorizationReason, LeaseVerifier
 from packages.persistence import SingleDatabaseWriter, StateReader
 from packages.security import SimulatedUserScopedVault
 
@@ -178,3 +180,63 @@ def test_core_runtime_wires_only_the_reduced_authorization_boundary(
         assert runtime.reader.count("trade_intents") == 1
     finally:
         runtime.shutdown()
+
+
+def test_authenticated_iqoption_practice_session_authorizes_only_iq_scope() -> None:
+    health = HealthGate()
+    blocked_source = type(
+        "BlockedAuthorizationSource",
+        (),
+        {
+            "authorization": lambda *_args, **_kwargs: AuthorizationDecision(
+                new_entries_allowed=False,
+                open_order_follow_up_allowed=True,
+                reconciliation_allowed=True,
+                reason=AuthorizationReason.AUTH_REQUIRED,
+                lease_id=None,
+                expires_at=None,
+            )
+        },
+    )()
+    fallback = CoreLeaseEntryAuthorizer(blocked_source, health)
+    authorizer = DerivTokenEntryAuthorizer(
+        fallback,
+        health,
+        deriv_session_ready=lambda: False,
+        iqoption_practice_session_ready=lambda: True,
+    )
+
+    authorizer.ensure_new_entry_allowed(Broker.IQ_OPTION, "iqoption-rsi-demo", "1.0.0")
+    assert health.global_state.is_open is True
+
+    with pytest.raises(EntryAuthorizationError) as blocked:
+        authorizer.ensure_new_entry_allowed(Broker.DERIV, "strategy-test", "1.0.0")
+    assert blocked.value.reason_code == AuthorizationReason.AUTH_REQUIRED.value
+
+
+def test_iqoption_session_not_ready_still_requires_product_authorization() -> None:
+    health = HealthGate()
+    blocked_source = type(
+        "BlockedAuthorizationSource",
+        (),
+        {
+            "authorization": lambda *_args, **_kwargs: AuthorizationDecision(
+                new_entries_allowed=False,
+                open_order_follow_up_allowed=True,
+                reconciliation_allowed=True,
+                reason=AuthorizationReason.AUTH_REQUIRED,
+                lease_id=None,
+                expires_at=None,
+            )
+        },
+    )()
+    authorizer = DerivTokenEntryAuthorizer(
+        CoreLeaseEntryAuthorizer(blocked_source, health),
+        health,
+        deriv_session_ready=lambda: False,
+        iqoption_practice_session_ready=lambda: False,
+    )
+
+    with pytest.raises(EntryAuthorizationError) as blocked:
+        authorizer.ensure_new_entry_allowed(Broker.IQ_OPTION, "iqoption-rsi-demo", "1.0.0")
+    assert blocked.value.reason_code == AuthorizationReason.AUTH_REQUIRED.value

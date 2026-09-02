@@ -496,15 +496,65 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "config.iq_option.body": {
         "en": (
-            "Connection, account and capability values are read from the Core projection. "
-            "No editable broker control is available in this version. Broker credentials never "
-            "belong to the product identity service or to this UI."
+            "Connect a Practice or Real balance with the isolated read-only IQ Option worker. "
+            "Credentials are protected by the Windows vault and never cross the Core. Real "
+            "automated order submission remains disabled."
         ),
         "es": (
-            "Los valores de conexión, cuenta y capacidades se leen de la proyección del Core. "
-            "No hay controles editables del corredor en esta versión. Las credenciales nunca "
-            "pertenecen al servicio de identidad del producto ni a esta interfaz."
+            "Conecta un saldo Practice o Real mediante el worker IQ Option aislado y de solo "
+            "lectura. Las credenciales se protegen en el cofre de Windows y nunca pasan por el "
+            "Core. El envío automático de órdenes Real permanece deshabilitado."
         ),
+    },
+    "iq_option.login.title": {
+        "en": "IQ Option account connection",
+        "es": "Conexión de cuenta IQ Option",
+    },
+    "iq_option.login.email": {
+        "en": "Email",
+        "es": "Correo electrónico",
+    },
+    "iq_option.login.password": {
+        "en": "Password",
+        "es": "Contraseña",
+    },
+    "iq_option.login.remember": {
+        "en": "Protect credentials on this Windows user",
+        "es": "Proteger credenciales para este usuario de Windows",
+    },
+    "iq_option.login.button": {
+        "en": "Connect IQ Option account",
+        "es": "Conectar cuenta IQ Option",
+    },
+    "iq_option.login.status": {
+        "en": "Choose Practice or Real in the protected login window.",
+        "es": "Elige Practice o Real en la ventana de acceso protegida.",
+    },
+    "iq_option.login.reconnecting": {
+        "en": "Reconnecting the protected Practice account…",
+        "es": "Reconectando la cuenta Practice protegida…",
+    },
+    "iq_option.login.reconnected": {
+        "en": "Practice account reconnected with the saved Windows credential.",
+        "es": "Cuenta Practice reconectada con la credencial guardada de Windows.",
+    },
+    "iq_option.login.real_confirmation": {
+        "en": "A saved Real account requires explicit confirmation before read-only access.",
+        "es": (
+            "Una cuenta Real guardada exige confirmación explícita antes del acceso de "
+            "solo lectura."
+        ),
+    },
+    "iq_option.login.saved_failed": {
+        "en": "The saved session could not reconnect. Click Connect to authenticate again.",
+        "es": (
+            "La sesión guardada no pudo reconectarse. Haz clic en Conectar para "
+            "autenticarte de nuevo."
+        ),
+    },
+    "iq_option.login.invalid": {
+        "en": "Enter a valid email and password.",
+        "es": "Introduce un correo y una contraseña válidos.",
     },
     "settings.intro": {
         "en": (
@@ -718,6 +768,59 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "btn.bot.stop": {
         "en": "■ BOT ON — TURN OFF",
         "es": "■ BOT ENCENDIDO — APAGAR",
+    },
+    "btn.bot.deriv.start": {
+        "en": "▶ TURN DERIV BOT ON",
+        "es": "▶ ENCENDER BOT DERIV",
+    },
+    "btn.bot.deriv.stop": {
+        "en": "■ DERIV BOT ON — TURN OFF",
+        "es": "■ BOT DERIV ENCENDIDO — APAGAR",
+    },
+    "btn.bot.iq.start": {
+        "en": "▶ TURN IQ OPTION BOT ON",
+        "es": "▶ ENCENDER BOT IQ OPTION",
+    },
+    "btn.bot.iq.stop": {
+        "en": "■ IQ OPTION BOT ON — TURN OFF",
+        "es": "■ BOT IQ OPTION ENCENDIDO — APAGAR",
+    },
+    "iq.risk.title": {
+        "en": "IQ Option strategy and risk management",
+        "es": "Estrategia y gestión de riesgo IQ Option",
+    },
+    "iq.risk.notice": {
+        "en": (
+            "RSI is available for the Practice laboratory. Real remains read-only. "
+            "The bot can arm only after the connector proves market data, order events "
+            "and reconciliation support."
+        ),
+        "es": (
+            "RSI está disponible para el laboratorio Práctica. Real sigue siendo solo "
+            "lectura. El bot solo puede activarse cuando el conector compruebe datos de "
+            "mercado, eventos de órdenes y reconciliación."
+        ),
+    },
+    "iq.risk.strategy": {"en": "Strategy", "es": "Estrategia"},
+    "iq.risk.asset": {"en": "Asset", "es": "Activo"},
+    "iq.risk.stake": {"en": "Stake", "es": "Monto por entrada"},
+    "iq.risk.daily_stop": {"en": "Daily Stop Loss", "es": "Stop Loss diario"},
+    "iq.risk.daily_take": {"en": "Daily Take Profit", "es": "Meta diaria"},
+    "iq.risk.losses": {"en": "Max consecutive losses", "es": "Pérdidas consecutivas máx."},
+    "iq.risk.cooldown": {"en": "Post-loss cooldown", "es": "Pausa post-pérdida"},
+    "iq.risk.daily_trades": {"en": "Max daily trades", "es": "Operaciones diarias máx."},
+    "iq.risk.apply": {"en": "Apply IQ Option settings", "es": "Aplicar configuración IQ Option"},
+    "iq.risk.ready": {
+        "en": "Settings are ready to apply.",
+        "es": "Configuración lista para aplicar.",
+    },
+    "iq.risk.applied": {
+        "en": "IQ Option settings saved by the Core.",
+        "es": "Configuración IQ Option guardada por el Core.",
+    },
+    "iq.risk.rejected": {
+        "en": "IQ Option settings rejected: {reason}",
+        "es": "Configuración IQ Option rechazada: {reason}",
     },
     "bot.real.confirm_title": {
         "en": "Real account is read-only",

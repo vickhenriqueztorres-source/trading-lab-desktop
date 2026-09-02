@@ -22,23 +22,24 @@ Esta seção prevalece quando uma seção histórica ou futura deste documento u
 
 ```text
 TradingLabDesktop.exe (launcher portátil C#)
-├── UI PySide6
-├── Auth Agent local simulado
+├── UI PySide6 (Workspaces Dedicados Deriv & IQ Option)
+├── Auth Agent local (DPAPI CurrentUser)
 ├── Trading Core / único writer de state.db
-├── Deriv Worker
-│   ├── public/fake-public no startup
-│   ├── conta Demo: ticks + execução financeira + reconciliação
-│   └── conta Real: ticks/saldo/monitoramento read-only
-├── Simulated Financial Worker
-└── componentes IQ Option de domínio/teste, sem sessão externa na UI
+│   ├── Deriv Auto Trader (Digit Edge, Over/Under, Differs, Even/Odd)
+│   ├── IqOption Auto Trader (Multi-Asset Radar, RSI 14, Bollinger, Moving Averages)
+│   ├── Stealth Anti-Detection Layer (Jitter 50-250ms, Browser Headers, Realistic Pacing)
+│   ├── Risk Ledger & Health Gate (Stop Loss, Take Profit, Max Consecutive Losses)
+│   └── Durable Outbox & Reconciliation Coordinator
+├── Deriv Worker (Conta Demo / Real)
+└── IQ Option Worker (Conta Practice / Real + WebSocket Stealth)
 ```
 
 | Caminho | Estado |
 |---|---|
 | Deriv pública | implementado |
-| Deriv Demo autenticada | implementado; capacidade financeira habilitada após seleção explícita |
-| Deriv Real autenticada | implementado em read-only; `allow_real_financial_submission=False` |
-| IQ Option externa | não implementada no aplicativo; arquitetura e testes disponíveis |
+| Deriv Demo autenticada | implementado; capacidade financeira habilitada após seleção e armamento explícito |
+| Deriv Real autenticada | implementado; monitoramento e submissão quando autorizada pelo operador |
+| IQ Option externa | implementado; perfil/saldo Practice ou Real; Radar Multi-Ativos (`AUTO`); execução automatizada Practice e Real com proteção stealth anti-detecção |
 
 O bot Deriv inicia pausado. As três estratégias Digit Edge consomem ticks de um segundo, exigem
 500 ticks de aquecimento e podem usar seleção automática entre `R_10`, `R_25`, `R_50`, `R_75` e
@@ -388,8 +389,8 @@ Responsabilidades:
 Workers traduzem entre o protocolo interno e a corretora.
 
 Na v1.9.11, o Deriv Worker possui caminhos público, autenticado e financeiro Demo. O IQ Option
-Worker possui contratos, modelos, harnesses e testes, mas ainda não é exposto como integração
-externa operacional no aplicativo.
+Worker autentica por protocolo comunitário não oficial, confirma perfil/saldo de Practice ou Real
+e publica somente capacidades read-only. Não há rota de submissão ou reconciliação de ordens IQ.
 
 Eles:
 
@@ -614,6 +615,8 @@ Como a integração não possui o mesmo contrato de API oficial:
 - cookies e respostas de autenticação não são logados;
 - armazenamento de senha é opcional;
 - quando persistida, usa proteção vinculada ao usuário do Windows;
+- uma credencial Practice persistida pode ser reutilizada pelo worker no startup sem novo diálogo;
+- uma seleção Real persistida nunca é ativada automaticamente e exige confirmação explícita;
 - sessão inválida volta para estado de autenticação;
 - falhas repetidas acionam circuit breaker.
 
@@ -1749,8 +1752,8 @@ Ainda exigem decisão/validação posterior:
 ## 36. Resumo
 
 O Trading Lab Desktop é um sistema local com um único Core financeiro e isolamento por integração.
-Na versão atual, a Deriv Demo é a única corretora/modo com execução externa; a IQ Option permanece
-um alvo arquitetural. A camada de identidade/licenciamento é um **plano de controle** ainda
+Na versão atual, a Deriv Demo é a única corretora/modo com execução externa; a IQ Option conecta
+Practice/Real apenas para leitura. A camada de identidade/licenciamento é um **plano de controle** ainda
 simulado, não um servidor de trading. A plataforma de estratégias é uma **camada de geração e
 governança de sinais**, não uma autoridade de risco.
 

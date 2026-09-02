@@ -238,7 +238,13 @@ class FakeIQOptionTransport:
                 "result": {"id": contract_id, "status": "open"},
             }
 
-        if name in ("get_options", "get_option_history", "get_position", "options"):
+        if name in (
+            "get_betinfo",
+            "get_options",
+            "get_option_history",
+            "get_position",
+            "options",
+        ):
             contract_id_arg = msg.get("id", msg.get("contract_id"))
             lookup_client_id = msg.get("client_order_id")
             if contract_id_arg is not None:

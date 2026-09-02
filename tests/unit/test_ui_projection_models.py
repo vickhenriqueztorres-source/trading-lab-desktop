@@ -117,6 +117,17 @@ def test_ui_projection_round_trip_and_view_model_use_minor_units() -> None:
     assert snapshot.deriv_bot_waiting_status.rearm_notice is True
     assert snapshot.multi_strategy_metrics is not None
     assert snapshot.multi_strategy_metrics.active_engines == 5
+    assert snapshot.deriv_bot_armed is False
+
+
+def test_legacy_projection_infers_deriv_state_only_when_explicit_field_is_absent() -> None:
+    payload = _snapshot().to_payload()
+    payload["safe_stop_active"] = False
+    payload.pop("deriv_bot_armed")
+
+    snapshot = UiProjectionSnapshot.from_payload(payload)
+
+    assert snapshot.deriv_bot_armed is True
 
 
 def test_ui_projection_rejects_float_money_and_unproven_currency() -> None:

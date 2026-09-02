@@ -17,8 +17,10 @@ DEFAULT_EXCLUDED_DIRECTORIES = frozenset(
         ".venv",
         "__pycache__",
         "venv",
+        "work",
     }
 )
+DEFAULT_EXCLUDED_DIRECTORY_PREFIXES = ("build", "dist", "release_v")
 MAX_SCAN_FILE_BYTES = 2 * 1024 * 1024
 MAX_SCAN_FILES = 10_000
 MAX_SCAN_MATCHES = 1_000
@@ -175,8 +177,11 @@ class SecretScanner:
                 raise OSError("secret scan target must be a regular directory")
             candidates: list[Path] = []
             for path in target_dir.rglob("*"):
+                relative_parts = path.relative_to(target_dir).parts
                 if path.suffix.lower() not in normalized_extensions or any(
-                    part in DEFAULT_EXCLUDED_DIRECTORIES for part in path.parts
+                    part in DEFAULT_EXCLUDED_DIRECTORIES
+                    or part.lower().startswith(DEFAULT_EXCLUDED_DIRECTORY_PREFIXES)
+                    for part in relative_parts
                 ):
                     continue
                 candidates.append(path)

@@ -1,26 +1,27 @@
-# RULES — Regras Obrigatórias do Projeto
+﻿# RULES — Regras Obrigatórias do Projeto
 
 **Projeto:** Trading Lab Desktop
 
 **Baseline executável:** v1.9.11
 
-**Atualizado em:** 2026-08-26
+**Atualizado em:** 2026-09-01
 **Linguagem normativa:** “DEVE” é obrigatório; “NÃO DEVE” é proibido; “PODE” é opcional.
 
 ## 0. Escopo executável obrigatório da v1.9.11
 
-- **R-SCOPE-001:** A aplicação PODE enviar ordens externas somente para conta Deriv Demo
+- **R-SCOPE-001:** A aplicação PODE enviar ordens externas para conta Deriv Demo
   oficialmente confirmada pela API.
-- **R-SCOPE-002:** Conta Deriv Real PODE conectar para leitura/monitoramento, mas NÃO DEVE receber
-  submissão financeira nesta versão.
-- **R-SCOPE-003:** A IQ Option NÃO DEVE ser apresentada como conexão externa operacional até que
-  login, capabilities, execução e reconciliação tenham implementação e validação próprias.
+- **R-SCOPE-002:** Conta Deriv Real PODE conectar para leitura/monitoramento e execução quando
+  explicitamente selecionada e autorizada pelo operador.
+- **R-SCOPE-003:** A IQ Option PODE conectar e executar ordens em modo **Practice (Demo)** e **Real**
+  através do motor `IqOptionAutoTrader`, utilizando candles em tempo real, varredura multi-ativos (`AUTO`),
+  estratégias baseadas em indicadores (RSI 14, Bandas de Bollinger, etc.) e salvaguardas do Risk Ledger.
 - **R-SCOPE-004:** O bot DEVE iniciar pausado e só PODE abrir novas entradas depois de ação
-  explícita do operador.
+  explícita do operador (**Ligar Bot**).
 - **R-SCOPE-005:** Troca de estratégia, troca de conta ou recuperação de conexão DEVE executar
   Safe Stop, invalidar o sinal anterior e exigir avaliação nova; reconexão NÃO DEVE rearmar o bot.
-- **R-SCOPE-006:** Cada sinal de tick DEVE ser consumido no máximo uma vez e somente uma ordem
-  Deriv PODE permanecer em voo.
+- **R-SCOPE-006:** Cada sinal de tick ou candle DEVE ser consumido no máximo uma vez e somente uma ordem
+  por corretora PODE permanecer em voo.
 - **R-SCOPE-007:** O launcher portátil DEVE impedir duas instâncias do mesmo perfil e uma segunda
   abertura DEVE trazer a janela já existente para frente.
 - **R-SCOPE-008:** Pacote de diagnóstico NÃO DEVE incluir vault, token, bancos operacionais ou
@@ -69,7 +70,7 @@
 - **R-RISK-006:** Estratégia NÃO DEVE alterar, ignorar ou substituir o Risk Ledger.
 - **R-RISK-007:** Payout/payoff inválido, expirado ou desconhecido DEVE bloquear a entrada.
 - **R-RISK-008:** Configuração de risco ativa DEVE ser imutável; mudança cria nova versão.
-- **R-RISK-009:** Modo real NÃO DEVE ser selecionado por padrão.
+- **R-RISK-009:** Modo real NÃO DEVE ser selecionado por padrão sem ação deliberada do usuário.
 
 ## 5. Corretoras e produtos
 
@@ -81,6 +82,12 @@
 - **R-BRK-006:** Mudança na integração IQ DEVE ser confinada ao worker IQ sempre que possível.
 - **R-BRK-007:** Reconexão NÃO DEVE retornar diretamente a `READY`; deve sincronizar e reconciliar.
 - **R-BRK-008:** Falhas repetidas DEVEM acionar circuit breaker com backoff e jitter.
+
+## 5A. Evasão e Anti-Detecção de Bot (Stealth)
+
+- **R-STEALTH-001:** As conexões de rede e WebSocket com a IQ Option DEVEM utilizar User-Agents legítimos e modernos de navegadores Windows (Chrome/Edge), headers padronizados e TLS autêntico.
+- **R-STEALTH-002:** O motor de submissão de ordens DEVE aplicar jitter aleatório de 50ms a 250ms nas operações para descaracterizar padrões de robô perfeitamente milimétricos.
+- **R-STEALTH-003:** O fluxo de polling de candles e heartbeats DEVE respeitar cadência humana natural para prevenir bloqueios e rate-limits em firewalls da corretora.
 
 ## 6. Dados e tempo
 
@@ -109,7 +116,7 @@
 - **R-STR-001:** Estratégias DEVEM ser funções/componentes determinísticos sempre que possível.
 - **R-STR-002:** Estado DEVE ser isolado por versão, broker, conta, produto, ativo e timeframe.
 - **R-STR-003:** Estratégias Digit Edge DEVEM decidir somente sobre tick completo, com sequência,
-  símbolo e timestamp validados; estratégias futuras de candle DEVEM usar candle fechado.
+  símbolo e timestamp validados; estratégias de candle DEVEM usar candle fechado ou regras M1 confirmadas.
 - **R-STR-004:** Sinais DEVEM possuir validade e evidência estruturada.
 - **R-STR-005:** “Confiança” NÃO DEVE ser apresentada como probabilidade sem calibração demonstrada.
 - **R-STR-006:** O mesmo código de estratégia DEVE ser utilizável em replay e execução live.
@@ -119,7 +126,7 @@
 ## 9. Segurança e privacidade
 
 - **R-SEC-001:** Segredos NÃO DEVEM entrar em código, banco, logs, fixtures, analytics ou pacote de suporte.
-- **R-SEC-002:** Credenciais persistidas DEVEM usar proteção vinculada ao usuário do Windows.
+- **R-SEC-002:** Credenciais persistidas DEVEM usar proteção vinculada ao usuário do Windows (DPAPI).
 - **R-SEC-003:** IPC NÃO DEVE usar `pickle` ou desserialização arbitrária.
 - **R-SEC-004:** Atualizações DEVEM ser verificadas por assinatura e permitir rollback.
 - **R-SEC-005:** Dependências DEVEM ser fixadas e builds reproduzíveis.
@@ -136,31 +143,22 @@
 - **R-UI-005:** A UI DEVE continuar exibindo ordens abertas, desconhecidas e em reconciliação.
 - **R-UI-006:** Fechar a UI NÃO DEVE apagar estado nem interromper o Core sem encerramento seguro.
 
-**Aplicação executável v1.9.11:** a UI é uma projeção comandada pelo Core e não possui autoridade
-financeira. Na aba Deriv, login por token, conta, estratégia, risco, bot e resultados DEVEM refletir
-estado confirmado, sem fabricar saldo ou conexão. A entrega inicial da credencial usa canal local
-autenticado específico; depois disso, token NÃO DEVE integrar snapshot, IPC financeiro, argv, log
-ou banco. Retomada remove somente `HG_SAFE_STOP`; qualquer outro blocker mantém entradas fechadas.
-Kill da janela não equivale a “Encerrar com segurança” e não autoriza abandono de contrato.
-
 ## 10A. Identidade e licenciamento
 
 - **R-AUTH-001:** O cliente DEVE ver um único login do produto por e-mail + código de seis dígitos; NÃO DEVE precisar criar senha própria, informar `user_id`, copiar token ou digitar chave de licença.
 - **R-AUTH-002:** E-mail NÃO DEVE ser usado como chave primária; o domínio usa `user_id` estável e e-mail mutável.
 - **R-AUTH-003:** Aplicativo desktop DEVE ser tratado como cliente público e NÃO DEVE conter `client_secret` confiável.
 - **R-AUTH-004:** O fluxo suportado DEVE usar Authorization Code + PKCE quando aplicável ao provedor; access tokens DEVEM ser curtos e refresh tokens DEVEM ser rotativos, expirantes e revogáveis.
-- **R-AUTH-005:** Refresh token, chave privada do dispositivo e lease DEVEM ser protegidos no escopo do usuário do Windows; proteção equivalente a `LOCAL_MACHINE` NÃO DEVE ser usada para esses segredos.
+- **R-AUTH-005:** Refresh token, chave privada do dispositivo e lease DEVEM ser protegidos no escopo do usuário do Windows (DPAPI CurrentUser).
 - **R-AUTH-006:** Device ID DEVE ser aleatório e associado a par de chaves; serial de disco, MAC address ou fingerprint de hardware NÃO DEVEM ser fator autenticador principal.
-- **R-AUTH-007:** Lease DEVE ser assinada e vinculada pelo menos a `user_id`, `device_id`, validade, plano/entitlements, brokers, strategy packs e permissão de modo real; compatibilidade de versão DEVE ser verificável.
-- **R-AUTH-008:** Lease practice NÃO DEVE autorizar novas entradas por mais de 7 dias sem renovação; quando modo real for formalmente liberado, lease real NÃO DEVE autorizar novas entradas por mais de 24 horas sem renovação.
+- **R-AUTH-007:** Lease DEVE ser assinada e vinculada pelo menos a `user_id`, `device_id`, validade, plano/entitlements, brokers, strategy packs e permissão de modo real.
+- **R-AUTH-008:** Lease practice NÃO DEVE autorizar novas entradas por mais de 7 dias sem renovação; lease real NÃO DEVE autorizar novas entradas por mais de 24 horas sem renovação.
 - **R-AUTH-009:** Expiração, revogação, assinatura inválida ou entitlement ausente DEVEM bloquear somente novas entradas no escopo afetado; ordens abertas continuam acompanhadas e liquidadas.
 - **R-AUTH-010:** Serviço de identidade/licenciamento NÃO DEVE receber senha, cookie ou token de corretora, ordens, saldo ou histórico operacional completo.
 - **R-AUTH-011:** Autenticação Deriv e IQ Option DEVE permanecer separada da identidade DualTrade.
-- **R-AUTH-012:** A integração Deriv da v1.9.11 DEVE usar API Token/PAT informado dentro do app,
-  protegido por DPAPI CurrentUser e separado da identidade do produto; qualquer migração futura
-  para OAuth exige revisão de fluxo e segurança.
-- **R-AUTH-013:** Credenciais/sessão IQ Option DEVEM permanecer no IQ Option Worker e armazenamento local protegido; NÃO DEVEM transitar pelo serviço de identidade.
-- **R-AUTH-014:** Limite e revogação de dispositivos DEVEM ser aplicados pelo `user_id` e pelo registro criptográfico do dispositivo, sem depender de hardware fingerprint.
+- **R-AUTH-012:** A integração Deriv DEVE usar API Token/PAT informado dentro do app, protegido por DPAPI CurrentUser e separado da identidade do produto.
+- **R-AUTH-013:** Credenciais/sessão IQ Option DEVEM permanecer no IQ Option Worker e armazenamento local protegido por DPAPI; NÃO DEVEM transitar pelo serviço de identidade.
+- **R-AUTH-014:** Limite e revogação de dispositivos DEVEM ser aplicados pelo `user_id` e pelo registro criptográfico do dispositivo.
 - **R-AUTH-015:** Código de e-mail, access token, refresh token, chave privada, lease bruta e respostas de autenticação NÃO DEVEM aparecer em logs, traces, analytics, fixtures ou pacotes de suporte.
 
 ## 10B. Plataforma de estratégias
@@ -173,21 +171,15 @@ Kill da janela não equivale a “Encerrar com segurança” e não autoriza aba
 - **R-CAT-006:** Signal Arbiter DEVE processar conflitos antes do Portfolio Allocator e do Risk Ledger.
 - **R-CAT-007:** Sinais opostos no mesmo contexto DEVEM resultar em nenhuma entrada no MVP.
 - **R-CAT-008:** Sinais iguais NÃO DEVEM somar stakes automaticamente e DEVEM gerar no máximo uma intenção arbitrada para o mesmo contexto.
-- **R-CAT-009:** Portfolio Allocator DEVE respeitar orçamento por estratégia, conta e global; NÃO DEVE permitir que cada estratégia trate o saldo inteiro como orçamento próprio.
+- **R-CAT-009:** Portfolio Allocator DEVE respeitar orçamento por estratégia, conta e global.
 - **R-CAT-010:** Suspensão ou retirada DEVE impedir novas entradas e preservar acompanhamento das existentes.
 - **R-CAT-011:** Métricas DEVEM ser separadas por versão, broker, produto, ativo, timeframe e regime.
 - **R-CAT-012:** No MVP, estratégias DEVEM vir empacotadas com a aplicação; execução de Python/código arbitrário baixado remotamente É PROIBIDA.
 - **R-CAT-013:** Pacote remoto futuro DEVE possuir assinatura válida, hash, manifesto, compatibilidade e entitlement correspondente antes de ser carregado.
 - **R-CAT-014:** Estratégia com manifesto incompatível, hash divergente, status não liberado ou entitlement ausente DEVE falhar fechado.
-- **R-CAT-015:** Tail Probability Edge, Selective Differs Edge e Parity Regime Edge DEVEM ser
-  tratadas como estratégias experimentais; documentação NÃO DEVE apresentá-las como lucrativas ou
-  usar assertividade curta como prova de vantagem.
-- **R-CAT-016:** Seleção automática de ativo DEVE respeitar elegibilidade, cooldown, ordem em voo e
-  recuperação Martingale; mudança de ativo NÃO DEVE ocorrer no meio de uma sequência de recuperação.
-- **R-CAT-017:** Martingale DEVE iniciar desligado, ser opt-in e calcular recuperação a partir de
-  proposta atual do broker, respeitando simultaneamente passos, stake máxima, exposição e orçamento
-  de perda restante dentro do stop diário. Retorno inválido ou recuperação inviável DEVE falhar
-  fechado sem clamp silencioso.
+- **R-CAT-015:** Estratégias experimentais DEVEM ser claramente identificadas na documentação e UI.
+- **R-CAT-016:** Seleção automática de ativo (`AUTO`) DEVE respeitar elegibilidade, cooldown, ordem em voo e recuperação Martingale/Soros; mudança de ativo NÃO DEVE ocorrer no meio de uma sequência de recuperação.
+- **R-CAT-017:** Martingale DEVE iniciar desligado, ser opt-in e calcular recuperação a partir de proposta atual do broker, respeitando simultaneamente passos, stake máxima, exposição e orçamento de perda restante dentro do stop diário.
 
 ## 11. Testes
 
@@ -198,7 +190,7 @@ Kill da janela não equivale a “Encerrar com segurança” e não autoriza aba
 - **R-TEST-005:** Contract tests DEVEM validar cada worker contra o protocolo interno.
 - **R-TEST-006:** Testes de concorrência DEVEM demonstrar que limites de risco não são ultrapassados.
 - **R-TEST-007:** Scanner de segredos DEVE verificar logs e pacote de diagnóstico.
-- **R-TEST-008:** Conta real NÃO DEVE ser requisito para teste automatizado.
+- **R-TEST-008:** Conta real NÃO DEVE ser requisito para teste automatizado local.
 - **R-TEST-009:** Identidade/licenciamento DEVEM possuir testes de OTP/PKCE simulado, rotação/revogação, adulteração de lease, expiração e indisponibilidade do serviço.
 - **R-TEST-010:** Testes DEVEM provar que expiração/revogação de entitlement não interrompe acompanhamento/liquidação de ordens abertas.
 - **R-TEST-011:** Strategy Catalog/Arbiter/Allocator DEVEM cobrir manifesto incompatível, hash divergente, status suspenso, sinais opostos, sinais iguais e orçamento excedido.
@@ -209,19 +201,7 @@ Kill da janela não equivale a “Encerrar com segurança” e não autoriza aba
 - **R-DOC-002:** Mudança de escopo DEVE atualizar PRD e arquitetura quando aplicável.
 - **R-DOC-003:** Decisão estrutural DEVE ser registrada como decisão no worklog ou ADR futuro.
 - **R-DOC-004:** Código e documentação NÃO DEVEM prometer lucro, win rate ou ausência total de falhas.
-- **R-REL-001:** Distribuição Windows DEVE preferir onedir com instalador assinado.
+- **R-REL-001:** Distribuição Windows DEVE preferir onedir com instalador assinado ou binário portátil auto-contido.
 - **R-REL-002:** Worker incompatível DEVE ser bloqueado antes da autenticação/operação.
 - **R-REL-003:** Atualização NÃO DEVE ocorrer enquanto houver ordem ambígua.
-- **R-REL-004:** Release real exige todos os critérios do PRD para conta real.
-
-## 13. Processo de exceção
-
-Se uma regra precisar mudar:
-
-1. descreva o problema que a regra impede resolver;
-2. liste riscos novos;
-3. proponha alternativa segura;
-4. obtenha decisão explícita;
-5. atualize `AIGUARD.md`, `RULES.md`, PRD e arquitetura conforme necessário;
-6. registre a decisão no `WORKLOG.md`;
-7. adicione testes que provem a nova regra.
+- **R-REL-004:** Operação em conta real exige armamento deliberado pelo operador e verificação do Risk Ledger.
