@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tl-sprt"
+version = "0.1.0"
+description = "Sequential Probability Ratio Test (SPRT) reference implementation"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sprt*"]
+
+[tool.setuptools.package-data]
+sprt = ["py.typed"]

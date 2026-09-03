@@ -49,6 +49,37 @@ reports/
 updates/
 
 # OS specific
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and linters
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local databases and secrets
+data/
+*.db
+*.db-wal
+*.db-shm
+*.vault
+.env
+.env.*
+!.env.example
+
+# Logs and diagnostics
+logs/
+*.log
+reports/
+updates/
+
+# OS specific
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -59,3 +90,11 @@ $RECYCLE.BIN/
 .vscode/
 .idea/
 *.swp
+
+# Binaries and test artifacts
+*.exe
+*.zip
+*.png
+data/manifest.json
+!data/
+cache/

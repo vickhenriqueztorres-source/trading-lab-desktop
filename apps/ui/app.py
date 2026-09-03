@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import threading
+from decimal import Decimal
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Signal
@@ -30,6 +31,7 @@ from apps.ui.components import (
     HealthGatePillWidget,
     IqOptionStrategyConfigWidget,
     IqOptionWorkspaceWidget,
+    ManifestStrategyPanelWidget,
     OrderTableView,
     ResultsDashboardWidget,
     SettingsWorkspaceWidget,
@@ -74,8 +76,9 @@ class TradingLabMainWindow(QMainWindow):
     _TAB_OVERVIEW = 0
     _TAB_DERIV = 1
     _TAB_IQ_OPTION = 2
-    _TAB_ACTIVITY = 3
-    _TAB_SETTINGS = 4
+    _TAB_STRATEGIES = 3
+    _TAB_ACTIVITY = 4
+    _TAB_SETTINGS = 5
 
     def __init__(
         self,
@@ -100,6 +103,7 @@ class TradingLabMainWindow(QMainWindow):
         self.setStyleSheet(get_application_stylesheet())
 
         self._build_ui()
+        self._load_manifest_catalog()
         self._fit_to_available_screen()
 
         # Timer for polling IPC projection
@@ -169,6 +173,14 @@ class TradingLabMainWindow(QMainWindow):
         )
         self._iqoption_workspace.add_configuration_widget(self._iqoption_config_panel)
         self._main_tabs.addTab(self._iqoption_workspace, "")
+        self._manifest_strategy_panel = ManifestStrategyPanelWidget()
+        self._manifest_strategy_panel.strategy_selection_changed.connect(
+            self._on_manifest_strategy_toggled
+        )
+        self._manifest_strategy_panel.selection_mode_changed.connect(
+            self._on_manifest_selection_mode_changed
+        )
+        self._main_tabs.addTab(self._manifest_strategy_panel, "")
         self._main_tabs.addTab(self._create_activity_page(), "")
         self._settings_workspace = SettingsWorkspaceWidget()
         self._main_tabs.addTab(self._settings_workspace, "")
@@ -411,6 +423,7 @@ class TradingLabMainWindow(QMainWindow):
         self._main_tabs.setTabText(self._TAB_OVERVIEW, t("tabs.overview"))
         self._main_tabs.setTabText(self._TAB_DERIV, self._deriv_workspace.tab_label())
         self._main_tabs.setTabText(self._TAB_IQ_OPTION, self._iqoption_workspace.tab_label())
+        self._main_tabs.setTabText(self._TAB_STRATEGIES, "📋 " + t("tabs.strategies"))
         self._main_tabs.setTabText(self._TAB_ACTIVITY, t("tabs.activity"))
         self._main_tabs.setTabText(self._TAB_SETTINGS, t("tabs.settings"))
 
@@ -558,6 +571,151 @@ class TradingLabMainWindow(QMainWindow):
             snapshot.deriv_bot_reason,
             snapshot.deriv_bot_waiting_status,
         )
+        account_type = "real" if self._deriv_real_selected else "practice"
+        self._manifest_strategy_panel.set_account_type(account_type)
+
+    def _load_manifest_catalog(self) -> None:
+        search_paths = [
+            self._profile_dir / "cache" / "manifest.json",
+            Path("cache/manifest.json"),
+            Path("data/manifest.json"),
+            Path("research/runs/run_prod_test/candidates.json"),
+            Path("research/runs/run_202609_1788410439/candidates.json"),
+        ]
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            search_paths.insert(0, exe_dir / "cache" / "manifest.json")
+            search_paths.insert(1, exe_dir / "data" / "manifest.json")
+            search_paths.insert(2, exe_dir / "manifest.json")
+
+        for path in search_paths:
+            if path.is_file():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    account_type = "real" if self._deriv_real_selected else "practice"
+                    self._manifest_strategy_panel.set_manifest(data, account_type=account_type)
+                    return
+                except Exception:
+                    continue
+
+    def _on_manifest_strategy_toggled(self, strategy_key: str, active: bool) -> None:
+        if not strategy_key:
+            for card in self._manifest_strategy_panel._cards.values():
+                card.set_live_status("Pausada", "Desativada pelo usuário")
+            return
+
+        card = self._manifest_strategy_panel.get_card(strategy_key)
+        if card is None:
+            return
+
+        entry = card._strategy_entry
+        broker = getattr(card, "broker", "IQ Option").upper()
+
+        if not active:
+            card.set_live_status("Pausada", "Desativada pelo usuário")
+            if "IQ OPTION" in broker:
+                remaining_iq = [
+                    c for c in self._manifest_strategy_panel._cards.values()
+                    if c._is_active and "IQ OPTION" in getattr(c, "broker", "").upper()
+                ]
+                if len(remaining_iq) == 1:
+                    first = remaining_iq[0]
+                    first_e = first._strategy_entry
+                    first_asset = first_e.get("asset", "EURUSD-OTC") if isinstance(first_e, dict) else getattr(first_e, "asset", "EURUSD-OTC")
+                    self._controller.update_iqoption_risk_config(
+                        UiIqOptionRiskConfig(strategy_id=first.strategy_key, symbol=first_asset)
+                    )
+                elif len(remaining_iq) > 1:
+                    self._controller.update_iqoption_risk_config(
+                        UiIqOptionRiskConfig(strategy_id="AUTO", symbol="AUTO")
+                    )
+            return
+
+        active_iq_cards = [
+            c for c in self._manifest_strategy_panel._cards.values()
+            if c._is_active and "IQ OPTION" in getattr(c, "broker", "").upper()
+        ]
+        active_deriv_cards = [
+            c for c in self._manifest_strategy_panel._cards.values()
+            if c._is_active and "DERIV" in getattr(c, "broker", "").upper()
+        ]
+
+        if "DERIV" in broker or active_deriv_cards:
+            # Activate Deriv strategy
+            snap = self._controller.snapshot
+            current_config = snap.digit_risk_config if snap else None
+            stake = current_config.stake_minor_units if current_config else 100
+            stop = current_config.daily_stop_loss_minor_units if current_config else 1000
+            take = current_config.daily_take_profit_minor_units if current_config else 1000
+            losses = current_config.max_consecutive_losses if current_config else 3
+            cooldown = current_config.cooldown_seconds_after_loss if current_config else 30.0
+            conf = current_config.min_quantum_confidence_pct if current_config else Decimal("85.0")
+            asset = entry.get("asset", "1HZ100V") if isinstance(entry, dict) else getattr(entry, "asset", "1HZ100V")
+
+            active_deriv_ids = frozenset(
+                c.strategy_key for c in active_deriv_cards if c.strategy_key in {
+                    "tail-probability-edge", "selective-differs-edge", "parity-regime-edge"
+                }
+            )
+            mode = "multi" if len(active_deriv_ids) > 1 else "single"
+            strat_id = (
+                strategy_key
+                if strategy_key in {"tail-probability-edge", "selective-differs-edge", "parity-regime-edge"}
+                else (next(iter(active_deriv_ids)) if active_deriv_ids else "tail-probability-edge")
+            )
+            digit_config = UiDigitRiskConfig(
+                stake_minor_units=stake,
+                daily_stop_loss_minor_units=stop,
+                daily_take_profit_minor_units=take,
+                max_consecutive_losses=losses,
+                cooldown_seconds_after_loss=cooldown,
+                min_quantum_confidence_pct=conf,
+                selected_symbol=asset,
+                active_strategy_id=strat_id,
+                enabled_strategy_ids=active_deriv_ids or frozenset({strat_id}),
+                auto_select_symbol=(len(active_deriv_ids) > 1),
+                selection_mode=mode,
+            )
+            self._controller.update_digit_risk_config(digit_config)
+
+        if "IQ OPTION" in broker or active_iq_cards:
+            # Activate IQ Option strategy
+            snap = self._controller.snapshot
+            current_config = snap.iqoption_risk_config if snap else None
+            stake = current_config.stake_minor_units if current_config else 100
+            stop = current_config.daily_stop_loss_minor_units if current_config else 1000
+            take = current_config.daily_take_profit_minor_units if current_config else 1000
+            losses = current_config.max_consecutive_losses if current_config else 3
+            cooldown = current_config.cooldown_seconds_after_loss if current_config else 30
+            trades = current_config.max_daily_trades if current_config else 10
+
+            if len(active_iq_cards) > 1:
+                strat_id = "AUTO"
+                asset = "AUTO"
+            else:
+                strat_id = strategy_key
+                asset = entry.get("asset", "EURUSD-OTC") if isinstance(entry, dict) else getattr(entry, "asset", "EURUSD-OTC")
+
+            iq_config = UiIqOptionRiskConfig(
+                strategy_id=strat_id,
+                symbol=asset,
+                timeframe_seconds=60,
+                duration_seconds=60,
+                stake_minor_units=stake,
+                daily_stop_loss_minor_units=stop,
+                daily_take_profit_minor_units=take,
+                max_consecutive_losses=losses,
+                cooldown_seconds_after_loss=cooldown,
+                max_daily_trades=trades,
+            )
+            self._controller.update_iqoption_risk_config(iq_config)
+
+        for c in self._manifest_strategy_panel._cards.values():
+            if c._is_active:
+                c.set_live_status("Monitorando", "Estratégia ativa para execução")
+
+    def _on_manifest_selection_mode_changed(self, mode: str) -> None:
+        pass
 
     def _update_bot_buttons(self) -> None:
         self._btn_deriv_bot.setText(

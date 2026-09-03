@@ -52,7 +52,12 @@ class IqOptionRiskConfig:
     currency: str = "USD"
 
     def __post_init__(self) -> None:
-        if self.strategy_id != IQOPTION_RSI_STRATEGY_ID:
+        if not self.strategy_id or len(self.strategy_id) > 128:
+            raise ValueError("IQOPTION_STRATEGY_UNSUPPORTED")
+        if (
+            self.strategy_id != IQOPTION_RSI_STRATEGY_ID
+            and not self.strategy_id.startswith(("f1:", "f2:", "f3:", "f4:", "f5:"))
+        ):
             raise ValueError("IQOPTION_STRATEGY_UNSUPPORTED")
         if self.symbol not in IQOPTION_ALLOWED_SYMBOLS:
             raise ValueError("IQOPTION_SYMBOL_UNSUPPORTED")

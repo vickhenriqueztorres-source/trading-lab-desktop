@@ -1,0 +1,21 @@
+[Unit]
+Description=Strategy Lab Daily Market Data Collection
+Documentation=https://github.com/vickhenriqueztorres-source/trading-lab-desktop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=strategylab
+Group=strategylab
+EnvironmentFile=/etc/strategy-lab/env
+WorkingDirectory=/opt/strategy-lab/current/strategy-lab
+ExecStart=/opt/strategy-lab/venv/bin/python -m strategy_lab.cli collect
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=3600
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/strategy-lab /var/log/strategy-lab
+PrivateTmp=true
+NoNewPrivileges=true

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "provenance": "synthetic",
+  "asset": "EURUSD-OTC",
+  "tf_s": 60,
+  "payout_return_ratio": "0.87",
+  "candles": [
+    {"from": 1700000040, "to": 1700000100, "open": "1.07001", "max": "1.07009", "min": "1.07000", "close": "1.07007", "volume": 11},
+    {"from": 1700000100, "to": 1700000160, "open": "1.07007", "max": "1.07010", "min": "1.07001", "close": "1.07003", "volume": 7},
+    {"from": 1700000160, "to": 1700000220, "open": "1.07003", "max": "1.07008", "min": "1.07002", "close": "1.07008", "volume": 15}
+  ]
+}

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tl-primitives"
+version = "1.0.0"
+description = "Deterministic incremental indicator reference implementation"
+requires-python = ">=3.12,<3.13"
+dependencies = ["pydantic>=2,<3"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["primitives*"]
+
+[tool.setuptools.package-data]
+primitives = ["VERSION"]

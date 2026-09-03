@@ -9,6 +9,11 @@ from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
 from apps.ui.components.iqoption_strategy_panel import IqOptionStrategyConfigWidget
 from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummaryWidget
 from apps.ui.components.iqoption_workspace import IqOptionWorkspaceWidget
+from apps.ui.components.manifest_strategy_panel import (
+    ManifestStrategyPanelWidget,
+    RejectedStrategiesPanel,
+    StrategyCardWidget,
+)
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.components.results_dashboard import ResultsDashboardWidget
 from apps.ui.components.risk_gauge import GlobalRiskGaugeWidget
@@ -32,8 +37,11 @@ __all__ = [
     "IqOptionStrategyConfigWidget",
     "IqOptionStrategySummaryWidget",
     "IqOptionWorkspaceWidget",
+    "ManifestStrategyPanelWidget",
     "OrderTableView",
+    "RejectedStrategiesPanel",
     "ResultsDashboardWidget",
+    "StrategyCardWidget",
     "SyntheticStrategyConfigWidget",
     "SyntheticStrategyLiveWidget",
     "SafeStopButton",

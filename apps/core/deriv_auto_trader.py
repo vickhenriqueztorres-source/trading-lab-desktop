@@ -834,14 +834,8 @@ class DerivDigitAutoTrader:
                     )
             else:
                 self._performance_probe_remaining.pop(probe_key, None)
-            wins = [item.pnl_minor for item in samples if item.pnl_minor > 0]
-            losses = [-item.pnl_minor for item in samples if item.pnl_minor < 0]
-            if settled >= 10 and wins and losses:
-                win = Decimal(sum(wins)) / Decimal(len(wins))
-                loss = Decimal(sum(losses)) / Decimal(len(losses))
-                if win > 0 and loss > 0:
-                    payout_break_even = loss * Decimal(100) / (loss + win)
-                    raw_required = max(required_original, payout_break_even) + edge_floor
+            # R-BOT-12: Break-even ratchet removed in favor of PayoutGate and SPRT monitor.
+            # Post-loss cooldown and max consecutive losses are preserved.
         cap = required_original + config.performance_ratchet_cap_pp
         applied_required = min(raw_required, cap)
         if raw_required > cap:

@@ -1,0 +1,51 @@
+{
+  "expires_at": 1792238400,
+  "key_id": "A",
+  "manifest_version": 14,
+  "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+  "primitives_version": "1.0.0",
+  "published_at": 1788350400,
+  "research_run_id": "run_2026_09",
+  "schema_version": 1,
+  "signature": "ed25519:eY0RTJJxiecx418FRNgtPpks02F7p5KLxuNjFN6Bql5BM9i3lT0Md6n1OOlMVyL1KkXd5c3oY/ovwHA27RAfDg==",
+  "strategies": [
+    {
+      "asset": "EURUSD",
+      "display_name_pt": "Reversão de Extremo",
+      "family": "F1",
+      "hours_utc": [
+        0,
+        6
+      ],
+      "key": "f1_reversal:EURUSD:M1:00-06",
+      "management": {
+        "martingale_steps_max": 2,
+        "paroli": true,
+        "stake_pct": "1.0"
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "20",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "80",
+        "rsi_len": "7",
+        "rsi_lo": "20"
+      },
+      "status": "observation",
+      "timeframe": "M1",
+      "validated": {
+        "holdout_passed": true,
+        "n": 1240,
+        "ops_per_day": "11.2",
+        "p_hat": "0.578",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.84",
+        "result_1000_ops_stake10": "182.00",
+        "wilson_lower": "0.561",
+        "windows_passed": "8/8",
+        "worst_streak": 6
+      }
+    }
+  ]
+}

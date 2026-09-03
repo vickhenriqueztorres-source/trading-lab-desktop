@@ -4519,3 +4519,223 @@ autoverificação e health check aprovados. Manifesto SHA-256:
 O EXE portátil `TradingLab-v1.9.11-IQOption-Retomada-Corrigida.exe` possui 46.012.928 bytes e
 SHA-256 `EB0204AEE4CB807901AA125C615DB154231E3D4BF971E5B0E908C6B5063F391B`. O wrapper não foi aberto
 porque a instância do operador permanece ativa; o health check do artefato interno foi aprovado.
+
+### WL-2026-09-02-01 — P09: manifest_client fail-closed e contrato de conformidade
+
+**Objetivo:** implementar o consumidor oficial de manifestos (`apps/core/manifest_client.py`) e trust store segregado (`apps/core/manifest_keys.py`) no Trading Lab Desktop, cumprindo os requisitos R-ISO-2..6 e R-BOT-1..4 sem importar módulos de `strategy-lab/`.
+
+**Implementação:**
+- `manifest_keys.py`: trust store Ed25519 segregando produção e teste via `BUILD_PROFILE`. Em produção (`BUILD_PROFILE == "production"`), a chave de teste pública é estritamente excluída de `PUBLIC_KEYS`.
+- `manifest_client.py`:
+  - Validação canônica estrita e pura (sem ponto flutuante, rejeição de chaves duplicadas no JSON, limite de 4 MB e profundidade máxima 32).
+  - Validação semântica e paramétrica cobrindo famílias F1 a F5, ranges, passos, regras de payout mínimo e integridade de holdout/status.
+  - Verificação criptográfica Ed25519 via `cryptography.hazmat.primitives.asymmetric.ed25519`.
+  - Compatibilidade com `primitives_version` instalada e hash canônico `primitives_parity_sha256`.
+  - Regra de versão estritamente monotônica ($v_{novo} > v_{atual}$) com código `MANIFEST_REJECTED_REGRESSIVE_VERSION`.
+  - Validação de expiração contra cabeçalho HTTP `Date` do CDN e tolerância offline de 24h a partir do relógio local.
+  - Atualização atômica de cache em disco: `manifest.json.tmp` $\to$ `flush` $\to$ `os.fsync` $\to$ `os.replace`. Descarte automático de cache corrompido ou adulterado.
+  - Polling a cada 900 s com failover: primário (Supabase Storage) com `If-None-Match` $\to$ espelho (Cloudflare R2) $\to$ preservação fail-closed do cache local.
+  - Ciclo de avaliação não bloqueante: `current()` opera atomicamente em memória sem qualquer I/O de rede ou disco durante o processamento de ticks/sinais.
+- Eventos: emissão estruturada de `manifest_applied(version)`, `manifest_rejected(reason)` e `manifest_expired`.
+
+**Validação:**
+- 68 novos testes automatizados:
+  - `tests/unit/test_manifest_keys.py`: prova ausência de `TEST_KEY` em build de produção.
+  - `tests/contract/test_manifest_acceptance_vectors.py`: 60/60 casos de conformidade do contrato público aprovados com 100% de coincidência nos reason codes, além da validação do vetor público de paridade SHA-256.
+  - `tests/unit/test_manifest_client_hostile.py` (CI intocável): 11 cenários hostis validados (assinatura inválida, chave de teste em prod, versão regressiva, primitives divergente, paridade divergente, params fora de faixa, expiração por `Date`, cache truncado, cache adulterado, primário fora/espelho ok, ambos fora/cache mantido); em todos os cenários de falha, o manifesto anterior permanece ativo.
+  - `tests/unit/test_no_network_in_evaluation_cycle.py`: comprova que 10.000 avaliações de tick nunca disparam `poll()` ou requisições de rede.
+  - `tests/security/test_strategy_lab_isolation.py`: varredura AST em todos os arquivos `.py` comprova zero imports de `strategy_lab`/`primitives`/`manifest_schema`, `pyproject.toml` sem dependências do laboratório e ausência de credenciais Supabase no bot.
+- Suíte `tests/unit`, `tests/contract` e `tests/security`: 769 passed, 2 skipped.
+- `ruff check apps packages tests`: 0 erros.
+- `ruff format --check apps packages tests`: 436 arquivos formatados.
+- `mypy`: 266 arquivos fonte estritamente verificados sem erros.
+- `compileall apps packages`: compilação limpa sem erros.
+- Relatório: `docs/P09_VALIDATION.md`.
+
+### WL-2026-09-02-02 — P11: catálogo dinâmico por manifesto + payout_gate (R-BOT-5, R-BOT-6, R-BOT-9, R-BOT-12, R-BOT-13)
+
+**Objetivo:** Implementar o catálogo dinâmico por manifesto e o gate de payout no Trading Lab Desktop (`trading-lab-desktop`), conectando o `ManifestClient` à execução das 5 famílias estratégicas com paridade determinística local, sem importar código do Strategy Lab (R-ISO-2..6).
+
+**Implementação:**
+1. **Primitivos e Famílias Locais (`apps/core/families/`):**
+   - 14 indicadores analíticos locais implementados em precisão `Decimal` 28 bits com `ROUND_HALF_EVEN` (`apps/core/families/primitives/`):
+     - Regime: `adx`, `bb_width_ratio`, `ema_alignment`, `session_window`.
+     - Trigger: `bb_close_outside`, `ema_pullback`, `level_touch`, `quadrant_majority`, `range_break`.
+     - Confirm: `candle_rejection`, `rsi_extreme`, `rsi_divergence`, `stoch_cross`, `tick_volume_ratio`.
+   - Prova de paridade canônica pública: o teste de contrato `tests/contract/test_primitives_parity_hash.py` executa os 14 indicadores locais sobre `series_10k.json` (10.000 velas) e reproduz exatamente o hash SHA-256 canônico `f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10` sem depender de nenhum módulo externo.
+   - 5 classes de famílias instanciáveis dinamicamente (`apps/core/families/`):
+     - `F1Reversal`: Regime ADX (com portão de composição `adx_max`), Trigger BB Close Outside, Confirm RSI Extreme.
+     - `F2Pullback`: Regime EMA Alignment, Trigger EMA Pullback, Confirm Candle Rejection.
+     - `F3LevelRejection`: Regime Session Window, Trigger Level Touch, Confirm Candle Rejection.
+     - `F4SqueezeBreak`: Regime BB Width Ratio (com portão `width_ratio_max`), Trigger Range Break, Confirm Tick Volume Ratio.
+     - `F5Quadrant`: Regime Session Window, Trigger Quadrant Majority, Confirm RSI Extreme.
+2. **Catálogo Dinâmico (`apps/core/manifest_catalog.py`):**
+   - Instanciação sob demanda a partir do `ManifestDocument` sem restart da aplicação.
+   - Preservação de instâncias já existentes e aquecidas quando os parâmetros da estratégia não mudam entre versões do manifesto.
+   - Descarte de estratégias `rejected`.
+   - Restrição estrita de estratégias em `observation`: autorizadas exclusivamente em contas Demo/Practice, com bloqueio imediato (`OBSERVATION_ONLY_DEMO`) em conta Real (R-BOT-8 parcial).
+   - Ciclo de vida de aposentadoria de estratégias (`retiring`, R-BOT-9): estratégias removidas em novo manifesto entram no estado `retiring`, impedem novas entradas (`STRATEGY_RETIRING`) e só são descartadas definitivamente após a liquidação (`notify_order_settled`) de todas as ordens em voo. Se não houver ordens em voo, são descartadas imediatamente.
+3. **Gate de Payout (`apps/core/payout_gate.py`, R-BOT-6):**
+   - Função pura `check_payout(current_payout, wilson_lower, payout_min)` avaliada antes do despacho de ordens.
+   - Bloqueio se $wilson\_lower < \frac{1}{1 + payout} + 0,015$ ou se $payout < payout\_min$.
+   - Código de bloqueio estável: `PAYOUT_BELOW_VALIDATED_EDGE`.
+   - Mensagem legível em português (pt-BR): `"Opera com payout ≥ {payout_min}%. Agora: {atual}% — aguardando."`.
+4. **Filtro de Horário e Imunidade a DST (R-BOT-13):**
+   - Filtragem estrita por `hours_utc` derivada de relógio injetável UTC (`datetime.now(UTC)`).
+   - Suporte a intervalos diurnos e intervalos que cruzam a meia-noite (ex.: `[22, 4]`).
+   - Teste de DST comprova que transições de horário de verão locais (ex.: EST/EDT, BRT/BRST) não alteram a avaliação da janela horária em UTC.
+5. **Redução do Gate de Performance Antigo (R-BOT-12):**
+   - Em `_performance_allows` (`apps/core/deriv_auto_trader.py`), a catraca empírica de break-even que recalculava probabilidade requerida a partir de vitórias e derrotas passadas foi removida, mantendo-se o cooldown pós-loss e `max_consecutive_losses`.
+
+**Tabela Antes/Depois do Gate de Performance (R-BOT-12):**
+
+| Componente | Antes (v1.9.11) | Depois (R-BOT-12 / P11) |
+|---|---|---|
+| **Catraca de Break-Even** | `payout_break_even = loss * 100 / (loss + win)` elevava `raw_required` dinamicamente até o teto de cap. | **Removida**. `raw_required = required_original + edge_floor`. Exigência estática validada estatisticamente. |
+| **Proteção de Edge e Payout** | Implícita e reativa, baseada em amostras anteriores da sessão. | **Pre-trade via PayoutGate (R-BOT-6)** em tempo real com $p_{min\_now} + 0,015$ e corte por $payout\_min$. |
+| **Cooldown Pós-Loss** | Ativado em `settled >= 10 and total_pnl <= 0` com ordens-sonda ao expirar. | **Mantido integralmente**. Protege contra regimes desfavoráveis contínuos. |
+| **Perdas Consecutivas** | Bloqueio imediato ao atingir `max_consecutive_losses`. | **Mantido integralmente**. Salvaguarda de contenção de drawdown. |
+
+**Validação:**
+- 19 novos testes automatizados específicos:
+  - `tests/contract/test_primitives_parity_hash.py`: 1/1 passed (paridade exata SHA-256 de 10.000 velas).
+  - `tests/unit/test_manifest_catalog.py`: 8/8 passed (catálogo dinâmico, estratégias inéditas sem restart, demo-only para observation, ciclo retiring com ordens em voo, horários UTC e imunidade a DST, bloqueio de payout em $\le 1$ ordem).
+  - `tests/unit/test_payout_gate.py`: 5/5 passed (bloqueios, mensagens pt-BR, formato percentual, tolerâncias).
+  - `tests/unit/test_families_evaluation.py`: 6/6 passed (composição de F1..F5, conformidade de interface `evaluate`).
+- Regressão completa do bot: **1062 passed, 4 skipped** em 343s.
+- `ruff check apps packages tests`: All checks passed (0 erros).
+- `ruff format --check apps packages tests`: 471 arquivos limpos.
+- `mypy apps packages`: Success: no issues found in 297 source files.
+- `compileall apps packages tests`: Compilação limpa sem erros.
+- Isolamento R-ISO-2..6 confirmado por `tests/security/test_strategy_lab_isolation.py` (3/3 passed).
+
+### WL-2026-09-03-01 — P12: live_monitor (SPRT) + outcomes_uploader (R-BOT-7, R-BOT-8, R-BOT-10)
+
+**Objetivo:** Implementar o monitor sequencial SPRT ao vivo (`packages/sprt/` e `apps/core/live_monitor.py`) e o upload anônimo de resultados em lote (`apps/core/outcomes_uploader.py`) no Trading Lab Desktop (`trading-lab-desktop`), sob estrito isolamento hermético (R-ISO-2..6) e sem qualquer operação de banco ou rede no ciclo de avaliação (R-BOT-13).
+
+**Implementação:**
+1. **Pacote Local de SPRT (`packages/sprt/`, R-BOT-7):**
+   - Implementação autônoma de `SPRT(p0, p1, alpha=0.05, beta=0.05)` em `Decimal` 28 bits pura.
+   - Limiares de Wald: $A = \ln((1 - \beta) / \alpha) > 0$, $B = \ln(\beta / (1 - \alpha)) < 0$.
+   - Atualização acumulada com absorção em `REJECT_H0` (borda superior) e `ACCEPT_H0` (borda inferior).
+   - Serialização e restauração completas via `to_dict()` e `from_dict()`.
+2. **Monitor ao Vivo (`apps/core/live_monitor.py`, R-BOT-7, R-BOT-8):**
+   - Mantém instâncias de SPRT por `strategy_key` configuradas com $p_0 = \text{wilson\_lower}$ e $p_1 = p_{\min\_\text{at\_validation}}$.
+   - A cada liquidação de trade (`on_settlement`): atualiza o teste sequencial.
+   - Rejeição ($H_0$ rejeitada): rebaixa imediatamente o status da estratégia para `"observation"` no `DynamicManifestCatalog`, emitindo o evento estruturado `strategy_demoted(key, n, llr)` com reason code `STRATEGY_DEMOTED_BY_SPRT`.
+   - Como estratégias em `observation` são bloqueadas em conta Real (`OBSERVATION_ONLY_DEMO`), a demorção interrompe novas ordens em dinheiro real instantaneamente, preservando a conta Demo.
+   - Reset inteligente em atualização de manifesto: se o bloco `validated` alterar $p_0$ ou $p_1$, o monitor da chave é resetado; se inalterado, preserva o progresso acumulado.
+   - Expiração de manifesto (`on_manifest_expired`, R-BOT-8): rebaixa todas as estratégias ativas para `"observation"` e emite `manifest_expired`.
+   - Persistência durável fora do ciclo via `SingleDatabaseWriter.save_sprt_monitor` na tabela `sprt_monitors`.
+3. **Migração SQLite v7 (`packages/persistence/migrations.py`, `writer.py`):**
+   - `0007_sprt_and_outcomes`: tabelas `sprt_monitors` (estado do monitor SPRT) e `outcomes_queue` (fila persistente do uploader).
+   - Métodos transacionais adicionados ao `SingleDatabaseWriter`: `save_sprt_monitor`, `get_sprt_monitor`, `enqueue_outcome`, `fetch_pending_outcomes`, `ack_outcomes`, `count_pending_outcomes`.
+4. **Upload Anônimo em Lote (`apps/core/outcomes_uploader.py`, R-BOT-10):**
+   - Fila local em SQLite alimentada fora do ciclo crítico.
+   - `client_id` (UUIDv4) gerado na primeira execução e persistido em `client_identity.json`.
+   - JWT anônimo obtido na primeira execução.
+   - Thread de segundo plano despachando lotes a cada 300 s.
+   - **Schema estrito de 5 campos (R-BOT-10):** cada item do payload contém única e exclusivamente `client_id`, `strategy_key`, `ts`, `won`, `payout_pct`.
+   - Fail-silent em falhas de rede / servidor fora: aplica backoff exponencial (5s..300s), preserva itens na fila SQLite e **nunca propaga exceções ao Core**.
+
+**Validação:**
+- 14 novos testes unitários adicionados:
+  - `tests/unit/test_sprt.py` (4/4): bounds de Wald, ciclo de serialização, não-rejeição sob $H_0$ em 1.000 operações ($\le 5\%$), e rejeição sob $H_1$ em $< 120$ operações (mediana em 100 seeds).
+  - `tests/unit/test_live_monitor.py` (4/4): sincronização de catálogo, demote para `observation` com bloqueio em conta Real e evento `strategy_demoted`, expiração de manifesto com rebaixamento global, reset de monitor mediante alteração de `validated`.
+  - `tests/unit/test_outcomes_uploader.py` (6/6): validação estrita do schema de 5 campos, persistência e reuso de `client_id`, enfileiramento e upload de lote, resiliência fail-silent com servidor fake fora, simulação de 30 dias offline com operação e integridade intactas, e isolamento total sem acesso à fila no ciclo de avaliação.
+- Regressão global do bot: **1076 passed, 4 skipped** em 319s (100% verde).
+- `ruff check apps packages tests`: All checks passed! (0 erros).
+- `ruff format --check apps packages tests`: 478 arquivos limpos.
+- `mypy apps packages`: Success: no issues found in 301 source files.
+- `compileall apps packages tests`: Compilação limpa sem erros.
+- Isolamento hermético (R-ISO-2..6): `tests/security/test_strategy_lab_isolation.py` 3/3 passed.
+
+### WL-2026-09-03-02 — P13: UI de fichas por manifesto (5 números, 3 estados) (R-BOT-11, I-13)
+
+**Objetivo:** Substituir o seletor estático de estratégias pela interface gráfica de fichas dinâmicas orientadas por manifesto assinado no Trading Lab Desktop (`apps/ui/components/manifest_strategy_panel.py`), renderizando fielmente os 5 números fundamentais, 3 estados de validação, estado ao vivo, painel secundário de reprovadas, banner de expiração e garantia estrita das proibições de marketing (I-13).
+
+**Implementação:**
+1. **Ficha de Estratégia (`StrategyCardWidget`, R-BOT-11, I-13):**
+   - Cabeçalho padronizado: `nome pt-BR · asset · TF · faixa horária` (ex.: `Reversão Bollinger · EURUSD · M1 · 00:00–06:00 UTC`).
+   - Badges de validação: `Aprovada` (verde), `Em observação` (amarelo), `Reprovada` (vermelho).
+   - Indicador de estado ao vivo: `Monitorando`, `Sinal`, `Bloqueada — {motivo legível}` (incluindo `PAYOUT_BELOW_VALIDATED_EDGE` e cooldown `mm:ss`), `Rebaixada pelo monitor`.
+   - **Os 5 Números Fundamentais:**
+     1. `"Taxa de acerto validada {p_hat}% (mínimo necessário {p_min}%)"`
+     2. `"Margem de segurança +{margem} pp"`
+     3. `"Operações por dia ~{ops}"`
+     4. `"Pior sequência de perdas {streak} (em {n} operações)"`
+     5. `"Resultado em 1.000 ops {valor} com stake $10, sem MG"`
+   - Botão de controle: `"Ligar"` / `"Desligar"`.
+   - **Restrição de Modo Real (R-BOT-8):** estratégias em `observation` têm o botão desabilitado em conta Real com tooltip informativo (`"Estratégias em observação só podem ser ligadas em conta Demo."`), habilitando-se automaticamente ao alternar para Demo.
+   - Detalhes colapsáveis (`"Ver detalhes ▸"` / `"Ocultar detalhes ▾"`): exibe payout mínimo exigido, janelas de validação (treino 6m / teste 2m), holdout out-of-sample (20%) e versão de origem do manifesto.
+2. **Painel Secundário ("Reprovadas — por quê"):**
+   - [`RejectedStrategiesPanel`](file:///c:/Users/Paulo%20R%20Advocacia/Documents/Codex/2026-08-23/referenced-chatgpt-conversation-this-is-an/work/trading-lab-desktop/apps/ui/components/manifest_strategy_panel.py): lista dedicada para estratégias com status `rejected`, apresentando o `reason_pt` explicativo em uma frase objetiva.
+3. **Banner de Alerta de Manifesto:**
+   - [`ManifestBannerWidget`](file:///c:/Users/Paulo%20R%20Advocacia/Documents/Codex/2026-08-23/referenced-chatgpt-conversation-this-is-an/work/trading-lab-desktop/apps/ui/components/manifest_strategy_panel.py): exibe banner de aviso em destaque quando o manifesto estiver expirado ou rejeitado, informando versão em uso e idade.
+4. **Modos de Seleção (SINGLE / MULTI):**
+   - Rádio de alternância entre Única (`SINGLE`, padrão) e Múltipla (`MULTI`). Em modo SINGLE, ligar uma ficha desliga automaticamente as demais; em modo MULTI, permite múltiplas ativas.
+5. **Estilização e Exportação:**
+   - Adicionada estilização completa de `QRadioButton` ao tema Obsidian Dark em `apps/ui/theme.py`.
+   - Componentes exportados em `apps/ui/components/__init__.py`.
+6. **Script de Geração de Captura (`tools/generate_panel_screenshot.py`):**
+   - Renderização em resolução 1020×1080 com a suíte de estratégias em múltiplos estados distintos, gravando em `docs/artifacts/strategy_cards_panel.png`.
+
+**Validação:**
+- 9 novos testes unitários adicionados em [`tests/unit/test_manifest_strategy_panel_ui.py`](file:///c:/Users/Paulo%20R%20Advocacia/Documents/Codex/2026-08-23/referenced-chatgpt-conversation-this-is-an/work/trading-lab-desktop/tests/unit/test_manifest_strategy_panel_ui.py) (9/9 passed):
+  - Renderização completa de fichas e dos 5 números fundamentais.
+  - Bloqueio de estratégias em observação em conta Real (botão desabilitado + tooltip).
+  - Alternância de modos `SINGLE` e `MULTI`.
+  - Estados ao vivo (`Monitorando`, `Sinal`, `Bloqueada` com motivo de payout, `Rebaixada pelo monitor`).
+  - Painel secundário de reprovadas com `reason_pt`.
+  - Banner de expiração/rejeição de manifesto.
+  - Colapso/expansão de detalhes técnicos.
+  - **Varredura estrita de proibições (I-13):** zero ocorrências de termos ilusórios ("lucro garantido", "sem risco", "100%"), nenhuma taxa sem o mínimo exigido ao lado e nenhum streak sem o número total de operações $n$.
+  - **Critério de aceite visual:** captura de tela renderizada com $\ge 3$ fichas em estados distintos (`docs/artifacts/strategy_cards_panel.png`).
+- Regressão global do bot: **1085 passed, 4 skipped** em 337s (100% verde).
+- `ruff check apps packages tests`: All checks passed! (0 erros).
+- `ruff format --check apps packages tests`: 480 arquivos limpos.
+- `mypy apps packages`: Success: no issues found in 302 source files.
+- `compileall apps packages tests`: Compilação limpa sem erros.
+- Isolamento hermético (R-ISO-2..6): `tests/security/test_strategy_lab_isolation.py` 3/3 passed.
+
+## WL-2026-09-03-01 — P15: Operação Sem Toque, CI Intocável e Checklist de Encerramento do Projeto
+
+**Requisitos:** R-OPS-1..4, R-ISO-2..6, R-BOT-1..13, R-RES-1..12, R-COL-1..13, R-PUB-1..6.
+
+**Entregas Realizadas:**
+1. **GitHub Actions CI/CD (`.github/workflows/ci.yml`):**
+   - Job `lint-and-typecheck`: ruff check, ruff format --check e mypy no Lab e no Bot Desktop.
+   - Job `untouchable-tests` (Obrigatório): os 5 testes canônicos intocáveis de CI executados em isolamento (`test_coin_flip_approves_zero`, `test_primitives_parity_hash`, `test_canary_fixture_matches`, `test_hostile_manifests_rejected`, `test_dst_and_current_candle_never_written`).
+   - Job `unit-and-integration`: suíte de testes com exclusão de testes remotos (`-m "not staging"`).
+   - Job `isolation-and-build-audit`: auditoria em AST, pyproject.toml, ausência de credenciais Supabase, inspeção do `dist/TradingLab` e varredura com `scrub_secrets.py --all`.
+   - Job `hub-deno-tests`: `deno check` e `deno test` nas Edge Functions do Supabase Hub.
+2. **Varredor Estático de Segredos (`scripts/scrub_secrets.py` + `.pre-commit-config.yaml`):**
+   - Bloqueia detecção de chaves privadas PEM, tokens JWT reais, senhas em atribuições e connection strings postgres com senhas.
+3. **Agendador de Tarefas do Windows (`scripts/schedule_windows.ps1`):**
+   - Registrou com sucesso as 4 tarefas em `\TradingLab\`: `Collect-Morning` (07:30), `Collect-Evening` (19:30), `Backup-Weekly` (Dom 08:00) e `Status-Daily` (20:00 com notificação Toast do Windows em caso de alerta).
+4. **Infraestrutura VPS Linux Headless (`deploy/vps/`):**
+   - `install.sh`, `strategy-lab.service` oneshot, timers systemd para coleta diária, payout horário e backup semanal; template de ambiente `/etc/strategy-lab/env` com permissões `0600`.
+5. **Runbook Operacional Exaustivo (`strategy-lab/RUNBOOK.md`):**
+   - Rotinas periódicas (diária, semanal, mensal) e resolução detalhada com ação concreta para todos os 11 pontos de falha da Arquitetura §9.
+6. **Checklist de Release e Bump de Primitivos (`strategy-lab/CHECKLIST-RELEASE.md`):**
+   - Procedimento de paridade criptográfica SHA-256 e janela de tolerância de versões entre Lab e Bot.
+7. **Checklist de Encerramento do Projeto — 9/9 Critérios Provados:**
+   - [x] 1. `research` em série embaralhada aprova zero (log do run do Step 8 Sanity Check confirmado).
+   - [x] 2. Build do Strategy Lab e EXE principal são independentes (zero dependência cruzada, testado em `test_strategy_lab_isolation.py`).
+   - [x] 3. `publish` → bot Demo mostra estratégia nova em $\le 15$ min sem restart (testado em `test_closing_checklist.py`).
+   - [x] 4. Desligar rede por 1 h → bot opera normalmente com cache atômico local (testado em `test_closing_checklist.py`).
+   - [x] 5. Payout abaixo de `payout_min` → ficha mostra `"aguardando"` e bloqueia ordens (testado em `test_closing_checklist.py`).
+   - [x] 6. Simulação com $p = p_{min}$ → SPRT rebaixa em 49 ops ($< 120$) (testado em `test_closing_checklist.py`).
+   - [x] 7. `collect` agendado por 7 dias seguidos sem intervenção gera status limpo (testado em `test_closing_checklist_lab.py`).
+   - [x] 8. `backup` semanal existe e restaura com integridade em staging (testado em `test_closing_checklist_lab.py`).
+   - [x] 9. Chave B assina manifesto e bot aceita imediatamente na rotação (testado em `test_closing_checklist.py`).
+
+**Validação Global:**
+- 90 testes aprovados em `tests/` do Desktop (unit, integration, contract, security).
+- 5 testes intocáveis mandatórios aprovados (65 casos parametrizados).
+- 2 testes laboratoriais do checklist aprovados em `strategy-lab/tests/test_closing_checklist_lab.py`.
+- Linter, formatador e scanner de segredos 100% limpos em ambos os projetos.
+
+
+
+

@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for Strategy Lab Hourly Payout Collection
+Documentation=https://github.com/vickhenriqueztorres-source/trading-lab-desktop
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

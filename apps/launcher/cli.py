@@ -167,6 +167,34 @@ def _exit_code_after_snapshot_state(state: LauncherLifecycleState) -> int | None
     return None
 
 
+def _notify_launcher_startup_failure(reason: str | None) -> None:
+    if os.name != "nt" or not _is_frozen_executable():
+        return
+    import ctypes
+
+    if reason == "LAUNCHER_INSTANCE_ALREADY_RUNNING":
+        msg = (
+            "O Trading Lab já está em execução em segundo plano neste computador.\n\n"
+            "Verifique o ícone na barra de tarefas ou feche a instância anterior pelo Gerenciador de Tarefas."
+        )
+        title = "Trading Lab — Já em Execução"
+    elif reason in {"RELEASE_INTEGRITY_VIOLATION", "ReleaseIntegrityViolationError"}:
+        msg = (
+            "A integridade dos arquivos do aplicativo não pôde ser confirmada.\n\n"
+            "Por favor, extraia novamente todos os arquivos do pacote ZIP original."
+        )
+        title = "Trading Lab — Verificação de Integridade"
+    else:
+        msg = f"Não foi possível inicializar o Trading Lab.\nMotivo: {reason or 'Falha na inicialização dos processos'}"
+        title = "Trading Lab — Erro de Inicialização"
+
+    try:
+        # MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
+        ctypes.windll.user32.MessageBoxW(0, msg, title, 0x00000030 | 0x00010000 | 0x00040000)
+    except Exception:
+        pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # Handle frozen executable sub-process dispatch (-m <module>)
     effective_argv = list(sys.argv[1:]) if argv is None else list(argv)
@@ -220,7 +248,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
     if not supervisor.start_all():
+        failure_reason = supervisor.failure_reason
         supervisor.stop_all()
+        _notify_launcher_startup_failure(failure_reason)
         return 2
     started = time.monotonic()
     exit_code = 0

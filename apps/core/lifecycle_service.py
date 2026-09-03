@@ -21,6 +21,7 @@ from apps.core.iqoption_connection_safety import (
     IQOptionConnectionSafetyStore,
 )
 from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
+from apps.core.manifest_catalog import DynamicManifestCatalog
 from apps.core.payout_routed_differs import (
     PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
     PayoutRoutedDiffersProposalCache,
@@ -124,6 +125,8 @@ class CoreLifecycleService:
             self._iqoption_risk_config = self._iqoption_risk_store.load()
         except ValueError:
             self._iqoption_risk_config = IqOptionRiskConfig()
+        self._manifest_catalog = DynamicManifestCatalog()
+        self._load_local_manifest_catalog()
         self._iqoption_bot_armed = False
         self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
         self._iqoption_auto_trader = IqOptionAutoTrader(
@@ -131,6 +134,7 @@ class CoreLifecycleService:
             runtime_provider=lambda: self._runtime,
             risk_config_provider=lambda: self._iqoption_risk_config,
             operator_armed=lambda: self._iqoption_bot_armed,
+            catalog_provider=lambda: self._manifest_catalog,
         )
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
@@ -316,6 +320,21 @@ class CoreLifecycleService:
             for item in runtime.reader.list_reconciliation_candidates()
         )
         self._schedule_saved_iqoption_recovery(has_iqoption_recovery=has_iqoption_recovery)
+
+    def _load_local_manifest_catalog(self) -> None:
+        import json
+        for path in (
+            self._profile_dir / "cache" / "manifest.json",
+            Path("cache/manifest.json"),
+            Path("data/manifest.json"),
+        ):
+            if path.is_file():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    self._manifest_catalog.apply_manifest(data)
+                    return
+                except Exception:
+                    continue
 
     def _schedule_saved_deriv_startup(self, *, has_deriv_recovery: bool) -> None:
         """Reconnect a saved Demo account without ever rearming or auto-selecting Real."""

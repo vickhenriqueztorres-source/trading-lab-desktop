@@ -1,0 +1,6 @@
+{"event":"core_instance_lock_acquired","fields":{},"occurred_at":"2026-09-03T05:59:21.826036+00:00","reason_code":null}
+{"event":"database_opened","fields":{"first_run":true},"occurred_at":"2026-09-03T05:59:21.829028+00:00","reason_code":null}
+{"event":"database_integrity_checked","fields":{"check_mode":"quick_check"},"occurred_at":"2026-09-03T05:59:21.873909+00:00","reason_code":null}
+{"event":"recovery_started","fields":{},"occurred_at":"2026-09-03T05:59:21.875903+00:00","reason_code":null}
+{"event":"recovery_completed","fields":{"ambiguous":0,"expired":0,"interrupted_dispatches":0,"safe_pending":0},"occurred_at":"2026-09-03T05:59:21.912450+00:00","reason_code":null}
+{"event":"worker_process_started","fields":{"process_id":15688,"worker_type":"SIMULATED"},"occurred_at":"2026-09-03T05:59:21.947825+00:00","reason_code":null}

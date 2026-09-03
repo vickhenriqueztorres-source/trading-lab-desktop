@@ -1,0 +1,516 @@
+{
+  "research_run_id": "run_202609_1788410439",
+  "total_candidates": 11,
+  "candidates": [
+    {
+      "key": "f_edge:EURUSD-OTC:M1:00-24:c76a897a",
+      "family": "F_EDGE",
+      "display_name_pt": "F_EDGE EURUSD-OTC M1",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "params": {},
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: STD_EXCEEDS_3PP",
+      "validated": {
+        "p_hat": "0.646",
+        "wilson_lower": "0.622",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.70",
+        "n": 1599,
+        "ops_per_day": "1599.0",
+        "worst_streak": 6,
+        "result_1000_ops_stake10": "1951.53",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "2.8897",
+      "margin": "0.0723",
+      "gates": [
+        {
+          "gate": "walk_forward",
+          "passed": true,
+          "reason": ""
+        },
+        {
+          "gate": "stability",
+          "passed": false,
+          "reason": "STD_EXCEEDS_3PP"
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f1:EURUSD-OTC:M5:13-16:08511eac",
+      "family": "F1",
+      "display_name_pt": "F1 EURUSD-OTC M5",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M5",
+      "hours_utc": [
+        13,
+        16
+      ],
+      "params": {
+        "adx_len": "2",
+        "bb_len": "200",
+        "bb_k": "0.5",
+        "rsi_len": "51",
+        "rsi_lo": "49",
+        "rsi_hi": "51"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: WILSON_LOWER_BELOW_THRESHOLD",
+      "validated": {
+        "p_hat": "0.501",
+        "wilson_lower": "0.471",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 1025,
+        "ops_per_day": "1025.0",
+        "worst_streak": 9,
+        "result_1000_ops_stake10": "-722.93",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "-2.5323",
+      "margin": "-0.0791",
+      "gates": [],
+      "approved": false
+    },
+    {
+      "key": "f1:EURUSD-OTC:M15:16-21:0e9970be",
+      "family": "F1",
+      "display_name_pt": "F1 EURUSD-OTC M15",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M15",
+      "hours_utc": [
+        16,
+        21
+      ],
+      "params": {
+        "adx_len": "2",
+        "bb_len": "101",
+        "bb_k": "0.5",
+        "rsi_len": "2",
+        "rsi_lo": "25",
+        "rsi_hi": "75"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: WILSON_LOWER_BELOW_THRESHOLD",
+      "validated": {
+        "p_hat": "0.510",
+        "wilson_lower": "0.461",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 394,
+        "ops_per_day": "394.0",
+        "worst_streak": 9,
+        "result_1000_ops_stake10": "-562.18",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "-1.7679",
+      "margin": "-0.0891",
+      "gates": [],
+      "approved": false
+    },
+    {
+      "key": "f2:EURUSD-OTC:M15:13-16:1438e960",
+      "family": "F2",
+      "display_name_pt": "F2 EURUSD-OTC M15",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M15",
+      "hours_utc": [
+        13,
+        16
+      ],
+      "params": {
+        "ema_short": "2",
+        "ema_medium": "76",
+        "ema_long": "152",
+        "pullback_len": "101",
+        "pullback_tolerance": "0",
+        "body_max": "0.05",
+        "wick_min": "0.9"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f1:EURUSD-OTC:M5:06-10:1e73cf8c",
+      "family": "F1",
+      "display_name_pt": "F1 EURUSD-OTC M5",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M5",
+      "hours_utc": [
+        6,
+        10
+      ],
+      "params": {
+        "adx_len": "2",
+        "bb_len": "101",
+        "bb_k": "2.7",
+        "rsi_len": "51",
+        "rsi_lo": "25",
+        "rsi_hi": "51"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: INSUFFICIENT_OUT_OF_SAMPLE_TRADES",
+      "validated": {
+        "p_hat": "0.560",
+        "wilson_lower": "0.371",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 25,
+        "ops_per_day": "25.0",
+        "worst_streak": 5,
+        "result_1000_ops_stake10": "360.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "-0.8966",
+      "margin": "-0.1793",
+      "gates": [],
+      "approved": false
+    },
+    {
+      "key": "f3:EURUSD-OTC:M15:16-21:1f04bd5a",
+      "family": "F3",
+      "display_name_pt": "F3 EURUSD-OTC M15",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M15",
+      "hours_utc": [
+        16,
+        21
+      ],
+      "params": {
+        "level_support": "500000.00000000",
+        "level_resistance": "1000000",
+        "level_tolerance": "10000",
+        "body_max": "0.40",
+        "wick_min": "0.9"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f2:EURUSD-OTC:M15:13-16:21b22587",
+      "family": "F2",
+      "display_name_pt": "F2 EURUSD-OTC M15",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M15",
+      "hours_utc": [
+        13,
+        16
+      ],
+      "params": {
+        "ema_short": "2",
+        "ema_medium": "76",
+        "ema_long": "300",
+        "pullback_len": "200",
+        "pullback_tolerance": "0",
+        "body_max": "0.8",
+        "wick_min": "0.2"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f4:EURUSD-OTC:M15:00-06:24eefae4",
+      "family": "F4",
+      "display_name_pt": "F4 EURUSD-OTC M15",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M15",
+      "hours_utc": [
+        0,
+        6
+      ],
+      "params": {
+        "bb_len": "200",
+        "bb_k": "2.7",
+        "width_median_len": "2",
+        "break_len": "2",
+        "volume_len": "2",
+        "volume_min": "2.7"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f2:EURUSD-OTC:M1:16-21:2bc31189",
+      "family": "F2",
+      "display_name_pt": "F2 EURUSD-OTC M1",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        16,
+        21
+      ],
+      "params": {
+        "ema_short": "51",
+        "ema_medium": "150",
+        "ema_long": "152",
+        "pullback_len": "200",
+        "pullback_tolerance": "0.025",
+        "body_max": "0.05",
+        "wick_min": "0.55"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f2:EURUSD-OTC:M1:00-06:49affd35",
+      "family": "F2",
+      "display_name_pt": "F2 EURUSD-OTC M1",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        6
+      ],
+      "params": {
+        "ema_short": "51",
+        "ema_medium": "76",
+        "ema_long": "300",
+        "pullback_len": "101",
+        "pullback_tolerance": "0.05",
+        "body_max": "0.40",
+        "wick_min": "0.2"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    },
+    {
+      "key": "f3:EURUSD-OTC:M15:00-24:5f089511",
+      "family": "F3",
+      "display_name_pt": "F3 EURUSD-OTC M15",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M15",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "params": {
+        "level_support": "500000.00000000",
+        "level_resistance": "1000000",
+        "level_tolerance": "5000.00000000",
+        "body_max": "0.8",
+        "wick_min": "0.9"
+      },
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    }
+  ]
+}

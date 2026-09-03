@@ -1,0 +1,47 @@
+{
+  "research_run_id": "verify_checklist_item1",
+  "total_candidates": 1,
+  "candidates": [
+    {
+      "key": "f_edge:EURUSD-OTC:M1:00-24:c76a897a",
+      "family": "F_EDGE",
+      "display_name_pt": "F_EDGE EURUSD-OTC M1",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "params": {},
+      "status": "rejected",
+      "reason_pt": "Reprovado no portão: ZERO_TRADES",
+      "validated": {
+        "p_hat": "0.000",
+        "wilson_lower": "0.000",
+        "p_min_at_validation": "0.550",
+        "payout_min": "0.95",
+        "n": 0,
+        "ops_per_day": "0.0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "-10000.00",
+        "windows_passed": "8/8",
+        "holdout_passed": false
+      },
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 2,
+        "paroli": true
+      },
+      "score": "0.0000",
+      "margin": "-0.5500",
+      "gates": [
+        {
+          "gate": "trades_count",
+          "passed": false,
+          "reason": ""
+        }
+      ],
+      "approved": false
+    }
+  ]
+}

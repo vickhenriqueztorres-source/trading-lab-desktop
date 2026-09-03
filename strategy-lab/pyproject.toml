@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strategy-lab"
+version = "0.1.0"
+description = "Isolated IQ Option strategy research laboratory"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2,<3",
+    "cryptography>=46,<47",
+    "keyring>=25,<26",
+    "ntplib>=0.4,<1",
+    "psycopg[binary]>=3,<4",
+    "polars>=1.36,<2",
+    "duckdb>=1.4,<2",
+    "numpy>=2.3,<3",
+    "pyarrow>=22,<23",
+]
+
+[project.scripts]
+strategy-lab = "strategy_lab.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["tools"]
+include = ["strategy_lab*"]
+
+[tool.setuptools.package-data]
+strategy_lab = ["py.typed"]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.17,<2", "pytest>=8,<9", "ruff>=0.15,<1", "jsonschema>=4.26,<5"]
+collect = ["requests==2.32.5", "websocket-client==1.9.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/primitives/tests", "packages/manifest_schema/tests", "tests"]
+pythonpath = ["packages/primitives", "packages/manifest_schema", "packages/sprt", "tools"]
+addopts = "-ra"
+markers = [
+    "staging: requires SUPABASE_STAGING_DB_URL and never runs against production",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["vendor", "state", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = ["packages/primitives", "packages/manifest_schema", "packages/sprt", "tools"]
+files = ["packages/primitives/primitives", "packages/manifest_schema/manifest_schema", "packages/sprt/sprt", "tools/strategy_lab"]

@@ -1,0 +1,876 @@
+{
+  "$comment": "REQUIRES manifest-policy-v1 in addition to Draft 2020-12 and Ed25519 verification. Reject if this semantic policy is unavailable; plain JSON Schema is NOT acceptance.",
+  "$defs": {
+    "Count": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "DecimalString": {
+      "maxLength": 24,
+      "minLength": 1,
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+      "type": "string"
+    },
+    "Epoch": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Family": {
+      "enum": [
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5"
+      ],
+      "type": "string"
+    },
+    "HashString": {
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+      "type": "string"
+    },
+    "Hour": {
+      "maximum": 24,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "KeyId": {
+      "enum": [
+        "A",
+        "B"
+      ],
+      "type": "string"
+    },
+    "Label": {
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[^\\x00-\\x1f]+$(?![\\s\\S])",
+      "type": "string"
+    },
+    "Management": {
+      "additionalProperties": false,
+      "properties": {
+        "martingale_steps_max": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Martingale Steps Max",
+          "type": "integer"
+        },
+        "paroli": {
+          "title": "Paroli",
+          "type": "boolean"
+        },
+        "stake_pct": {
+          "$ref": "#/$defs/DecimalString"
+        }
+      },
+      "required": [
+        "stake_pct",
+        "martingale_steps_max",
+        "paroli"
+      ],
+      "title": "Management",
+      "type": "object"
+    },
+    "StrategyEntry": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "F1"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "additionalProperties": false,
+                "properties": {
+                  "adx_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "100",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "adx_max": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "100",
+                      "min": "0",
+                      "step": "1"
+                    }
+                  },
+                  "bb_k": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "5",
+                      "min": "0.5",
+                      "step": "0.1"
+                    }
+                  },
+                  "bb_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "200",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "rsi_hi": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "99",
+                      "min": "51",
+                      "step": "1"
+                    }
+                  },
+                  "rsi_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "100",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "rsi_lo": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "49",
+                      "min": "1",
+                      "step": "1"
+                    }
+                  }
+                },
+                "required": [
+                  "adx_len",
+                  "bb_len",
+                  "bb_k",
+                  "rsi_len",
+                  "rsi_lo",
+                  "rsi_hi",
+                  "adx_max"
+                ],
+                "type": "object",
+                "x-tl-ordered-params": [
+                  [
+                    "rsi_lo",
+                    "rsi_hi"
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "F2"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "additionalProperties": false,
+                "properties": {
+                  "body_max": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "0.8",
+                      "min": "0.05",
+                      "step": "0.05"
+                    }
+                  },
+                  "ema_long": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "300",
+                      "min": "4",
+                      "step": "1"
+                    }
+                  },
+                  "ema_medium": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "150",
+                      "min": "3",
+                      "step": "1"
+                    }
+                  },
+                  "ema_short": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "100",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "pullback_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "200",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "pullback_tolerance": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "0.05",
+                      "min": "0",
+                      "step": "0.001"
+                    }
+                  },
+                  "wick_min": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "0.9",
+                      "min": "0.2",
+                      "step": "0.05"
+                    }
+                  }
+                },
+                "required": [
+                  "ema_short",
+                  "ema_medium",
+                  "ema_long",
+                  "pullback_len",
+                  "pullback_tolerance",
+                  "body_max",
+                  "wick_min"
+                ],
+                "type": "object",
+                "x-tl-ordered-params": [
+                  [
+                    "ema_short",
+                    "ema_medium"
+                  ],
+                  [
+                    "ema_medium",
+                    "ema_long"
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "F3"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "additionalProperties": false,
+                "properties": {
+                  "body_max": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "0.8",
+                      "min": "0.05",
+                      "step": "0.05"
+                    }
+                  },
+                  "level_resistance": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "1000000",
+                      "min": "0.00000001",
+                      "step": "0.00000001"
+                    }
+                  },
+                  "level_support": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "1000000",
+                      "min": "0.00000001",
+                      "step": "0.00000001"
+                    }
+                  },
+                  "level_tolerance": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "10000",
+                      "min": "0",
+                      "step": "0.00000001"
+                    }
+                  },
+                  "wick_min": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "0.9",
+                      "min": "0.2",
+                      "step": "0.05"
+                    }
+                  }
+                },
+                "required": [
+                  "level_support",
+                  "level_resistance",
+                  "level_tolerance",
+                  "body_max",
+                  "wick_min"
+                ],
+                "type": "object",
+                "x-tl-ordered-params": [
+                  [
+                    "level_support",
+                    "level_resistance"
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "F4"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "additionalProperties": false,
+                "properties": {
+                  "bb_k": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "5",
+                      "min": "0.5",
+                      "step": "0.1"
+                    }
+                  },
+                  "bb_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "200",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "break_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "200",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "volume_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "200",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "volume_min": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "5",
+                      "min": "0.5",
+                      "step": "0.1"
+                    }
+                  },
+                  "width_median_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "200",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "width_ratio_max": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "1",
+                      "min": "0.1",
+                      "step": "0.1"
+                    }
+                  }
+                },
+                "required": [
+                  "bb_len",
+                  "bb_k",
+                  "width_median_len",
+                  "break_len",
+                  "volume_len",
+                  "volume_min",
+                  "width_ratio_max"
+                ],
+                "type": "object",
+                "x-tl-ordered-params": []
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "F5"
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "additionalProperties": false,
+                "properties": {
+                  "quadrant_window": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "21",
+                      "min": "3",
+                      "step": "2"
+                    }
+                  },
+                  "rsi_hi": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "99",
+                      "min": "51",
+                      "step": "1"
+                    }
+                  },
+                  "rsi_len": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "int",
+                      "max": "100",
+                      "min": "2",
+                      "step": "1"
+                    }
+                  },
+                  "rsi_lo": {
+                    "maxLength": 24,
+                    "minLength": 1,
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$(?![\\s\\S])",
+                    "type": "string",
+                    "x-tl-decimal-range": {
+                      "kind": "decimal",
+                      "max": "49",
+                      "min": "1",
+                      "step": "1"
+                    }
+                  }
+                },
+                "required": [
+                  "quadrant_window",
+                  "rsi_len",
+                  "rsi_lo",
+                  "rsi_hi"
+                ],
+                "type": "object",
+                "x-tl-ordered-params": [
+                  [
+                    "rsi_lo",
+                    "rsi_hi"
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason_pt": {
+                "pattern": "\\S",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason_pt"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "approved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "validated": {
+                "properties": {
+                  "holdout_passed": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "asset": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[A-Z0-9]+(?:-OTC)?$(?![\\s\\S])",
+          "title": "Asset",
+          "type": "string"
+        },
+        "display_name_pt": {
+          "$ref": "#/$defs/Label"
+        },
+        "family": {
+          "$ref": "#/$defs/Family"
+        },
+        "hours_utc": {
+          "items": {
+            "$ref": "#/$defs/Hour"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Hours Utc",
+          "type": "array"
+        },
+        "key": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_:.-]+$(?![\\s\\S])",
+          "title": "Key",
+          "type": "string"
+        },
+        "management": {
+          "$ref": "#/$defs/Management"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          },
+          "title": "Params",
+          "type": "object"
+        },
+        "reason_pt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "approved",
+            "observation",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "timeframe": {
+          "enum": [
+            "M1",
+            "M5",
+            "M15"
+          ],
+          "title": "Timeframe",
+          "type": "string"
+        },
+        "validated": {
+          "$ref": "#/$defs/Validated"
+        }
+      },
+      "required": [
+        "key",
+        "family",
+        "display_name_pt",
+        "asset",
+        "timeframe",
+        "hours_utc",
+        "params",
+        "validated",
+        "status",
+        "management"
+      ],
+      "title": "StrategyEntry",
+      "type": "object"
+    },
+    "Validated": {
+      "additionalProperties": false,
+      "properties": {
+        "holdout_passed": {
+          "title": "Holdout Passed",
+          "type": "boolean"
+        },
+        "n": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "title": "N",
+          "type": "integer"
+        },
+        "ops_per_day": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "p_hat": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "p_min_at_validation": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "payout_min": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "result_1000_ops_stake10": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "wilson_lower": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "windows_passed": {
+          "maxLength": 13,
+          "pattern": "^[0-9]{1,6}/[1-9][0-9]{0,5}$(?![\\s\\S])",
+          "title": "Windows Passed",
+          "type": "string"
+        },
+        "worst_streak": {
+          "$ref": "#/$defs/Count"
+        }
+      },
+      "required": [
+        "p_hat",
+        "wilson_lower",
+        "p_min_at_validation",
+        "payout_min",
+        "n",
+        "ops_per_day",
+        "worst_streak",
+        "result_1000_ops_stake10",
+        "windows_passed",
+        "holdout_passed"
+      ],
+      "title": "Validated",
+      "type": "object"
+    }
+  },
+  "$id": "urn:strategy-lab:manifest:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "expires_at": {
+      "$ref": "#/$defs/Epoch"
+    },
+    "key_id": {
+      "$ref": "#/$defs/KeyId"
+    },
+    "manifest_version": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "title": "Manifest Version",
+      "type": "integer"
+    },
+    "primitives_parity_sha256": {
+      "$ref": "#/$defs/HashString"
+    },
+    "primitives_version": {
+      "maxLength": 32,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$(?![\\s\\S])",
+      "title": "Primitives Version",
+      "type": "string"
+    },
+    "published_at": {
+      "$ref": "#/$defs/Epoch"
+    },
+    "research_run_id": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$(?![\\s\\S])",
+      "title": "Research Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "signature": {
+      "default": "",
+      "maxLength": 96,
+      "pattern": "^(?:|ed25519:[A-Za-z0-9+/]{86}==)$(?![\\s\\S])",
+      "title": "Signature",
+      "type": "string"
+    },
+    "strategies": {
+      "items": {
+        "$ref": "#/$defs/StrategyEntry"
+      },
+      "maxItems": 5000,
+      "title": "Strategies",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "manifest_version",
+    "key_id",
+    "published_at",
+    "expires_at",
+    "primitives_version",
+    "primitives_parity_sha256",
+    "research_run_id",
+    "strategies"
+  ],
+  "title": "Manifest",
+  "type": "object",
+  "x-tl-policy-v1": "urn:strategy-lab:manifest-policy:v1"
+}

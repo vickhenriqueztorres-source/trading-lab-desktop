@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for Strategy Lab Daily Market Data Collection (07:30 and 19:30 UTC)
+Documentation=https://github.com/vickhenriqueztorres-source/trading-lab-desktop
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 UTC
+OnCalendar=*-*-* 19:30:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

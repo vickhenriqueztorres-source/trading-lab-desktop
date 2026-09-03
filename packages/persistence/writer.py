@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -2144,6 +2144,123 @@ class SingleDatabaseWriter:
                 RiskReservationState.ACTIVE.value,
             ),
         )
+
+    def save_sprt_monitor(
+        self,
+        strategy_key: str,
+        p0: str,
+        p1: str,
+        alpha: str,
+        beta: str,
+        llr: str,
+        n: int,
+        wins: int,
+        decision: str,
+        status: str,
+        updated_at: str,
+    ) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO sprt_monitors (
+                    strategy_key, p0, p1, alpha, beta, llr, n, wins, decision, status, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(strategy_key) DO UPDATE SET
+                    p0 = excluded.p0,
+                    p1 = excluded.p1,
+                    alpha = excluded.alpha,
+                    beta = excluded.beta,
+                    llr = excluded.llr,
+                    n = excluded.n,
+                    wins = excluded.wins,
+                    decision = excluded.decision,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    strategy_key,
+                    p0,
+                    p1,
+                    alpha,
+                    beta,
+                    llr,
+                    n,
+                    wins,
+                    decision,
+                    status,
+                    updated_at,
+                ),
+            )
+            self._connection.commit()
+
+    def get_sprt_monitor(self, strategy_key: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM sprt_monitors WHERE strategy_key = ?",
+                (strategy_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            return dict(row)
+
+    def list_sprt_monitors(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM sprt_monitors ORDER BY strategy_key ASC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def enqueue_outcome(
+        self,
+        strategy_key: str,
+        ts: int,
+        won: bool,
+        payout_pct: str,
+        created_at: str,
+    ) -> int:
+        with self._lock:
+            cur = self._connection.execute(
+                """
+                INSERT INTO outcomes_queue (
+                    strategy_key, ts, won, payout_pct, created_at, status
+                ) VALUES (?, ?, ?, ?, ?, 'pending')
+                """,
+                (strategy_key, ts, 1 if won else 0, str(payout_pct), created_at),
+            )
+            self._connection.commit()
+            return int(cur.lastrowid or 0)
+
+    def fetch_pending_outcomes(self, limit: int = 500) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT id, strategy_key, ts, won, payout_pct, created_at
+                FROM outcomes_queue
+                WHERE status = 'pending'
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def ack_outcomes(self, ids: Sequence[int]) -> None:
+        if not ids:
+            return
+        with self._lock:
+            placeholders = ",".join("?" for _ in ids)
+            self._connection.execute(
+                f"DELETE FROM outcomes_queue WHERE id IN ({placeholders})",
+                tuple(ids),
+            )
+            self._connection.commit()
+
+    def count_pending_outcomes(self) -> int:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS cnt FROM outcomes_queue WHERE status = 'pending'"
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
 
 
 class FinancialUnitOfWork:

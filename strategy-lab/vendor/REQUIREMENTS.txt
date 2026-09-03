@@ -1,0 +1,10 @@
+# R-VEND-1: runtime do snapshot IQ Option com patches de segurança P03.
+# Fora do snapshot: REQUIREMENTS.txt e requirements.txt colidem no Windows.
+# Fork escolhido: victalejo/iqoptionapi; somente dependências sync.
+# Extras aio/dev upstream não são usados. Biblioteca iqoptionapi sempre local.
+requests==2.32.5
+websocket-client==1.9.2
+certifi==2026.7.22
+charset-normalizer==3.5.1
+idna==3.19
+urllib3==2.7.0

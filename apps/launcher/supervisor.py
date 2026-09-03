@@ -127,11 +127,38 @@ class ProcessTreeSupervisor:
             processes = self._convert(status.processes)
             self._last_processes = processes
             healthy = self._is_healthy(status, processes)
-            self._state = (
-                LauncherLifecycleState.HEALTHY if healthy else LauncherLifecycleState.DEGRADED
-            )
-            return healthy
-        except Exception:
+            if not healthy:
+                deadline = self._monotonic() + 6.0
+                while self._monotonic() < deadline and not healthy:
+                    time.sleep(0.25)
+                    try:
+                        status = controller.status()
+                        processes = self._convert(status.processes)
+                        self._last_processes = processes
+                        healthy = self._is_healthy(status, processes)
+                    except Exception:
+                        break
+            if healthy:
+                self._state = LauncherLifecycleState.HEALTHY
+                return True
+            if self._is_essential_healthy(status, processes):
+                self._state = LauncherLifecycleState.DEGRADED
+                return True
+            missing = [
+                f"{role.value} ({processes[role].state})"
+                for role in (
+                    ManagedProcessRole.AUTH_AGENT,
+                    ManagedProcessRole.CORE,
+                    ManagedProcessRole.SIMULATED_WORKER,
+                    ManagedProcessRole.UI,
+                )
+                if not (processes[role].is_alive and processes[role].state == "READY")
+            ]
+            self._failure_reason = "Falha em componentes essenciais: " + ", ".join(missing)
+            self._state = LauncherLifecycleState.FAILED
+            return False
+        except Exception as exc:
+            self._failure_reason = getattr(exc, "reason_code", type(exc).__name__)
             self._fail_safe_cleanup()
             self._state = LauncherLifecycleState.FAILED
             return False
@@ -282,6 +309,21 @@ class ProcessTreeSupervisor:
             required.add(ManagedProcessRole.IQOPTION_WORKER)
         return status.core_state == "READY" and all(
             processes[role].is_alive and processes[role].state == "READY" for role in required
+        )
+
+    def _is_essential_healthy(
+        self,
+        status: CoreLifecycleStatusResponse,
+        processes: Mapping[ManagedProcessRole, ProcessStatusSnapshot],
+    ) -> bool:
+        essential = {
+            ManagedProcessRole.AUTH_AGENT,
+            ManagedProcessRole.CORE,
+            ManagedProcessRole.SIMULATED_WORKER,
+            ManagedProcessRole.UI,
+        }
+        return status.core_state == "READY" and all(
+            processes[role].is_alive and processes[role].state == "READY" for role in essential
         )
 
     @staticmethod

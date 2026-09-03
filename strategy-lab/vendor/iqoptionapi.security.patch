@@ -1,0 +1,81 @@
+--- a/__init__.py
++++ b/__init__.py
+@@ -9,9 +9,11 @@
+     #try to fix this problem
+     #logger.setLevel(logging.DEBUG)
+     logger.addHandler(logging.NullHandler())
++    logger.propagate = False  # P03: raw upstream records must never reach app logs.
+ 
+     websocket_logger = logging.getLogger("websocket")
+-    websocket_logger.setLevel(logging.DEBUG)
++    websocket_logger.setLevel(logging.CRITICAL)
+     websocket_logger.addHandler(logging.NullHandler())
++    websocket_logger.propagate = False
+ 
+ _prepare_logging()
+--- a/api.py
++++ b/api.py
+@@ -79,7 +79,7 @@
+ # InsecureRequestWarning: Unverified HTTPS request is being made.
+ # Adding certificate verification is strongly advised.
+ # See: https://urllib3.readthedocs.org/en/latest/security.html
+-requests.packages.urllib3.disable_warnings()  # pylint: disable=no-member
++# Strategy Lab P03: never globally suppress certificate validation warnings.
+ 
+ 
+ class IQOptionAPI(object):   
+@@ -113,7 +113,7 @@
+             self.session.auth=auth
+          
+ 
+-        self.session.verify = False
++        self.session.verify = True
+         self.session.trust_env = False
+         self.username = username
+         self.password = password
+@@ -862,7 +862,7 @@
+         
+    
+         self.websocket_thread = threading.Thread(target=self.websocket.run_forever, kwargs={'sslopt': {
+-                                                 "check_hostname": False, "cert_reqs": ssl.CERT_NONE, "ca_certs": "cacert.pem"},"http_proxy_host":self.http_proxy_host,"http_proxy_port":self.http_proxy_port,"http_proxy_auth":self.http_proxy_auth})  # for fix pyinstall error: cafile, capath and cadata cannot be all omitted
++                                                 "check_hostname": True, "cert_reqs": ssl.CERT_REQUIRED},"http_proxy_host":self.http_proxy_host,"http_proxy_port":self.http_proxy_port,"http_proxy_auth":self.http_proxy_auth})
+         self.websocket_thread.daemon = True
+         self.websocket_thread.start()
+         while True:
+--- a/ws/objects/timesync.py
++++ b/ws/objects/timesync.py
+@@ -12,7 +12,7 @@
+     def __init__(self):
+         super(TimeSync, self).__init__()
+         self.__name = "timeSync"
+-        self.__server_timestamp = time.time()
++        self.__server_timestamp = None  # P03: no invented broker clock.
+         self.__expiration_time = 1
+ 
+     @property
+@@ -21,7 +21,9 @@
+ 
+         :returns: The server timestamp.
+         """
+-        return self.__server_timestamp / 1000
++        if self.__server_timestamp is None:
++            return None
++        return self.__server_timestamp // 1000
+ 
+     @server_timestamp.setter
+     def server_timestamp(self, timestamp):
+@@ -34,7 +36,7 @@
+ 
+         :returns: The server datetime.
+         """
+-        return datetime.datetime.fromtimestamp(self.server_timestamp)
++        return datetime.datetime.fromtimestamp(self.server_timestamp, tz=datetime.timezone.utc)
+ 
+     @property
+     def expiration_time(self):
+@@ -66,4 +68,4 @@
+ 
+         :returns: The expiration timestamp.
+         """
+-        return time.mktime(self.expiration_datetime.timetuple())
++        return int(self.expiration_datetime.timestamp())

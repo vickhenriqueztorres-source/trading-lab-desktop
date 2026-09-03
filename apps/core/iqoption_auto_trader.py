@@ -26,7 +26,7 @@ from packages.domain.models import (
 )
 from packages.persistence.writer import BrokerEventApplyResult, BrokerEventApplyStatus
 from packages.protocol.ui_messages import UiIqOptionAssetRank
-from packages.strategies.iqoption_rsi import IQOptionRsiDemoStrategy
+from packages.strategies.iqoption_rsi import IQOptionRsiDemoStrategy, calculate_wilder_rsi
 from packages.strategies.models import RuntimeContext
 
 logger = logging.getLogger("core.iqoption_auto_trader")
@@ -45,8 +45,11 @@ IQOPTION_RADAR_SYMBOLS: tuple[tuple[str, str], ...] = (
     ("EURUSD", "EUR/USD"),
     ("GBPUSD", "GBP/USD"),
     ("USDJPY", "USD/JPY"),
-    ("AUDUSD", "AUD/USD"),
     ("EURJPY", "EUR/JPY"),
+    ("USDCHF", "USD/CHF"),
+    ("AUDCAD", "AUD/CAD"),
+    ("NZDUSD", "NZD/USD"),
+    ("AUDUSD", "AUD/USD"),
 )
 
 IQOPTION_PRACTICE_ACCOUNT_ID = "IQOPTION_PRACTICE"
@@ -74,6 +77,7 @@ class IqOptionAutoTrader:
         risk_config_provider: Callable[[], IqOptionRiskConfig],
         operator_armed: Callable[[], bool],
         *,
+        catalog_provider: Callable[[], Any] | None = None,
         evaluation_interval_seconds: float = 1.0,
         monotonic: Callable[[], float] = time.monotonic,
         message_budget: IQOptionMessageBudget | None = None,
@@ -84,6 +88,7 @@ class IqOptionAutoTrader:
         self._runtime_provider = runtime_provider
         self._risk_config_provider = risk_config_provider
         self._operator_armed = operator_armed
+        self._catalog_provider = catalog_provider
         self._evaluation_interval = evaluation_interval_seconds
         self._monotonic = monotonic
         self._message_budget = message_budget or IQOptionMessageBudget()
@@ -275,8 +280,49 @@ class IqOptionAutoTrader:
                 timeframe_seconds=risk_config.timeframe_seconds,
                 configuration_version="1.0.0",
             )
+            def _base(name: str) -> str:
+                return name.replace("-OTC", "").upper()
+
+            catalog = (
+                self._catalog_provider() if self._catalog_provider is not None else None
+            )
+            active_info = (
+                catalog.active_strategies.get(risk_config.strategy_id)
+                if catalog is not None
+                else None
+            )
+            if active_info is None and catalog is not None:
+                for strat in catalog.active_strategies.values():
+                    if strat.entry.asset == symbol or _base(strat.entry.asset) == _base(symbol):
+                        active_info = strat
+                        break
+
+            rsi_val = Decimal("50.0")
+            direction: Direction | None = None
+            strat_key = active_info.entry.key if active_info is not None else risk_config.strategy_id
+            eval_context = RuntimeContext(
+                strategy_id=strat_key,
+                strategy_version="1.0.0",
+                broker=Broker.IQ_OPTION,
+                account_id=IQOPTION_PRACTICE_ACCOUNT_ID,
+                product="BINARY_OPTION",
+                symbol=symbol,
+                timeframe_seconds=risk_config.timeframe_seconds,
+                configuration_version="1.0.0",
+            )
             try:
-                decision = self._strategy.evaluate_decision(candles, context)
+                if active_info is not None and (_base(symbol) == _base(selected_symbol) or automatic):
+                    direction = active_info.instance.evaluate(candles, eval_context)
+                    try:
+                        closes = [c.close for c in candles]
+                        if len(closes) >= 15:
+                            rsi_val = calculate_wilder_rsi(closes)
+                    except Exception:
+                        pass
+                else:
+                    decision = self._strategy.evaluate_decision(candles, eval_context)
+                    direction = decision.direction
+                    rsi_val = decision.rsi
             except (TypeError, ValueError):
                 self._update_rank(
                     symbol,
@@ -288,7 +334,6 @@ class IqOptionAutoTrader:
                 )
                 continue
 
-            direction = decision.direction
             condition = "NEUTRAL"
             direction_text: str | None = None
             if direction is Direction.CALL:
@@ -301,7 +346,7 @@ class IqOptionAutoTrader:
             self._update_rank(
                 symbol,
                 display_name,
-                rsi=f"{decision.rsi:.1f}",
+                rsi=f"{rsi_val:.1f}",
                 direction=direction_text,
                 condition=condition,
                 selected=(symbol == selected_symbol) or (automatic and triggered),
@@ -312,8 +357,9 @@ class IqOptionAutoTrader:
                     symbol,
                     display_name,
                     direction,
-                    decision.rsi,
+                    rsi_val,
                     int(candles[-1].close_time.timestamp()),
+                    strat_key,
                 )
 
         if not self._operator_armed():
@@ -331,7 +377,7 @@ class IqOptionAutoTrader:
                 self._set_status(f"IQOPTION_WAITING_RSI_SIGNAL ({selected_symbol})")
             return
 
-        symbol, display_name, direction, rsi, candle_epoch = candidate
+        symbol, display_name, direction, rsi, candle_epoch, strat_key = candidate
         with self._lock:
             self._last_rsi_value = rsi
             sticky_failure = self._sticky_failure_reason
@@ -358,6 +404,7 @@ class IqOptionAutoTrader:
             symbol=symbol,
             direction=direction,
             risk_config=risk_config,
+            strategy_id=strat_key or risk_config.strategy_id,
         )
         if dispatch.financially_accepted:
             with self._lock:
@@ -401,6 +448,7 @@ class IqOptionAutoTrader:
         symbol: str,
         direction: Direction,
         risk_config: IqOptionRiskConfig,
+        strategy_id: str | None = None,
     ) -> _DispatchResult:
         try:
             persisted = runtime.submit(
@@ -412,7 +460,7 @@ class IqOptionAutoTrader:
                     symbol=symbol,
                     direction=direction,
                     amount=Money(risk_config.stake_minor_units, risk_config.currency),
-                    strategy_id=risk_config.strategy_id,
+                    strategy_id=strategy_id or risk_config.strategy_id,
                     strategy_version="1.0.0",
                     deadline_at=datetime.now(UTC) + timedelta(seconds=15),
                     duration=1,
@@ -551,7 +599,17 @@ class IqOptionAutoTrader:
 
     def _symbols_for_cycle(self, selected_symbol: str) -> tuple[tuple[str, str], ...]:
         if selected_symbol != "AUTO":
-            return tuple(item for item in IQOPTION_RADAR_SYMBOLS if item[0] == selected_symbol)
+            primary = [item for item in IQOPTION_RADAR_SYMBOLS if item[0] == selected_symbol]
+            counterpart = selected_symbol[:-4] if selected_symbol.endswith("-OTC") else f"{selected_symbol}-OTC"
+            secondary = [item for item in IQOPTION_RADAR_SYMBOLS if item[0] == counterpart]
+            all_options = primary + secondary
+            unfrozen = [
+                item for item in all_options
+                if self._symbol_suspended_until.get(item[0], 0.0) <= self._monotonic()
+            ]
+            if unfrozen:
+                return tuple(unfrozen[:1])
+            return tuple(all_options[:1])
         item = IQOPTION_RADAR_SYMBOLS[self._scan_cursor % len(IQOPTION_RADAR_SYMBOLS)]
         self._scan_cursor = (self._scan_cursor + 1) % len(IQOPTION_RADAR_SYMBOLS)
         return (item,)

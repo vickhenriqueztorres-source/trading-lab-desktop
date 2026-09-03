@@ -72,6 +72,25 @@ def get_application_stylesheet() -> str:
         selection-background-color: rgba(0, 229, 255, 0.22);
     }}
 
+    QRadioButton {{
+        color: {TEXT_PRIMARY};
+        font-size: 13px;
+        spacing: 6px;
+    }}
+
+    QRadioButton::indicator {{
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        border: 1px solid {BORDER_ACCENT};
+        background-color: {BG_CARD};
+    }}
+
+    QRadioButton::indicator:checked {{
+        background-color: {ACCENT_CYAN};
+        border: 2px solid {BG_ROOT};
+    }}
+
     QScrollArea {{
         background-color: {BG_ROOT};
         border: none;

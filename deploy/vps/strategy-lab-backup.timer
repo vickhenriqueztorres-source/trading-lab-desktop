@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for Strategy Lab Weekly Database Backup (Sunday 08:00 UTC)
+Documentation=https://github.com/vickhenriqueztorres-source/trading-lab-desktop
+
+[Timer]
+OnCalendar=Sun *-*-* 08:00:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

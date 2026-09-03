@@ -117,7 +117,7 @@ class UiIqOptionRiskConfig:
     currency: str = "USD"
 
     def __post_init__(self) -> None:
-        if self.strategy_id != "iqoption-rsi-demo" or not self.symbol.strip():
+        if not self.strategy_id or len(self.strategy_id) > 128 or not self.symbol.strip():
             raise ValueError("IQ Option strategy selection is invalid")
         if self.timeframe_seconds != 60 or self.duration_seconds != 60:
             raise ValueError("IQ Option RSI interval is invalid")

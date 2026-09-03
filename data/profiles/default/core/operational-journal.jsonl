@@ -1,0 +1,13 @@
+{"event":"core_instance_lock_acquired","fields":{},"occurred_at":"2026-09-03T05:37:39.474489+00:00","reason_code":null}
+{"event":"database_opened","fields":{"first_run":true},"occurred_at":"2026-09-03T05:37:39.489736+00:00","reason_code":null}
+{"event":"database_integrity_checked","fields":{"check_mode":"quick_check"},"occurred_at":"2026-09-03T05:37:39.536054+00:00","reason_code":null}
+{"event":"recovery_started","fields":{},"occurred_at":"2026-09-03T05:37:39.538047+00:00","reason_code":null}
+{"event":"recovery_completed","fields":{"ambiguous":0,"expired":0,"interrupted_dispatches":0,"safe_pending":0},"occurred_at":"2026-09-03T05:37:39.563684+00:00","reason_code":null}
+{"event":"worker_process_started","fields":{"process_id":7016,"worker_type":"SIMULATED"},"occurred_at":"2026-09-03T05:37:39.589829+00:00","reason_code":null}
+{"event":"ipc_connected","fields":{"worker_type":"SIMULATED"},"occurred_at":"2026-09-03T05:37:40.038537+00:00","reason_code":null}
+{"event":"ipc_handshake_started","fields":{"correlation_id":"31c3c7d0-eb81-43d1-8f80-28fa6637377a","message_id":"2f76013a-72e5-468d-9fde-d9d7298cf66b"},"occurred_at":"2026-09-03T05:37:40.040440+00:00","reason_code":null}
+{"event":"ipc_handshake_completed","fields":{"broker":"simulated","correlation_id":"31c3c7d0-eb81-43d1-8f80-28fa6637377a","message_id":"51dd50a7-de1d-455e-af51-79902959a02a","worker_type":"SIMULATED_WORKER"},"occurred_at":"2026-09-03T05:37:40.043493+00:00","reason_code":null}
+{"event":"worker_ready","fields":{"worker_type":"SIMULATED"},"occurred_at":"2026-09-03T05:37:40.045457+00:00","reason_code":null}
+{"event":"health_gate_blocked","fields":{},"occurred_at":"2026-09-03T05:37:40.054709+00:00","reason_code":"HG_SAFE_STOP"}
+{"event":"trading_disarmed","fields":{},"occurred_at":"2026-09-03T05:37:40.055709+00:00","reason_code":"HG_SAFE_STOP"}
+{"event":"health_gate_blocked","fields":{"account_id":"market-data","broker":"DERIV"},"occurred_at":"2026-09-03T05:37:40.779748+00:00","reason_code":"MD_CLOCK_UNTRUSTED"}

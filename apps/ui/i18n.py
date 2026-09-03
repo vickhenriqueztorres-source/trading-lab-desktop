@@ -948,6 +948,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Could not generate diagnostic package: {error}",
         "es": "No se pudo generar el paquete de diagnóstico: {error}",
     },
+    "tabs.strategies": {
+        "en": "Strategy Catalog",
+        "es": "Catálogo de Estratégias",
+    },
 }
 
 

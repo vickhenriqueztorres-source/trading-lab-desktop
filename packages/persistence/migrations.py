@@ -329,6 +329,39 @@ DIGIT_TEST_SESSION = Migration(
     statements=("ALTER TABLE digit_risk_runtime ADD COLUMN session_started_at TEXT",),
 )
 
+SPRT_AND_OUTCOMES = Migration(
+    version=7,
+    name="0007_sprt_and_outcomes",
+    statements=(
+        """
+        CREATE TABLE IF NOT EXISTS sprt_monitors (
+            strategy_key TEXT PRIMARY KEY,
+            p0 TEXT NOT NULL,
+            p1 TEXT NOT NULL,
+            alpha TEXT NOT NULL,
+            beta TEXT NOT NULL,
+            llr TEXT NOT NULL,
+            n INTEGER NOT NULL,
+            wins INTEGER NOT NULL,
+            decision TEXT NOT NULL,
+            status TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS outcomes_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_key TEXT NOT NULL,
+            ts INTEGER NOT NULL,
+            won INTEGER NOT NULL,
+            payout_pct TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )
+        """,
+    ),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
@@ -336,6 +369,7 @@ MIGRATIONS = (
     BROKER_ORDER_EVENTS,
     DIGIT_RISK_RUNTIME,
     DIGIT_TEST_SESSION,
+    SPRT_AND_OUTCOMES,
 )
 
 
