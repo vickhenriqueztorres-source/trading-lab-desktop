@@ -36,11 +36,7 @@ class F1Reversal(FamilyStrategyBase):
         self._regime = ADX(period=adx_len)
         self._trigger = BBCloseOutside(length=bb_len, k=bb_k)
         self._confirm = RSIExtreme(period=rsi_len, lower=rsi_lo, upper=rsi_hi)
-        self._warmup_required = max(
-            self._regime.warmup_required,
-            self._trigger.warmup_required,
-            self._confirm.warmup_required,
-        )
+        self._finalize_warmup()
 
     def _check_composition_gate(self, regime_out: Output | None) -> bool:
         if regime_out is None or regime_out.value is None:

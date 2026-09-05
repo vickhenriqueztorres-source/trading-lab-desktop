@@ -36,6 +36,21 @@ def manifest_schema() -> dict[str, Any]:
         "Reject if this semantic policy is unavailable; plain JSON Schema is NOT acceptance."
     )
     result["x-tl-policy-v1"] = POLICY_ID
+    result["allOf"] = [
+        {
+            "if": {"required": ["schema_revision"]},
+            "then": {
+                "properties": {
+                    "strategies": {
+                        "items": {
+                            "required": ["warmup_required"],
+                            "properties": {"warmup_required": {"type": "integer"}},
+                        }
+                    }
+                }
+            },
+        }
+    ]
     entry = result["$defs"]["StrategyEntry"]
     entry["allOf"] = []
     for family, specs in FAMILY_SPECS.items():

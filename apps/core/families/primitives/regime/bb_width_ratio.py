@@ -38,6 +38,7 @@ class BBWidthRatio(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``length + median_length - 1`` for both rolling windows."""
         return self.length + self.median_length - 1
 
     def reset(self) -> None:

@@ -26,6 +26,7 @@ class StochCross(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``k_period + d_period - 1`` for the first K/D pair."""
         return self.k_period + self.d_period - 1
 
     def reset(self) -> None:

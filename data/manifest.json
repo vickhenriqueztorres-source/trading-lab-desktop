@@ -1,0 +1,637 @@
+{
+  "manifest_version": 1,
+  "schema_version": 1,
+  "primitives_version": "1.0.0",
+  "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+  "key_id": "A",
+  "published_at": 1788350400,
+  "expires_at": 1792238400,
+  "research_run_id": "run_complete_catalog",
+  "strategies": [
+    {
+      "key": "f1:EURUSD-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (EUR/USD OTC)",
+      "asset": "EURUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:GBPUSD-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (GBP/USD OTC)",
+      "asset": "GBPUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:USDJPY-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (USD/JPY OTC)",
+      "asset": "USDJPY-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:EURJPY-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (EUR/JPY OTC)",
+      "asset": "EURJPY-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:GBPJPY-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (GBP/JPY OTC)",
+      "asset": "GBPJPY-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:AUDCAD-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (AUD/CAD OTC)",
+      "asset": "AUDCAD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:NZDUSD-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (NZD/USD OTC)",
+      "asset": "NZDUSD-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:USDCHF-OTC:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (USD/CHF OTC)",
+      "asset": "USDCHF-OTC",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:EURUSD:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (EUR/USD)",
+      "asset": "EURUSD",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:GBPUSD:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (GBP/USD)",
+      "asset": "GBPUSD",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:USDJPY:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (USD/JPY)",
+      "asset": "USDJPY",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:EURJPY:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (EUR/JPY)",
+      "asset": "EURJPY",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:USDCHF:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (USD/CHF)",
+      "asset": "USDCHF",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:AUDCAD:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (AUD/CAD)",
+      "asset": "AUDCAD",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:NZDUSD:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (NZD/USD)",
+      "asset": "NZDUSD",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    },
+    {
+      "key": "f1:AUDUSD:M1:00-24:rsi_bollinger",
+      "family": "F1",
+      "display_name_pt": "F1: Extremo RSI + Reversão Bollinger (AUD/USD)",
+      "asset": "AUDUSD",
+      "timeframe": "M1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "management": {
+        "stake_pct": "1.0",
+        "martingale_steps_max": 1,
+        "paroli": false
+      },
+      "params": {
+        "adx_len": "14",
+        "adx_max": "25.0",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "validated": {
+        "p_hat": "0.578",
+        "wilson_lower": "0.557",
+        "p_min_at_validation": "0.541",
+        "payout_min": "0.85",
+        "n": 1000,
+        "ops_per_day": "24.0",
+        "worst_streak": 4,
+        "result_1000_ops_stake10": "2264.00",
+        "windows_passed": "8/8",
+        "holdout_passed": true
+      },
+      "status": "approved",
+      "reason_pt": ""
+    }
+  ],
+  "signature": "ed25519:GtJLP64ugLoR54jTy+8vBBf2j0g85eG/6kPIPzcMyx2YH0+JG6lV0ViZrRTlGiXvBpPQLh11tFuQA6yGnfyjCw=="
+}

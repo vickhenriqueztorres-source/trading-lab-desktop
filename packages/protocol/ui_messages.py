@@ -116,10 +116,14 @@ class UiIqOptionRiskConfig:
     max_concurrent_positions: int = 1
     currency: str = "USD"
 
+    @property
+    def active_strategy_key(self) -> str:
+        return self.strategy_id
+
     def __post_init__(self) -> None:
         if not self.strategy_id or len(self.strategy_id) > 128 or not self.symbol.strip():
             raise ValueError("IQ Option strategy selection is invalid")
-        if self.timeframe_seconds != 60 or self.duration_seconds != 60:
+        if self.timeframe_seconds not in {60, 300, 900} or self.duration_seconds != 60:
             raise ValueError("IQ Option RSI interval is invalid")
         if type(self.stake_minor_units) is not int or not 100 <= self.stake_minor_units <= 10_000:
             raise ValueError("IQ Option stake is invalid")
@@ -159,6 +163,12 @@ class UiIqOptionRiskConfig:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionRiskConfig:
+        if "active_strategy_key" in payload:
+            payload = dict(payload)
+            key = payload.pop("active_strategy_key")
+            if "strategy_id" in payload and payload["strategy_id"] != key:
+                raise _invalid()
+            payload["strategy_id"] = key
         fields = {
             "strategy_id",
             "symbol",
@@ -179,7 +189,7 @@ class UiIqOptionRiskConfig:
             raise _invalid()
         try:
             return cls(
-                strategy_id=_string(payload, "strategy_id", 64),
+                strategy_id=_string(payload, "strategy_id", 128),
                 symbol=_string(payload, "symbol", 32),
                 timeframe_seconds=cast(int, payload["timeframe_seconds"]),
                 duration_seconds=cast(int, payload["duration_seconds"]),
@@ -1110,8 +1120,11 @@ class UiIqOptionAssetRank:
     condition: str = "NEUTRAL"
     selected: bool = False
     status: str = "MONITORING"
+    candidate_details: str = ""
 
     def __post_init__(self) -> None:
+        if not isinstance(self.candidate_details, str) or len(self.candidate_details) > 2048:
+            raise ValueError("IQ candidate details invalid")
         for value in (self.symbol, self.display_name, self.rsi, self.condition, self.status):
             if not value.strip() or len(value) > _MAX_TEXT:
                 raise ValueError("IQ Option asset rank text is invalid")
@@ -1129,10 +1142,15 @@ class UiIqOptionAssetRank:
             "condition": self.condition,
             "selected": self.selected,
             "status": self.status,
+            "candidate_details": self.candidate_details,
         }
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionAssetRank:
+        payload = dict(payload)
+        details = payload.pop("candidate_details", "")
+        if not isinstance(details, str) or len(details) > 2048:
+            raise _invalid()
         _exact(
             payload,
             {
@@ -1162,6 +1180,7 @@ class UiIqOptionAssetRank:
                 condition=_string(payload, "condition", 32),
                 selected=selected,
                 status=_string(payload, "status", 32),
+                candidate_details=details,
             )
         except ValueError as exc:
             raise _invalid() from exc

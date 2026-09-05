@@ -51,17 +51,23 @@ class IqOptionRiskConfig:
     max_concurrent_positions: int = 1
     currency: str = "USD"
 
+    @property
+    def active_strategy_key(self) -> str:
+        """Canonical selector; strategy_id remains the legacy constructor/wire alias."""
+        return self.strategy_id
+
     def __post_init__(self) -> None:
         if not self.strategy_id or len(self.strategy_id) > 128:
             raise ValueError("IQOPTION_STRATEGY_UNSUPPORTED")
-        if (
-            self.strategy_id != IQOPTION_RSI_STRATEGY_ID
-            and not self.strategy_id.startswith(("f1:", "f2:", "f3:", "f4:", "f5:"))
-        ):
+        if self.strategy_id not in {
+            IQOPTION_RSI_STRATEGY_ID,
+            "AUTO",
+        } and not self.strategy_id.startswith(("f1:", "f2:", "f3:", "f4:", "f5:")):
             raise ValueError("IQOPTION_STRATEGY_UNSUPPORTED")
         if self.symbol not in IQOPTION_ALLOWED_SYMBOLS:
             raise ValueError("IQOPTION_SYMBOL_UNSUPPORTED")
-        if self.timeframe_seconds != 60 or self.duration_seconds != 60:
+        # Deprecated input: manifest routing owns candle TF, not this saved hint.
+        if self.timeframe_seconds not in {60, 300, 900} or self.duration_seconds != 60:
             raise ValueError("IQOPTION_RSI_INTERVAL_UNSUPPORTED")
         if (
             type(self.stake_minor_units) is not int
@@ -103,6 +109,11 @@ class IqOptionRiskConfigStore:
             if not isinstance(payload, dict):
                 raise ValueError("IQOPTION_RISK_CONFIG_INVALID")
             migrated = False
+            if "active_strategy_key" in payload:
+                key = payload.pop("active_strategy_key")
+                if "strategy_id" in payload and payload["strategy_id"] != key:
+                    raise ValueError("IQOPTION_STRATEGY_ALIAS_CONFLICT")
+                payload["strategy_id"] = key
             stake = payload.get("stake_minor_units")
             if type(stake) is int and stake < IQOPTION_MIN_STAKE_MINOR_UNITS:
                 payload["stake_minor_units"] = IQOPTION_MIN_STAKE_MINOR_UNITS
@@ -117,8 +128,10 @@ class IqOptionRiskConfigStore:
     def save(self, config: IqOptionRiskConfig) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_suffix(".tmp")
+        payload = asdict(config)
+        payload["active_strategy_key"] = payload.pop("strategy_id")
         temporary.write_text(
-            json.dumps(asdict(config), sort_keys=True, separators=(",", ":")),
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
         os.replace(temporary, self._path)

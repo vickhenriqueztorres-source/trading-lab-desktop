@@ -158,6 +158,25 @@ class IQOptionReadOnlyWorkerServer:
                     "ticks": [],
                     "candles": [candle.to_payload() for candle in candles],
                 }
+            if request.message_type is MessageType.BROKER_QUOTE_REQUEST:
+                self._ensure_connected()
+                if self._order_session is None:
+                    return self._error_payload("WORKER_CAPABILITY_DENIED")
+                payload = request.payload
+                if (
+                    set(payload) != {"broker_symbol", "product", "duration", "duration_unit"}
+                    or payload.get("product") != "BINARY_OPTION"
+                    or type(payload.get("duration")) is not int
+                    or payload.get("duration") != 1
+                    or payload.get("duration_unit") != "m"
+                    or not isinstance(payload.get("broker_symbol"), str)
+                ):
+                    return self._error_payload("IPC_INVALID_ENVELOPE")
+                payout = self._session.get_binary_payout(str(payload["broker_symbol"]))
+                return MessageType.BROKER_QUOTE_RESPONSE, {
+                    **payload,
+                    "payout_return_ratio": str(payout),
+                }
             if request.message_type is MessageType.ORDER_SUBMIT:
                 order_session = self._order_session
                 if order_session is None:

@@ -27,6 +27,7 @@ class EMAAlignment(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return the long EMA period, which dominates the three seeded EMAs."""
         return self.long
 
     def reset(self) -> None:

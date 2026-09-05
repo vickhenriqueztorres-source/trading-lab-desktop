@@ -174,9 +174,11 @@ def test_builder_observation_and_promotion(tmp_path: Path) -> None:
     # Build initial manifest: all entries MUST be born in 'observation'
     manifest = build_manifest("run_build_test", cand_data, key_id="A")
     assert manifest.manifest_version == 1
+    assert manifest.schema_revision == "1.1"
     assert len(manifest.strategies) == 2
     for st in manifest.strategies:
         assert st.status == "observation"
+        assert st.warmup_required is not None
 
     # Test inclusion and exclusion filters
     first_key = manifest.strategies[0].key

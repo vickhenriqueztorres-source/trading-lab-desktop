@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
+from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from apps.core.deriv_telemetry import (
 )
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
 from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID, IqOptionAutoTrader
+from apps.core.iqoption_candidates import TIMEFRAMES
 from apps.core.iqoption_connection_safety import (
     IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS,
     IQOptionConnectionSafetyController,
@@ -21,7 +24,10 @@ from apps.core.iqoption_connection_safety import (
     IQOptionConnectionSafetyStore,
 )
 from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
+from apps.core.live_monitor import LiveMonitor
 from apps.core.manifest_catalog import DynamicManifestCatalog
+from apps.core.manifest_client import DEFAULT_PARITY_SHA256, evaluate_manifest_bytes
+from apps.core.manifest_keys import PROD_PUBLIC_KEYS
 from apps.core.payout_routed_differs import (
     PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
     PayoutRoutedDiffersProposalCache,
@@ -125,7 +131,9 @@ class CoreLifecycleService:
             self._iqoption_risk_config = self._iqoption_risk_store.load()
         except ValueError:
             self._iqoption_risk_config = IqOptionRiskConfig()
-        self._manifest_catalog = DynamicManifestCatalog()
+        self._manifest_catalog = DynamicManifestCatalog(event_sink=self._emit_manifest_event)
+        self._manifest_load_reason = "MANIFEST_NOT_FOUND"
+        self._live_monitor: LiveMonitor | None = None
         self._load_local_manifest_catalog()
         self._iqoption_bot_armed = False
         self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
@@ -135,6 +143,12 @@ class CoreLifecycleService:
             risk_config_provider=lambda: self._iqoption_risk_config,
             operator_armed=lambda: self._iqoption_bot_armed,
             catalog_provider=lambda: self._manifest_catalog,
+            account_type_provider=lambda: (
+                self._iqoption_balance.account_type
+                if self._iqoption_balance is not None
+                else "UNKNOWN"
+            ),
+            monitor_provider=lambda: self._live_monitor,
         )
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
@@ -223,6 +237,16 @@ class CoreLifecycleService:
             self._startup_sequence.append("CORE")
             runtime.start()
             self._runtime = runtime
+            self._emit_manifest_event(
+                "manifest_startup_validation", {"reason_code": self._manifest_load_reason}
+            )
+            self._live_monitor = LiveMonitor(
+                self._manifest_catalog, writer=runtime.writer, event_sink=runtime.event_sink
+            )
+            self._live_monitor.start()
+            runtime.iqoption_entry_validator = self._iqoption_auto_trader.validate_runtime_entry
+            runtime.iqoption_execution_lock = self._manifest_catalog.execution_lock
+            runtime.iqoption_order_registered = self._manifest_catalog.notify_order_opened
             # Automated entries always start disarmed. The user must press Ligar Bot.
             runtime.stop_new_entries()
             self._safe_stop = True
@@ -267,8 +291,18 @@ class CoreLifecycleService:
                     iqoption_health=lambda: (
                         None if self._iqoption is None else self._iqoption.health_state
                     ),
-                    iqoption_balance=lambda: self._iqoption_balance,
-                    iqoption_clock=lambda: self._iqoption_clock,
+                    iqoption_balance=lambda: (
+                        self._iqoption_auto_trader.latest_balance
+                        if self._iqoption_auto_trader is not None
+                        and self._iqoption_auto_trader.latest_balance is not None
+                        else self._iqoption_balance
+                    ),
+                    iqoption_clock=lambda: (
+                        self._iqoption_auto_trader.latest_clock
+                        if self._iqoption_auto_trader is not None
+                        and self._iqoption_auto_trader.latest_clock is not None
+                        else self._iqoption_clock
+                    ),
                     iqoption_risk_config=lambda: self._iqoption_risk_config,
                     iqoption_bot_armed=lambda: self._iqoption_bot_armed,
                     iqoption_bot_reason=lambda: (
@@ -322,16 +356,35 @@ class CoreLifecycleService:
         self._schedule_saved_iqoption_recovery(has_iqoption_recovery=has_iqoption_recovery)
 
     def _load_local_manifest_catalog(self) -> None:
-        import json
-        for path in (
+        repo_data_manifest = Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+        candidates = [
             self._profile_dir / "cache" / "manifest.json",
             Path("cache/manifest.json"),
             Path("data/manifest.json"),
-        ):
+            repo_data_manifest,
+        ]
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "data" / "manifest.json")
+        if getattr(sys, "executable", None):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.append(exe_dir / "data" / "manifest.json")
+            candidates.append(exe_dir / "_internal" / "data" / "manifest.json")
+        for path in candidates:
             if path.is_file():
                 try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
+                    data, reason = evaluate_manifest_bytes(
+                        path.read_bytes(),
+                        PROD_PUBLIC_KEYS,
+                        expected_primitives_version="1.0.0",
+                        expected_parity_sha256=DEFAULT_PARITY_SHA256,
+                    )
+                    if data is None:
+                        self._manifest_load_reason = reason
+                        self._emit_manifest_event("manifest_rejected", {"reason_code": reason})
+                        continue
                     self._manifest_catalog.apply_manifest(data)
+                    self._manifest_load_reason = "MANIFEST_ACCEPTED"
                     return
                 except Exception:
                     continue
@@ -659,6 +712,8 @@ class CoreLifecycleService:
             self._iqoption_balance = balance
             self._iqoption_clock = clock
             self._iqoption_bot_reason = "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK"
+            if self._iqoption_auto_trader is not None:
+                self._iqoption_auto_trader.start()
             return (
                 True,
                 True,
@@ -685,6 +740,28 @@ class CoreLifecycleService:
         with self._iqoption_switch_lock:
             if self._iqoption_bot_armed:
                 return False, "IQOPTION_BOT_MUST_BE_DISARMED"
+            if config.symbol != "AUTO" and config.strategy_id != "iqoption-rsi-demo":
+                info = self._manifest_catalog.active_strategies.get(config.active_strategy_key)
+                if info is None:
+                    return False, "NO_CANDIDATE"
+                timeframe = TIMEFRAMES.get(info.entry.timeframe)
+                if timeframe is None:
+                    return False, "TIMEFRAME_UNSUPPORTED"
+                if (
+                    timeframe != config.timeframe_seconds
+                    and timeframe != self._iqoption_risk_config.timeframe_seconds
+                ):
+                    self._emit_manifest_event(
+                        "TIMEFRAME_OVERRIDDEN_BY_MANIFEST",
+                        {
+                            "strategy_key": info.entry.key,
+                            "timeframe": timeframe,
+                        },
+                    )
+                try:
+                    config = replace(config, symbol=info.entry.asset, timeframe_seconds=timeframe)
+                except ValueError:
+                    return False, "IQOPTION_MANIFEST_CONTEXT_UNSUPPORTED"
             try:
                 self._iqoption_risk_store.save(config)
             except OSError:
@@ -848,6 +925,17 @@ class CoreLifecycleService:
         if error_text == "LIFECYCLE_STOPPING":
             return error_text
         return "DERIV_ACCOUNT_CONNECT_FAILED"
+
+    def _emit_manifest_event(self, event: str, fields: dict[str, object]) -> None:
+        if self._runtime is not None:
+            safe_fields: dict[str, str | int | bool | None] = {
+                key: value
+                for key, value in fields.items()
+                if key != "reason_code" and (isinstance(value, (str, int, bool)) or value is None)
+            }
+            self._runtime.event_sink.emit(
+                event, reason_code=str(fields.get("reason_code", event)), **safe_fields
+            )
 
     def _request_deriv_recovery(self, _reason_code: str) -> None:
         if (
@@ -1030,6 +1118,8 @@ class CoreLifecycleService:
         if self._state is CoreServiceState.STOPPED:
             return
         self._state = CoreServiceState.STOPPING
+        if self._live_monitor is not None:
+            self._live_monitor.stop()
         ui_service = self._ui_service
         self._ui_service = None
         if ui_service is not None:

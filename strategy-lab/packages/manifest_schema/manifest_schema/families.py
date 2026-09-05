@@ -1,8 +1,9 @@
 """R-MAN-3: stable wire names mapped to P01 ranges, without changing P01 math."""
 
-from typing import Literal
+from decimal import Decimal
+from typing import Any, Literal, cast
 
-from primitives.base import ParamRange, decimal_range
+from primitives.base import Indicator, ParamRange, decimal_range
 from primitives.registry import REGISTRY
 
 type Family = Literal["F1", "F2", "F3", "F4", "F5"]
@@ -80,3 +81,29 @@ FAMILY_RELATIONS: dict[Family, tuple[tuple[str, str], ...]] = {
     "F4": (),
     "F5": (("rsi_lo", "rsi_hi"),),
 }
+
+
+def family_warmup_required(
+    family: Family,
+    params: dict[str, str],
+    hours_utc: tuple[int, int] | list[int],
+) -> int:
+    """Instantiate the reference primitives and derive the family's warm-up contract."""
+
+    instances: list[Indicator] = []
+    for component in FAMILY_COMPONENTS[family]:
+        kwargs: dict[str, int | Decimal] = {}
+        for wire_name, (primitive_name, primitive_param) in FAMILY_BINDINGS[family].items():
+            if primitive_name != component:
+                continue
+            spec = REGISTRY[primitive_name].param_spec[primitive_param]
+            raw = params[wire_name]
+            kwargs[primitive_param] = int(raw) if spec.kind == "int" else Decimal(raw)
+        if component == "session_window":
+            kwargs = {
+                "start_minute": int(hours_utc[0]) * 60,
+                "end_minute": int(hours_utc[1]) * 60,
+            }
+        constructor = cast(Any, REGISTRY[component])
+        instances.append(constructor(**kwargs))
+    return max(indicator.warmup_required for indicator in instances)

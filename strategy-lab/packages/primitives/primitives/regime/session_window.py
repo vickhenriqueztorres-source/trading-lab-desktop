@@ -25,6 +25,7 @@ class SessionWindow(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return one candle because the UTC session predicate is stateless."""
         return 1
 
     def reset(self) -> None:

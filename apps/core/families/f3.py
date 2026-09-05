@@ -40,8 +40,4 @@ class F3LevelRejection(FamilyStrategyBase):
         self._regime = SessionWindow(start_minute=start_min, end_minute=end_min)
         self._trigger = LevelTouch(support=support, resistance=resistance, tolerance=tolerance)
         self._confirm = CandleRejection(max_body_ratio=body_max, min_wick_ratio=wick_min)
-        self._warmup_required = max(
-            self._regime.warmup_required,
-            self._trigger.warmup_required,
-            self._confirm.warmup_required,
-        )
+        self._finalize_warmup()

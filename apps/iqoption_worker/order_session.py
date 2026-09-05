@@ -82,6 +82,7 @@ class IQOptionOrderSession:
         self._events: queue.Queue[BrokerOrderEvent] = queue.Queue(maxsize=1024)
 
     def submit_order(self, command: OrderCommand) -> WorkerSubmissionResult:
+        transport_entered = False
         try:
             validate_iqoption_order_command(command)
             stake_decimal = Decimal(command.amount.minor_units) / Decimal(100)
@@ -110,8 +111,11 @@ class IQOptionOrderSession:
             with self._lock:
                 self._tracked_by_ref[command.order_id] = tracked
 
+            transport_entered = True
             response = self._transport.request("buy", payload, timeout=8.0)
-            if not response.get("status"):
+            raw_result = response.get("result")
+            nested_id = raw_result.get("id") if isinstance(raw_result, Mapping) else None
+            if response.get("status") is False and response.get("id") is None and nested_id is None:
                 with self._lock:
                     self._tracked_by_ref.pop(command.order_id, None)
                 reason = response.get("reason", response.get("message", "ORDER_REJECTED"))
@@ -124,10 +128,15 @@ class IQOptionOrderSession:
                     reason_code=str(reason),
                 )
 
-            raw_result = response.get("result")
-            nested_id = raw_result.get("id") if isinstance(raw_result, Mapping) else None
+            if response.get("status") is not True:
+                raise IQOptionExternalError("IQOPTION_ORDER_RESPONSE_INVALID")
             raw_contract_id = response.get("id", nested_id)
-            if raw_contract_id is None or str(raw_contract_id).strip() in {"", "None"}:
+            if (
+                isinstance(raw_contract_id, bool)
+                or not isinstance(raw_contract_id, (int, str))
+                or not str(raw_contract_id).isdigit()
+                or int(str(raw_contract_id)) <= 0
+            ):
                 raise IQOptionExternalError("IQOPTION_ORDER_RESPONSE_INVALID")
             contract_id = str(raw_contract_id)
             tracked.broker_order_id = contract_id
@@ -144,10 +153,12 @@ class IQOptionOrderSession:
             )
 
         except (IQOptionWorkerError, IQOptionExternalError) as exc:
-            if exc.reason_code in ("IQOPTION_REQUEST_TIMEOUT", "IQOPTION_NETWORK_ERROR"):
+            if transport_entered and not getattr(exc, "submission_not_sent", False):
                 outcome = WorkerOutcome.TIMEOUT_AFTER_POSSIBLE_SEND
             else:
                 outcome = WorkerOutcome.REJECTED
+                with self._lock:
+                    self._tracked_by_ref.pop(command.order_id, None)
             return WorkerSubmissionResult(
                 outcome=outcome,
                 broker_order_id=None,
@@ -156,14 +167,18 @@ class IQOptionOrderSession:
                 causation_id=command.message_id,
                 reason_code=exc.reason_code,
             )
-        except (OSError, TimeoutError):
+        except Exception as exc:
             return WorkerSubmissionResult(
                 outcome=WorkerOutcome.TIMEOUT_AFTER_POSSIBLE_SEND,
                 broker_order_id=None,
                 response_message_id=str(uuid4()),
                 correlation_id=command.correlation_id,
                 causation_id=command.message_id,
-                reason_code="IQOPTION_REQUEST_TIMEOUT",
+                reason_code=(
+                    "IQOPTION_REQUEST_TIMEOUT"
+                    if isinstance(exc, (OSError, TimeoutError))
+                    else "IQOPTION_ORDER_RESPONSE_INVALID"
+                ),
             )
 
     def drain_contract_events(self, timeout: float = 0.05) -> int:

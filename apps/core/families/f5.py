@@ -37,8 +37,4 @@ class F5Quadrant(FamilyStrategyBase):
         self._regime = SessionWindow(start_minute=start_min, end_minute=end_min)
         self._trigger = QuadrantMajority(window=quadrant_window)
         self._confirm = RSIExtreme(period=rsi_len, lower=rsi_lo, upper=rsi_hi)
-        self._warmup_required = max(
-            self._regime.warmup_required,
-            self._trigger.warmup_required,
-            self._confirm.warmup_required,
-        )
+        self._finalize_warmup()

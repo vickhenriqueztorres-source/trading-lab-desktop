@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 import logging
+import threading
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from functools import wraps
+from typing import Any, Concatenate
 
 from apps.core.families import FAMILY_CLASSES, FamilyStrategyBase, is_within_trading_hours
 from apps.core.payout_gate import PayoutGate, PayoutGateResult
 
 logger = logging.getLogger("core.manifest_catalog")
+
+
+def _locked[R, **P](
+    method: Callable[Concatenate[DynamicManifestCatalog, P], R],
+) -> Callable[Concatenate[DynamicManifestCatalog, P], R]:
+    @wraps(method)
+    def call(self: DynamicManifestCatalog, /, *args: P.args, **kwargs: P.kwargs) -> R:
+        with self.execution_lock:
+            return method(self, *args, **kwargs)
+
+    return call
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +53,7 @@ class StrategyCatalogEntry:
     validated: ValidatedStats
     status: str  # "approved" | "observation" | "rejected"
     reason_pt: str = ""
+    warmup_required: int | None = None
 
 
 def parse_strategy_entry(raw: dict[str, Any] | Any) -> StrategyCatalogEntry:
@@ -71,6 +86,9 @@ def parse_strategy_entry(raw: dict[str, Any] | Any) -> StrategyCatalogEntry:
             validated=val_stats,
             status=str(raw.get("status", "observation")),
             reason_pt=str(raw.get("reason_pt", "")),
+            warmup_required=(
+                None if raw.get("warmup_required") is None else int(raw["warmup_required"])
+            ),
         )
 
     # Object with attributes
@@ -98,6 +116,9 @@ def parse_strategy_entry(raw: dict[str, Any] | Any) -> StrategyCatalogEntry:
         validated=val_stats,
         status=str(raw.status),
         reason_pt=str(getattr(raw, "reason_pt", "")),
+        warmup_required=(
+            None if getattr(raw, "warmup_required", None) is None else int(raw.warmup_required)
+        ),
     )
 
 
@@ -115,16 +136,27 @@ class DynamicManifestCatalog:
     def __init__(
         self,
         utc_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        event_sink: Callable[[str, dict[str, object]], None] | None = None,
     ) -> None:
         self._utc_clock = utc_clock
+        self.execution_lock = threading.RLock()
+        self._event_sink = event_sink
+        self._events: deque[tuple[str, dict[str, object]]] = deque(maxlen=128)
         self._active_strategies: dict[str, CatalogStrategyInfo] = {}
         self._retiring_strategies: dict[str, CatalogStrategyInfo] = {}
         self._in_flight_orders: dict[str, set[str]] = {}
         self._manifest_version: int | None = None
+        self._expires_at: int | None = None
+        self._published_at: int | None = None
+        self._demotions: dict[str, ValidatedStats] = {}
 
     @property
     def manifest_version(self) -> int | None:
         return self._manifest_version
+
+    @property
+    def expired(self) -> bool:
+        return self._expires_at is not None and self._utc_clock().timestamp() >= self._expires_at
 
     @property
     def active_strategies(self) -> dict[str, CatalogStrategyInfo]:
@@ -134,9 +166,33 @@ class DynamicManifestCatalog:
     def retiring_strategies(self) -> dict[str, CatalogStrategyInfo]:
         return dict(self._retiring_strategies)
 
+    @property
+    def events(self) -> tuple[tuple[str, dict[str, object]], ...]:
+        return tuple(self._events)
+
+    def _emit(self, event: str, **fields: object) -> None:
+        payload = dict(fields)
+        self._events.append((event, payload))
+        logger.warning("%s %s", event, payload)
+        if self._event_sink is not None:
+            self._event_sink(event, payload)
+
+    @_locked
     def apply_manifest(self, manifest: Any) -> None:
         """Dynamically instantiate strategies from the applied manifest."""
         now = self._utc_clock()
+        expiry = (
+            manifest.get("expires_at")
+            if isinstance(manifest, dict)
+            else getattr(manifest, "expires_at", None)
+        )
+        self._expires_at = None if expiry is None else int(expiry)
+        published = (
+            manifest.get("published_at")
+            if isinstance(manifest, dict)
+            else getattr(manifest, "published_at", None)
+        )
+        self._published_at = None if published is None else int(published)
         if hasattr(manifest, "manifest_version"):
             self._manifest_version = manifest.manifest_version
         elif hasattr(manifest, "version"):
@@ -155,7 +211,8 @@ class DynamicManifestCatalog:
         incoming_keys = set()
         for raw in raw_strategies:
             entry = parse_strategy_entry(raw)
-            incoming_keys.add(entry.key)
+            if self._demotions.get(entry.key) == entry.validated:
+                entry = replace(entry, status="observation")
             if entry.status == "rejected":
                 continue
 
@@ -165,7 +222,21 @@ class DynamicManifestCatalog:
                 and existing.entry.family == entry.family
                 and existing.entry.params == entry.params
                 and existing.entry.hours_utc == entry.hours_utc
+                and existing.entry.asset == entry.asset
+                and existing.entry.timeframe == entry.timeframe
             ):
+                if (
+                    entry.warmup_required is not None
+                    and entry.warmup_required != existing.instance.warmup_required
+                ):
+                    self._emit(
+                        "WARMUP_MISMATCH",
+                        strategy_key=entry.key,
+                        declared=entry.warmup_required,
+                        calculated=existing.instance.warmup_required,
+                    )
+                    continue
+                incoming_keys.add(entry.key)
                 existing.entry = entry
                 existing.status = entry.status
                 continue
@@ -187,6 +258,18 @@ class DynamicManifestCatalog:
                 asset=entry.asset,
                 timeframe=entry.timeframe,
             )
+            if (
+                entry.warmup_required is not None
+                and entry.warmup_required != instance.warmup_required
+            ):
+                self._emit(
+                    "WARMUP_MISMATCH",
+                    strategy_key=entry.key,
+                    declared=entry.warmup_required,
+                    calculated=instance.warmup_required,
+                )
+                continue
+            incoming_keys.add(entry.key)
             self._active_strategies[entry.key] = CatalogStrategyInfo(
                 entry=entry,
                 instance=instance,
@@ -212,10 +295,12 @@ class DynamicManifestCatalog:
                 # No orders in flight: discard immediately
                 logger.info("Strategy %s discarded immediately upon manifest update", key)
 
+    @_locked
     def notify_order_opened(self, strategy_key: str, order_id: str) -> None:
         """Register an order currently in-flight for a strategy."""
         self._in_flight_orders.setdefault(strategy_key, set()).add(order_id)
 
+    @_locked
     def notify_order_settled(self, strategy_key: str, order_id: str) -> None:
         """Notify that an in-flight order has settled. Discard retiring strategies when clear."""
         orders = self._in_flight_orders.get(strategy_key)
@@ -239,6 +324,7 @@ class DynamicManifestCatalog:
             strategy_key
         )
 
+    @_locked
     def is_eligible(
         self,
         strategy_key: str,
@@ -256,12 +342,22 @@ class DynamicManifestCatalog:
             return False, "STRATEGY_NOT_FOUND", None
 
         # R-BOT-8: Observation strategies are only eligible on Demo accounts
-        is_real = account_type.strip().upper() in {"REAL", "LIVE"}
-        if is_real and info.status == "observation":
+        mode = account_type.strip().upper()
+        if mode not in {"REAL", "LIVE", "DEMO", "PRACTICE"}:
+            return False, "ACCOUNT_TYPE_UNCONFIRMED", None
+        if info.status not in {"approved", "observation"}:
+            return False, "STRATEGY_STATUS_INELIGIBLE", None
+        if mode in {"REAL", "LIVE"} and info.status == "observation":
             return False, "OBSERVATION_ONLY_DEMO", None
 
         # Trading hours check in UTC
         eval_time = now_utc if now_utc is not None else self._utc_clock()
+        if eval_time.utcoffset() is None:
+            return False, "CLOCK_UNTRUSTED", None
+        if self._published_at is not None and eval_time.timestamp() < self._published_at:
+            return False, "MANIFEST_NOT_YET_VALID", None
+        if self._expires_at is not None and eval_time.timestamp() >= self._expires_at:
+            return False, "MANIFEST_EXPIRED", None
         if not is_within_trading_hours(info.entry.hours_utc, eval_time):
             return False, "OUTSIDE_TRADING_HOURS", None
 
@@ -276,6 +372,7 @@ class DynamicManifestCatalog:
 
         return True, "ELIGIBLE", payout_res
 
+    @_locked
     def demote_to_observation(
         self,
         strategy_key: str,
@@ -286,10 +383,12 @@ class DynamicManifestCatalog:
         if info is None:
             return False
         info.status = "observation"
+        self._demotions[strategy_key] = info.entry.validated
         info.entry = replace(info.entry, status="observation")
         logger.info("Strategy %s demoted to observation: %s", strategy_key, reason)
         return True
 
+    @_locked
     def demote_all_to_observation(
         self,
         reason: str = "MANIFEST_EXPIRED",

@@ -1,9 +1,22 @@
-# tl-manifest-schema 1.0.0 — R-MAN-1..7
+# tl-manifest-schema 1.1.0 — R-MAN-1..7
 
 Contrato local do Strategy Lab. Não é importado pelo aplicativo principal e não envia ordens.
 Pydantic strict + JSON Schema + Ed25519, com strings decimais preservadas byte a byte.
 O runtime depende apenas de pydantic, cryptography e do tl-primitives **deste Lab**.
 jsonschema é utilizado somente pelos testes.
+
+## Revisão aditiva 1.1 (warmup)
+
+`schema_version` continua `1`. Novas publicações declaram `schema_revision: "1.1"`
+e `warmup_required` inteiro por estratégia. O builder calcula esse valor a partir
+dos primitivos e parâmetros da família, sem importar o bot. O consumidor deve
+recalcular e rejeitar a entrada divergente (`WARMUP_MISMATCH`).
+
+Manifestos legados sem `schema_revision` continuam aceitos. Preserve
+`exclude_unset=True` na serialização de objetos históricos assinados: acrescentar
+defaults modifica os bytes e invalida a assinatura. Atualize os consumidores
+antes de publicar a revisão 1.1. O exemplo histórico assinado da Arquitetura §6
+e seus vetores públicos não foram reescritos.
 
 ## Instalação e validação (raiz strategy-lab)
 

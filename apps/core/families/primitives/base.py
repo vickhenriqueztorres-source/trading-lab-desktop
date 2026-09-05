@@ -27,12 +27,12 @@ class Candle:
     h: Decimal
     l: Decimal  # noqa: E741 - canonical OHLC field required by R-PRIM-1
     c: Decimal
-    tick_vol: int
+    tick_vol: int | None
 
     def __post_init__(self) -> None:
         if self.ts % 60 != 0:
             raise ValueError("candle timestamp must be a multiple of 60")
-        if self.tick_vol < 0:
+        if self.tick_vol is not None and (type(self.tick_vol) is not int or self.tick_vol < 0):
             raise ValueError("tick_vol must be non-negative")
         if self.l > min(self.o, self.c) or max(self.o, self.c) > self.h:
             raise ValueError("candle OHLC bounds are invalid")
@@ -57,6 +57,7 @@ class Indicator(ABC):
     category: Category
     name: str
     param_spec: dict[str, ParamRange]
+    requires_tick_volume = False
 
     @abstractmethod
     def update(self, candle: Candle) -> Output | None:

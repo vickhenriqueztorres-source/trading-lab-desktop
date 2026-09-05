@@ -215,6 +215,7 @@ def validate_payout(wilson: str, payout: str) -> None:
 def validate_manifest_schema(data: dict[str, Any]) -> None:
     allowed_top_keys = {
         "schema_version",
+        "schema_revision",
         "manifest_version",
         "key_id",
         "published_at",
@@ -233,6 +234,9 @@ def validate_manifest_schema(data: dict[str, Any]) -> None:
     if type(schema_ver) is not int:
         raise ValueError("MANIFEST_SCHEMA_VERSION")
     if schema_ver != 1:
+        raise ValueError("MANIFEST_SCHEMA_INVALID")
+    schema_revision = data.get("schema_revision")
+    if "schema_revision" in data and schema_revision != "1.1":
         raise ValueError("MANIFEST_SCHEMA_INVALID")
 
     for required_key in (
@@ -301,8 +305,16 @@ def validate_manifest_schema(data: dict[str, Any]) -> None:
             "status",
             "management",
             "reason_pt",
+            "warmup_required",
         }
         if not s.keys() <= allowed_strat_keys:
+            raise ValueError("MANIFEST_SCHEMA_INVALID")
+        warmup_required = s.get("warmup_required")
+        if schema_revision == "1.1" and warmup_required is None:
+            raise ValueError("MANIFEST_WARMUP_REQUIRED")
+        if warmup_required is not None and (
+            type(warmup_required) is not int or not 1 <= warmup_required <= 10_000
+        ):
             raise ValueError("MANIFEST_SCHEMA_INVALID")
         for req_k in (
             "key",

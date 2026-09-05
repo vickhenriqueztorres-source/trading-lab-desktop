@@ -19,6 +19,7 @@ def _make_strategy(
     hours_utc: tuple[int, int] = (0, 6),
     payout_min: str = "0.85",
     wilson_lower: str = "0.565",
+    warmup_required: int | None = None,
 ) -> StrategyCatalogEntry:
     return StrategyCatalogEntry(
         key=key,
@@ -57,6 +58,7 @@ def _make_strategy(
             score=Decimal("4.5"),
         ),
         status=status,
+        warmup_required=warmup_required,
     )
 
 
@@ -68,8 +70,8 @@ def _make_manifest(version: int, strategies: list[StrategyCatalogEntry]) -> dict
         "primitives_parity_sha256": (
             "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10"
         ),
-        "published_at": 1756684800,
-        "expires_at": 1759276800,
+        "published_at": int(datetime(2026, 9, 1, tzinfo=UTC).timestamp()),
+        "expires_at": int(datetime(2026, 10, 1, tzinfo=UTC).timestamp()),
         "strategies": tuple(strategies),
         "signature": "test_sig",
         "key_id": "A",
@@ -210,7 +212,8 @@ def test_hours_utc_filter_and_dst() -> None:
     catalog = DynamicManifestCatalog()
     s1 = _make_strategy("s1", "F1", hours_utc=(0, 6))
     s2 = _make_strategy("s2", "F1", hours_utc=(22, 4))
-    catalog.apply_manifest(_make_manifest(1, [s1, s2]))
+    # Isolate the hour/DST rule across months; expiry has dedicated tests.
+    catalog.apply_manifest({"manifest_version": 1, "strategies": [s1, s2]})
 
     # 03:30 UTC -> inside (0, 6) and inside (22, 4)
     t_inside = datetime(2026, 9, 1, 3, 30, tzinfo=UTC)
@@ -293,3 +296,20 @@ def test_rejected_strategy_ignored() -> None:
 
     assert "s_rej" not in catalog.active_strategies
     assert catalog.get_strategy("s_rej") is None
+
+
+def test_manifest_warmup_mismatch_rejects_entry_only() -> None:
+    catalog = DynamicManifestCatalog()
+    mismatched = _make_strategy("bad_warmup", "F1", warmup_required=27)
+    valid = _make_strategy("good_warmup", "F2", warmup_required=20)
+
+    catalog.apply_manifest(_make_manifest(1, [mismatched, valid]))
+
+    assert "bad_warmup" not in catalog.active_strategies
+    assert "good_warmup" in catalog.active_strategies
+    assert catalog.events == (
+        (
+            "WARMUP_MISMATCH",
+            {"strategy_key": "bad_warmup", "declared": 27, "calculated": 28},
+        ),
+    )

@@ -66,6 +66,10 @@ class AccountBusyError(PersistenceError):
     pass
 
 
+class ManifestMonitorPendingError(PersistenceError):
+    reason_code = "MANIFEST_MONITOR_PENDING"
+
+
 class InvalidOrderTransition(PersistenceError):
     pass
 
@@ -284,6 +288,17 @@ class SingleDatabaseWriter:
                     "HG_EXPOSURE_CURRENCY_MISMATCH",
                     "Reservation currency does not match the configured reference currency.",
                 )
+            if (
+                request.manifest_context is not None
+                and connection.execute(
+                    "SELECT 1 FROM manifest_order_bindings b JOIN orders o USING(order_id) "
+                    "WHERE b.consumed=0 AND o.state='SETTLED' LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
+                # In the SAME writer transaction as admission: no new entry can
+                # overtake a committed settlement awaiting its statistical gate.
+                raise ManifestMonitorPendingError("MANIFEST_MONITOR_PENDING")
             if global_max_exposure_minor_units is not None:
                 row = connection.execute(
                     "SELECT COALESCE(SUM(amount_minor), 0) AS total "
@@ -400,6 +415,16 @@ class SingleDatabaseWriter:
                     created_at.isoformat(),
                 ),
             )
+            if request.manifest_context is not None:
+                context = json.loads(request.manifest_context)
+                if context["strategy_key"] != request.strategy_id:
+                    raise ValueError("manifest binding does not match order")
+                connection.execute(
+                    "INSERT INTO manifest_order_bindings"
+                    "(order_id, strategy_key, revision, context) "
+                    "VALUES (?, ?, ?, ?)",
+                    (order_id, request.strategy_id, context["revision"], request.manifest_context),
+                )
             self._inject("before_commit")
 
         self._transaction(operation)
@@ -2144,6 +2169,114 @@ class SingleDatabaseWriter:
                 RiskReservationState.ACTIVE.value,
             ),
         )
+
+    def load_iqoption_execution_state(self) -> dict[str, Any] | None:
+        """One startup read, including evidence for a crash across submit.
+
+        No order, reservation or outbox is changed by this projection.
+        """
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT state_json FROM iqoption_execution_state WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                return None
+            payload: dict[str, Any] = json.loads(row[0])
+            pending = payload.get("pending")
+            if pending is not None:
+                rows = self._connection.execute(
+                    """SELECT o.state, b.state_reason
+                       FROM orders o JOIN outbox_messages b USING(intent_id)
+                       WHERE o.correlation_id=? AND o.broker=? AND o.account_id=?""",
+                    (pending["correlation_id"], "IQ_OPTION", "IQOPTION_PRACTICE"),
+                ).fetchall()
+                if len(rows) > 1:
+                    raise PersistenceError("IQOPTION_CORRELATION_CONFLICT")
+                payload["pending_evidence"] = None if not rows else dict(rows[0])
+            return payload
+
+    def save_iqoption_execution_state(self, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded) > 65536:
+            raise PersistenceError("IQOPTION_EXECUTION_STATE_TOO_LARGE")
+
+        def operation(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """INSERT INTO iqoption_execution_state VALUES (1, ?)
+                   ON CONFLICT(singleton) DO UPDATE SET state_json=excluded.state_json""",
+                (encoded,),
+            )
+
+        self._transaction(operation)
+
+    def manifest_monitor_states(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                dict(row)
+                for row in self._connection.execute(
+                    "SELECT * FROM manifest_monitor_states"
+                ).fetchall()
+            ]
+
+    def consume_manifest_orders(
+        self,
+        update: Callable[[dict[str, Any], dict[str, Any] | None, int], dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Snapshot nonterminal bindings; atomically consume terminal evidence and SPRT.
+
+        Called by the background monitor, never by the candle evaluation loop.
+        A financial commit and a monitor commit may be separated by a crash:
+        consumed=0 is the durable recovery cursor for either events or reconciliation.
+        """
+
+        def operation(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+            rows = connection.execute("""
+                SELECT b.*, o.state, o.realized_pnl_minor, o.updated_at
+                FROM manifest_order_bindings b JOIN orders o USING(order_id)
+                WHERE b.consumed = 0 ORDER BY o.updated_at, o.order_id LIMIT 256
+            """).fetchall()
+            result = []
+            for raw in rows:
+                row = dict(raw)
+                if row["state"] == "SETTLED":
+                    if row["realized_pnl_minor"] is None:
+                        raise ValueError("settled order without financial evidence")
+                    prior = connection.execute(
+                        "SELECT state_json FROM manifest_monitor_states WHERE revision = ?",
+                        (row["revision"],),
+                    ).fetchone()
+                    binding = json.loads(row["context"])
+                    prior_state = None if prior is None else json.loads(prior[0])
+                    if prior_state is None:
+                        legacy = connection.execute(
+                            "SELECT * FROM sprt_monitors WHERE strategy_key = ?",
+                            (row["strategy_key"],),
+                        ).fetchone()
+                        if legacy is not None and all(
+                            Decimal(str(legacy[key])) == Decimal(str(binding[key]))
+                            for key in ("p0", "p1")
+                        ):
+                            prior_state = dict(legacy)
+                    updated = update(
+                        binding,
+                        prior_state,
+                        int(row["realized_pnl_minor"]),
+                    )
+                    connection.execute(
+                        "INSERT INTO manifest_monitor_states VALUES (?, ?, ?) "
+                        "ON CONFLICT(revision) DO UPDATE SET state_json=excluded.state_json",
+                        (row["revision"], row["strategy_key"], json.dumps(updated, sort_keys=True)),
+                    )
+                    row["monitor"] = updated
+                if row["state"] in {"SETTLED", "REJECTED", "SEND_BLOCKED", "CANCELLED", "EXPIRED"}:
+                    connection.execute(
+                        "UPDATE manifest_order_bindings SET consumed=1 WHERE order_id=?",
+                        (row["order_id"],),
+                    )
+                result.append(row)
+            return result
+
+        return cast(list[dict[str, Any]], self._transaction(operation))
 
     def save_sprt_monitor(
         self,

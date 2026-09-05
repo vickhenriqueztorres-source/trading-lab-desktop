@@ -41,6 +41,7 @@ class RSIExtreme(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``period + 1`` closes for the initial Wilder RSI."""
         return self.period + 1
 
     def reset(self) -> None:

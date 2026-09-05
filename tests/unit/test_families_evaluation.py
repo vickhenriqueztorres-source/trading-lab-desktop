@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -13,8 +14,9 @@ from apps.core.families import (
     F4SqueezeBreak,
     F5Quadrant,
 )
+from apps.core.families.primitives import Candle
 from packages.domain.market import MarketCandle
-from packages.domain.models import Broker
+from packages.domain.models import Broker, Direction
 from packages.strategies.models import RuntimeContext
 
 
@@ -24,6 +26,7 @@ def _make_market_candle(
     *,
     base_time: datetime,
     is_closed: bool = True,
+    tick_volume: int | None = None,
 ) -> MarketCandle:
     close_time = base_time + timedelta(seconds=60 * (index + 1))
     open_time = close_time - timedelta(seconds=60)
@@ -38,6 +41,30 @@ def _make_market_candle(
         low=price - Decimal("0.0005"),
         close=price,
         is_closed=is_closed,
+        tick_volume=tick_volume,
+    )
+
+
+def _family_instances():
+    return (
+        F1Reversal("f1", {}, asset="EURUSD"),
+        F2Pullback("f2", {}, asset="EURUSD"),
+        F3LevelRejection("f3", {}, asset="EURUSD"),
+        F4SqueezeBreak("f4", {}, asset="EURUSD"),
+        F5Quadrant("f5", {}, asset="EURUSD"),
+    )
+
+
+def _context(strategy_id: str) -> RuntimeContext:
+    return RuntimeContext(
+        broker=Broker.IQ_OPTION,
+        account_id="demo-account",
+        symbol="EURUSD",
+        product="BINARY_OPTION",
+        timeframe_seconds=60,
+        strategy_id=strategy_id,
+        strategy_version="1.0.0",
+        configuration_version="1",
     )
 
 
@@ -150,3 +177,110 @@ def test_f5_quadrant_instantiation() -> None:
     )
     assert f5.family_name == "F5"
     assert f5.warmup_required >= 15
+
+
+def test_family_warmup_equals_max_of_components() -> None:
+    for family in _family_instances():
+        assert family.warmup_required == max(
+            family._regime.warmup_required,
+            family._trigger.warmup_required,
+            family._confirm.warmup_required,
+        )
+
+
+def test_f1_with_20_candles_returns_warming_up_not_none() -> None:
+    family = F1Reversal("f1_warmup", {}, asset="EURUSD")
+    base_time = datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
+    candles = [
+        _make_market_candle(
+            i, Decimal("1.1000") + Decimal(i % 3) / Decimal(10_000), base_time=base_time
+        )
+        for i in range(20)
+    ]
+
+    result = family.evaluate_detailed(candles, _context("f1_warmup"))
+
+    assert result.direction is None
+    assert result.stage == "WARMING_UP"
+    assert (result.warmup_have, result.warmup_need) == (20, 28)
+
+
+def test_f1_with_31_candles_reaches_ok_or_no_signal() -> None:
+    family = F1Reversal("f1_ready", {}, asset="EURUSD")
+    base_time = datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
+    candles = [
+        _make_market_candle(
+            i, Decimal("1.1000") + Decimal(i % 5) / Decimal(10_000), base_time=base_time
+        )
+        for i in range(31)
+    ]
+
+    result = family.evaluate_detailed(candles, _context("f1_ready"))
+
+    assert result.stage in {"OK", "NO_SIGNAL"}
+    assert result.regime is not None
+    assert result.trigger is not None
+    assert result.confirm is not None
+
+
+def test_f4_without_tick_volume_reports_unavailable() -> None:
+    family = F4SqueezeBreak("f4_no_volume", {}, asset="EURUSD")
+    base_time = datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
+    candles = [
+        _make_market_candle(
+            i, Decimal("1.1000") + Decimal(i % 4) / Decimal(10_000), base_time=base_time
+        )
+        for i in range(42)
+    ]
+
+    result = family.evaluate_detailed(candles, _context("f4_no_volume"))
+
+    assert result.stage == "TICK_VOLUME_UNAVAILABLE"
+    assert result.direction is None
+
+
+def test_f4_with_real_tick_volume_evaluates() -> None:
+    family = F4SqueezeBreak("f4_volume", {}, asset="EURUSD")
+    base_time = datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
+    candles = [
+        _make_market_candle(
+            i,
+            Decimal("1.1000") + Decimal(i % 4) / Decimal(10_000),
+            base_time=base_time,
+            tick_volume=100 + i,
+        )
+        for i in range(42)
+    ]
+
+    result = family.evaluate_detailed(candles, _context("f4_volume"))
+
+    assert result.stage not in {"WARMING_UP", "TICK_VOLUME_UNAVAILABLE"}
+    assert result.regime is not None
+    assert result.trigger is not None
+    assert result.confirm is not None
+
+
+def test_evaluate_wrapper_preserves_legacy_behavior() -> None:
+    family = F3LevelRejection("f3_wrapper", {}, asset="EURUSD")
+    base_time = datetime(2026, 9, 1, 0, 2, tzinfo=UTC)
+    candle = replace(
+        _make_market_candle(0, Decimal("99.2"), base_time=base_time),
+        open=Decimal("99.15"),
+        high=Decimal("99.25"),
+        low=Decimal("98.95"),
+    )
+    # Legacy replay consensus must actually emit, not merely compare None == None.
+    legacy = family.update_candle(
+        Candle(
+            ts=int(candle.close_time.timestamp()),
+            o=candle.open,
+            h=candle.high,
+            l=candle.low,
+            c=candle.close,
+            tick_vol=1,
+        )
+    )
+    detailed = family.evaluate_detailed([candle], _context("f3_wrapper"))
+    assert legacy is Direction.CALL
+    assert detailed.stage == "OK"
+    assert family.evaluate([candle], _context("f3_wrapper")) == detailed.direction == legacy

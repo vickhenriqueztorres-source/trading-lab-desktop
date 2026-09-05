@@ -27,6 +27,7 @@ class RSIDivergence(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``period + lookback + 1`` for RSI seed plus paired observations."""
         return self.period + self.lookback + 1
 
     def reset(self) -> None:

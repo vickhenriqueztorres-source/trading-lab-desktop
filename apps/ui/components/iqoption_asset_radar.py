@@ -136,6 +136,7 @@ class IqOptionAssetRadarWidget(QWidget):
         for row, item in enumerate(self._ranking):
             # Column 0: Symbol display name
             sym_item = QTableWidgetItem(item.display_name)
+            sym_item.setToolTip(item.candidate_details)
             sym_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
 
             # Column 1: RSI Value
@@ -152,7 +153,13 @@ class IqOptionAssetRadarWidget(QWidget):
                 rsi_item.setForeground(QColor(ACCENT_CYAN))
 
             # Column 2: Direction / Signal
-            if item.direction == "CALL":
+            if item.status == "WARMING_UP":
+                sig_text = "… AQUECENDO"
+                sig_color = ACCENT_AMBER
+            elif item.status == "TICK_VOLUME_UNAVAILABLE":
+                sig_text = "— SEM VOLUME"
+                sig_color = ACCENT_AMBER
+            elif item.direction == "CALL":
                 sig_text = "🟢 COMPRA (CALL)"
                 sig_color = ACCENT_GREEN
             elif item.direction == "PUT":
@@ -167,22 +174,76 @@ class IqOptionAssetRadarWidget(QWidget):
             sig_item.setForeground(QColor(sig_color))
 
             # Column 3: Condition / Zone
-            if item.condition == "OVERSOLD":
+            if item.status in {"READ_ONLY_PROBE", "CORRECT_CONFIGURATION", "MANUAL_REVIEW"}:
+                cond_text = item.candidate_details
+                cond_color = ACCENT_AMBER
+            elif item.condition in {
+                "NO_CANDIDATE",
+                "ASSET_MISMATCH",
+                "STATUS_NOT_ELIGIBLE",
+                "DEMO_ONLY",
+            }:
+                cond_text = "Sem estratégia validada para este ativo"
+                cond_color = TEXT_MUTED
+            elif item.condition == "OUTSIDE_HOURS":
+                cond_text = "Aguardando horário UTC da estratégia"
+                cond_color = ACCENT_AMBER
+            elif item.condition == "OVERSOLD":
                 cond_text = "SOBREVENDA (< 30)"
                 cond_color = ACCENT_GREEN
             elif item.condition == "OVERBOUGHT":
                 cond_text = "SOBRECOMPRA (> 70)"
                 cond_color = ACCENT_RED
+            elif item.condition.startswith("AQUECENDO "):
+                cond_text = item.condition.replace("AQUECENDO", "Aquecendo", 1)
+                cond_color = ACCENT_AMBER
+            elif item.condition == "VOLUME_INDISPONIVEL":
+                cond_text = "Volume de ticks indisponível"
+                cond_color = ACCENT_AMBER
+            elif item.condition in {
+                "REGIME",
+                "TRIGGER",
+                "CONFIRM",
+                "DISAGREE",
+                "SIGNAL_CONFLICT",
+                "NO_SIGNAL",
+                "OUTSIDE_HOURS",
+            }:
+                cond_text = f"SEM SINAL · {item.condition}"
+                cond_color = TEXT_MUTED
             else:
                 cond_text = "ZONA NEUTRA (30 — 70)"
                 cond_color = TEXT_MUTED
 
             cond_item = QTableWidgetItem(cond_text)
+            cond_item.setToolTip(item.candidate_details)
             cond_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             cond_item.setForeground(QColor(cond_color))
 
             # Column 4: Status
-            if item.status == "TRIGGERED":
+            if item.status in {"READ_ONLY_PROBE", "CORRECT_CONFIGURATION", "MANUAL_REVIEW"}:
+                status_text = {
+                    "READ_ONLY_PROBE": "AGUARDANDO VERIFICAÇÃO",
+                    "CORRECT_CONFIGURATION": "CORRIGIR PARÂMETROS",
+                    "MANUAL_REVIEW": "REVISÃO MANUAL",
+                }[item.status]
+                status_color = ACCENT_AMBER
+            elif item.status in {
+                "NO_CANDIDATE",
+                "ASSET_MISMATCH",
+                "OUTSIDE_HOURS",
+                "DEMO_ONLY",
+                "STATUS_NOT_ELIGIBLE",
+            }:
+                status_text = item.status
+                status_color = ACCENT_AMBER
+            elif item.status == "WARMING_UP":
+                status_text = "AQUECENDO"
+                status_color = ACCENT_AMBER
+            elif item.status == "TICK_VOLUME_UNAVAILABLE":
+                status_text = "AGUARDANDO VOLUME"
+                status_color = ACCENT_AMBER
+            elif item.status == "TRIGGERED":
                 status_text = "⚡ SINAL DISPARADO"
                 status_color = ACCENT_AMBER
             elif item.selected:
@@ -193,6 +254,7 @@ class IqOptionAssetRadarWidget(QWidget):
                 status_color = TEXT_MUTED
 
             status_item = QTableWidgetItem(status_text)
+            status_item.setToolTip(item.candidate_details)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             status_item.setForeground(QColor(status_color))
 

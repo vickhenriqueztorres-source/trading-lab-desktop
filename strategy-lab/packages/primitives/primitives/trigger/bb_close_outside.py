@@ -35,6 +35,7 @@ class BBCloseOutside(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``length + 1``: N prior closes plus the compared close."""
         return self.length + 1
 
     def reset(self) -> None:

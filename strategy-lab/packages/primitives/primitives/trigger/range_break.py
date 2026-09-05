@@ -21,6 +21,7 @@ class RangeBreak(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``length + 1``: N range candles plus the breakout candle."""
         return self.length + 1
 
     def reset(self) -> None:

@@ -12,6 +12,7 @@ from manifest_schema.families import (
     FAMILY_COMPONENTS,
     FAMILY_GATES,
     FAMILY_SPECS,
+    family_warmup_required,
 )
 from manifest_schema.models import Manifest
 from manifest_schema.rules import decimal_value, validate_range
@@ -44,6 +45,24 @@ def test_each_family_derives_registry_specs():
             assert FAMILY_SPECS[family][wire] == REGISTRY[name].param_spec[parameter]
         assert FAMILY_SPECS[family].keys() == (
             FAMILY_BINDINGS[family].keys() | FAMILY_GATES[family].keys()
+        )
+
+
+def test_family_warmups_are_derived_from_reference_primitives():
+    vectors = json.loads((ROOT / "contracts/manifest_acceptance_vectors.json").read_text("utf-8"))
+    # These vectors intentionally exercise non-default parameters; F5 uses RSI 7,
+    # therefore its independently derived warm-up is 8 rather than the default 15.
+    expected = {"F1": 28, "F2": 20, "F3": 1, "F4": 39, "F5": 8}
+    for family, warmup in expected.items():
+        case = next(item for item in vectors["cases"] if item["id"] == f"valid_{family.lower()}")
+        entry = case["document"]["strategies"][0]
+        assert (
+            family_warmup_required(
+                family,
+                entry["params"],
+                entry["hours_utc"],
+            )
+            == warmup
         )
 
 
@@ -123,6 +142,28 @@ def test_export_cli(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["export", "--output", str(path)])
     main()
     assert path.read_bytes() == schema_bytes()
+
+
+@pytest.mark.parametrize("warmup", [None, 0, True, "28", 10001])
+def test_v11_requires_typed_warmup_in_both_validators(fixture_document, warmup):
+    fixture_document["schema_revision"] = "1.1"
+    fixture_document["strategies"][0]["warmup_required"] = warmup
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(fixture_document)
+    assert not contract_validator(manifest_schema()).is_valid(fixture_document)
+
+
+def test_v11_warmup_is_additive_and_signed(fixture_document, test_seed, test_public):
+    from manifest_schema.signing import sign, verify
+
+    fixture_document["schema_revision"] = "1.1"
+    fixture_document["strategies"][0]["warmup_required"] = 28
+    signed = sign(fixture_document, test_seed, "A", allow_test_keys=True)
+    assert contract_validator(manifest_schema()).is_valid(signed.model_dump(exclude_unset=True))
+    assert verify(signed, {"A": test_public}, allow_test_keys=True)
+    mutated = signed.model_dump(exclude_unset=True)
+    mutated["strategies"][0]["warmup_required"] = 27
+    assert not verify(mutated, {"A": test_public}, allow_test_keys=True)
 
 
 def test_structural_mutations_match_schema_and_pydantic(fixture_document):

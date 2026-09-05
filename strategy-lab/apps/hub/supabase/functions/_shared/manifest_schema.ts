@@ -46,6 +46,9 @@ export function parseJsonNoDuplicate(text: string): unknown {
 export function validateManifestSchema(value: unknown): string | null {
   if (!isRecord(value)) return "MANIFEST_NOT_OBJECT";
   if (value.schema_version !== MANIFEST_SCHEMA_VERSION) return "MANIFEST_SCHEMA_VERSION";
+  if (value.schema_revision !== undefined && value.schema_revision !== "1.1") {
+    return "MANIFEST_SCHEMA_REVISION";
+  }
   if (!isSafePositiveInt(value.manifest_version)) return "MANIFEST_VERSION";
   if (!isSafeEpoch(value.published_at) || !isSafeEpoch(value.expires_at)) return "MANIFEST_EPOCH";
   if ((value.expires_at as number) - (value.published_at as number) > 45 * 86400) {
@@ -68,6 +71,12 @@ export function validateManifestSchema(value: unknown): string | null {
   }
   const keys = new Set<string>();
   for (const strategy of value.strategies) {
+    if (
+      value.schema_revision === "1.1" &&
+      (!isRecord(strategy) || strategy.warmup_required == null)
+    ) {
+      return "MANIFEST_WARMUP_REQUIRED";
+    }
     const problem = validateStrategy(strategy, keys);
     if (problem) return problem;
   }
@@ -92,6 +101,12 @@ function validateStrategy(value: unknown, keys: Set<string>): string | null {
   }
   if ((value.hours_utc[0] as number) >= (value.hours_utc[1] as number)) return "STRATEGY_HOURS";
   if (!isRecord(value.params)) return "STRATEGY_PARAMS";
+  if (
+    value.warmup_required != null &&
+    (!isSafePositiveInt(value.warmup_required) || (value.warmup_required as number) > 10000)
+  ) {
+    return "STRATEGY_WARMUP";
+  }
   for (const paramValue of Object.values(value.params)) {
     if (typeof paramValue !== "string" || !decimalPattern.test(paramValue)) {
       return "STRATEGY_PARAM_DECIMAL";

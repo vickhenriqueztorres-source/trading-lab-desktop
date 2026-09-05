@@ -4736,6 +4736,320 @@ porque a instância do operador permanece ativa; o health check do artefato inte
 - 2 testes laboratoriais do checklist aprovados em `strategy-lab/tests/test_closing_checklist_lab.py`.
 - Linter, formatador e scanner de segredos 100% limpos em ambos os projetos.
 
+## WL-2026-09-03-02 — Warmup verificado, volume real e manifesto v1.1
 
+Requisitos: contrato de warmup da tarefa, R-PRIM-1/3/6, R-MAN-1/3/4,
+R-PUB-1, R-BOT-5/9, R-ISO-2..6. Desktop mantém v1.9.11.
 
+- Derivação por instância e janela `min(120, max(warmups ativos) + 3)`;
+  defaults F1/F2/F3/F4/F5 = 28/20/1/39/15; requests = 31/23/4/42/18.
+  O antigo count 20 comprovadamente não aquecia F1/F4.
+- `EvalResult`, estágio explícito e radar `AQUECENDO have/need`; consenso
+  matemático preservado, com wrapper `evaluate` compatível.
+- Volume opcional no payload, mapeamento validado do broker e bloqueio explícito
+  F4 sem volume. Removido somente o piso legado de 15 velas na leitura do
+  adaptador, necessário para F3; guardas financeiras inalteradas.
+- Cache de janela por manifesto/estratégia e histórico por intervalo monotônico;
+  substituição do client invalida dados da geração anterior. Uma aquisição de
+  orçamento por request; não aumenta o consumo por aumentar count.
+- Manifesto aditivo `schema_revision=1.1` mantendo `schema_version=1`.
+  Publicação calcula warmup no Lab; Desktop confere localmente, rejeita apenas
+  entrada divergente e emite `WARMUP_MISMATCH`. Schema regenerado, assinaturas
+  históricas preservadas. Nenhum import operacional cruzado.
+- Regressão focada: 79 passed. Replay sintético de 24h: 1 passed; distribuição
+  completa, parâmetros e limitações em `docs/WARMUP_CONTRACT_VALIDATION.md`.
+- Scanner de segredos e compileall executados sem problemas. Suíte global
+  Desktop e verificações completas foram tentadas: há falhas de handshake e
+  problemas de lint/tipagem em arquivos fora do diff. Não há aprovação global.
+- Não implementado: replay incremental (opcional). Não executados: ordens
+  externas, coleta autenticada, build/EXE, deploy Hub ou testes em segunda máquina.
+
+Esta entrada não substitui resultados históricos; registra a evidência desta
+rodada. Não é uma declaração de release aprovado.
+
+Fechamento desta rodada: regressão Desktop ampliada **86 passed**, incluindo
+paridade SHA-256 e isolamento; Lab completo **312 passed, 3 skipped**;
+Lab mypy estrito **79 arquivos aprovados**; núcleo alterado Desktop mypy
+**34 arquivos aprovados**. Hash dos primitivos preservado. Scanner, compileall
+e diff-check aprovados. Ruff/format dos arquivos alterados aprovados.
+
+A suíte global Desktop foi interrompida após falhas e perda de progresso. Nova
+execução isolada do contrato Deriv falhou no handshake inicial (deadline
+existente preservado). Há ainda 28 diagnósticos Ruff, 8 arquivos de formatação
+e 4 erros mypy em UI preexistentes fora deste diff. Lab format-check global
+reporta um arquivo não alterado (`test_closing_checklist_lab.py`). Deno não
+executado por indisponibilidade local. **Release/EXE não homologado nesta etapa.**
+
+## WL-2026-09-03-03 — Causa 2: candidatura IQ governada pelo manifesto
+
+Baseline v1.9.11 preservada. Requisitos: R-BOT-5/8/9, R-CAT-005/006/007/014/015,
+R-BRK-004/005, R-SCOPE-006 e escopo ajustado A–D autorizado pelo operador.
+Risco: roteamento de estratégias no Core; nenhuma alteração no protocolo externo de compra,
+nos limites financeiros, no estado UNKNOWN ou nos bloqueios Real.
+
+### Fatos corrigidos antes de agir
+
+| Fato inicial | Código encontrado | Ação |
+|---|---|---|
+| Seleção ignora timeframe | Já filtrava por timeframe do risk_config | Manifesto agora define TF |
+| M5 executa sobre M1 | M5 era descartada com configuração M1 | Buscar janela M5 da candidata |
+| AUTO usa receita em qualquer ativo | Comparava símbolo-base, confundindo OTC/spot | Igualdade exata |
+| Horário retorna None silencioso | OUTSIDE_HOURS já era estruturado no radar | Preservado; filtro prévio no resolvedor |
+| RSI opera em Real | Conector já bloqueava fora de Practice | Receita local demo_only explícita, sem fallback |
+
+### Autoridade e decisões
+
+| Origem | Responsabilidade |
+|---|---|
+| Manifesto | ativo exato, TF, horário, parâmetros, warmup, status e evidências |
+| risk_config | modo SINGLE/AUTO, chave escolhida, stake/stops e limites |
+| Bot/Core | resolução local, janelas, avaliação, arbitragem, gates e pipeline financeiro |
+
+- Novo resolvedor puro e arbitrável; SINGLE não procura a primeira entrada alternativa;
+  AUTO admite todas as receitas compatíveis, observação somente em Demo/Practice.
+- Removida substituição implícita spot/OTC, inclusive depois de ativo suspenso.
+- RSI tem receita explícita local `demo_only`; ID histórico preservado. AUTO nunca a usa.
+- TF deriva da candidata; janelas compartilhadas por par símbolo/TF, com maior warmup.
+  Corrigida comparação de epochs de escalas diferentes no cache (M1 versus M5).
+  Geração do worker invalida cache; rate limiter monotônico preservado.
+- Arbitragem: maior margem Decimal, empate por chave; sinais opostos do mesmo contexto
+  continuam cancelados por AG-INV-015. Uma intenção, sem soma de stake e sem retry financeiro.
+- UI fixa contexto SINGLE, expõe AUTO e mostra motivos/detalhes das candidatas no radar.
+  `iqoption_decision` deduplicado, bounded; aviso de override de timeframe não repete por ciclo.
+- JSON passa a gravar `active_strategy_key`. Alias `strategy_id` continua aceito no load,
+  construtor e protocolo; valores conflitantes são rejeitados, sem mudança de schema financeiro.
+- Opção E adiada para preservar paridade Lab/bot: nenhuma fórmula ou checagem interna de
+  sessão dos primitivos foi alterada. A etapa não reimplementa payout/Causa 3 nem troca
+  consultas financeiras duráveis preexistentes por caches sem reconciliação.
+- Worktree de warmup anterior preservado; sem commit, push, build, deploy ou ordens externas.
+
+### Evidência executada
+
+- Testes focados iniciais: 34 passed.
+- Regressão ampliada: 91 passed (81,90 s), incluindo contratos de warmup/paridade, UI
+  offscreen, catálogo, risco, isolamento e replay. Reexecução final registrada abaixo.
+- Replay de roteamento AUTO: 24h sintéticas, 16 símbolos, 23040 resoluções; tabela completa
+  e definição das contagens em `docs/IQOPTION_MANIFEST_ROUTING_VALIDATION.md`.
+  EURUSD e EURUSD-OTC: 960 NO_CANDIDATE, 1440 ASSET_MISMATCH, 960 OUTSIDE_HOURS cada;
+  demais 14 símbolos: 1440/1440/0. Motivos podem coexistir por epoch, por receitas diferentes.
+  Não é soak externo nem simulação de rentabilidade.
+- `python -m mypy apps packages`: aprovado, 303 arquivos. Nomes sobrepostos no callback
+  de configuração IQ/Deriv foram separados, eliminando os quatro erros locais preexistentes.
+- Ruff dos 14 arquivos da etapa: aprovado. Ruff global continua com diagnósticos em arquivos
+  não alterados; format global: 6 arquivos preexistentes pendentes, 485 formatados.
+- `compileall -q apps packages`: aprovado. `scripts/scrub_secrets.py --all`: nenhum segredo.
+- Suíte global tentada com `pytest -q --tb=short --maxfail=10`: **146 passed, 1 skipped,
+  7 failed, 3 errors em 468,85 s**. Parada automática no limite de dez problemas.
+  Falhas: readiness do ator de crash, handshakes dos workers Deriv/simulado e teste antigo
+  de UI esperando cinco abas em vez das seis atuais. Nenhum timeout foi aumentado.
+
+**Status:** implementação da Causa 2 com regressão focada aprovada; homologação global/release
+pendente. O relatório não declara suíte inteira verde, conectividade externa ou EXE atualizado.
+
+Fechamento: regressão ampliada repetida **91 passed em 193,46 s**; complemento final
+do resolvedor/UI **20 passed em 29,33 s**, incluindo reconstrução da instância quando ativo/TF
+do manifesto muda (os conjuntos se sobrepõem). Mypy completo repetido: **303 arquivos sem
+erros**. `git diff --check` aprovado após normalização de finais de linha nos arquivos tocados.
+Scanner do repositório aprovado; nenhuma credencial ou ordem externa utilizada.
+
+## WL-2026-09-03-04 — Causa 3: portões de execução do manifesto (v1.9.11)
+
+**Escopo:** R-BOT-5..9, ligação de payout/eligibilidade/SPRT ao caminho IQ Option do
+Core. Plano, decisões, fonte do protocolo e limites em
+`docs/MANIFEST_EXECUTION_GATES_VALIDATION.md`. Mudanças anteriores preservadas.
+
+**Fatos corrigidos:** ausência de chamada ao gate, ausência de monitor no lifecycle e
+notificações do catálogo foram confirmadas. A alegação de operação Real por estratégias
+em observação não foi comprovada; as barreiras Practice-only do motor/conector continuam.
+Também foi encontrado JSON local alimentando o catálogo sem verificar assinatura; o
+lifecycle agora usa o validador existente com chaves de produção, schema e paridade.
+
+**Implementação:**
+
+- Cotação read-only via BROKER_QUOTE_REQUEST/RESPONSE existente, consulta turbo do ativo
+  exato, Decimal desde parsing JSON, comissão convertida em payout, orçamento de mercado
+  compartilhado e eventos de pressão. Sem cache histórico usado como cotação atual.
+- `is_eligible` chamado antes de consumir o sinal; ticket de uso único revalidado dentro
+  da serialização de conta antes de persistir. TTL monotônico de 2 s desde início da
+  leitura, identidade do worker, conta, símbolo, produto/duração, validade e contexto.
+- `notify_order_opened` após commit e antes do dispatch; catálogo serializado com admissão.
+  Migration aditiva 0008: vínculo por ordem/revisão e estado do monitor; migrations
+  publicadas 0001–0007 não foram editadas.
+- `LiveMonitor` instanciado no lifecycle; consumo em background de resultado financeiro
+  persistido, com marcador e SPRT na mesma transação. Cobre restart, eventos duplicados,
+  concorrência de consumidores e liquidação somente por reconciliação. O callback com
+  writer não aceita resultado alternativo: consulta exclusivamente a evidência persistida.
+- Admissão impede ultrapassar settlement ainda não analisado sem declarar falha de banco.
+  Rebaixamento restaurado após restart; revisão nova não recebe resultado da revisão antiga;
+  retiring persiste até estado terminal; falha/ausência/atraso do monitor bloqueiam entrada.
+- Thread encerrada antes do fechamento do SQLite. Nenhuma alteração de fórmula de SPRT,
+  Wilson, limiar, estratégias ou proteção financeira. RSI local explícito permanece
+  SINGLE/Practice, não validado; exige payout fresco, sem inventar estatísticas.
+
+**Validação realmente executada (conjuntos sobrepostos, não somar):**
+
+- Primeira regressão: 86 passed em 17,33 s.
+- Conector/payout/SPRT: 66 passed em 17,95 s.
+- Regressão ampliada: 108 passed em 15,55 s.
+- Consolidação com lifecycle/worker: 128 passed em 21,30 s.
+- Complemento final monitor/gates, incluindo rejeição de cache sem assinatura e orçamento
+  esgotado: 39 passed em 2,89 s.
+- Mypy completo: 303 arquivos sem erros, repetido após alterações finais.
+- Ruff dos 18 arquivos de código/testes da etapa: aprovado. Format check desses 18:
+  aprovado; formatação reaplicada nos arquivos editados depois desse check.
+- compileall apps/packages: aprovado. git diff --check: aprovado (finais de linha
+  normalizados somente nos dois arquivos de persistência tocados).
+- `python scripts/scrub_secrets.py --all`: nenhum segredo detectado.
+- Ruff global: 24 diagnósticos em arquivos fora desta etapa; format global: seis arquivos
+  preexistentes pendentes, 486 já formatados. Não foi alegado Ruff global verde.
+- `python -m pytest -q --tb=short --junitxml=artifacts/manifest-execution-validation/pytest.xml`:
+  suíte completa tentada, apresentou falhas e encerrou com **Windows fatal exception:
+  access violation** durante `test_distribution_build_smoke.py::
+  test_compile_executable_staging_manifest_and_integrity`, na varredura de arquivos do
+  scanner. Sem resumo final/JUnit utilizável; não inferir totais ou causa raiz do crash.
+  Esse teste usa `skip_pyinstaller=True`; não foi produzido um EXE atualizado de release.
+
+**Limitações:** sem login/ordem/cotação IQ Option externa, sem conta Real, sem alteração
+do perfil do operador, Supabase, commit ou push. O protocolo comunitário foi consultado,
+mas disponibilidade/correlação da resposta externa não foi homologada. Raízes públicas
+de produção existentes não foram substituídas por chaves inventadas/de teste. Manifesto
+não verificável fica bloqueado, expondo eventual configuração incompleta de publicação.
+Ordens históricas sem vínculo de revisão não recebem atribuição retroativa inventada.
+
+**Status:** implementação e regressão focada validadas; suíte global e homologação
+externa/release **não aprovadas** nesta etapa. Sem promessa de risco zero.
+
+Fechamento final: repetida a regressão consolidada após as últimas correções e novos
+testes — **130 passed em 22,65 s**. Inclui os 35 casos do arquivo novo de gates, lifecycle,
+worker, payout, SPRT, catálogo, candidaturas, trader e conector comunitário. Mypy completo,
+Ruff dos arquivos tocados, compileall e diff check repetidos: aprovados.
+
+## WL-2026-09-03-05 — v1.9.11 — Causa 5: falhas IQ com escopo e retomada verificada
+
+Pedido: implementar o plano de remoção da falha pegajosa global.
+Risco alto: classificação de envio, persistência e retomada de entradas.
+Requisitos: R-SCOPE-005/006, R-ORD-001/004/005, R-BRK-007/008,
+R-DB-001/003/004/005, R-UI-003 e R-TEST-001/004.
+
+Decisões e implementação:
+
+- Removido o latch global de rejeição. Nova IQFailurePolicy com motivos tipados,
+  escopo de ativo/produto, configuração ou sessão IQ; Deriv não recebe esse latch.
+- Rejeição temporária confirmada: backoff limitado, orçamento existente e consulta
+  read-only antes de novo sinal. Quinta rejeição consecutiva exige revisão no escopo.
+  Razão desconhecida não é presumida transitória; risco e UNKNOWN não expiram por timer.
+- Stake mínima exige alteração pertinente validada. Alterar Stop Loss ou rearmar
+  não apaga rejeição. Nenhum ajuste automático de stake/limites/fórmulas.
+- Migration aditiva 0009: snapshot bounded, epochs e correlação pré-submit escritos
+  pelo writer; recuperação de crash consulta evidência durável. Migrations publicadas
+  intactas. Nenhum dado do operador foi migrado manualmente ou apagado.
+- Rearme preserva consumo e exige candle posterior ao ARM. Espera pré-admissão do
+  monitor preserva o epoch anterior. Gate de payout expirado na admissão não cria
+  latch de conta, pois a fase comprova ausência de submissão.
+- Worker/adapter: resposta incompleta/contraditória após possível buy é ambígua,
+  nunca rejeição presumida. Reserva, outbox e pipeline financeiro permanecem intactos.
+- Radar distingue verificação, correção de configuração e revisão manual, com
+  escopo, motivo e condição/tempo. Eventos sem payload externo bruto.
+
+Validação executada:
+
+- 190 testes da regressão consolidada passaram em 52,98 s (conjunto intermediário).
+- Replay sintético AUTO 24h: 24 rejeições, 48 aceitações fake, 1.368 ciclos sem envio,
+  72 correlações distintas; operador permaneceu armado, sem reset/rearme para recuperar.
+- SQLite temporário comprova reserva ACTIVE/outbox AMBIGUOUS em UNKNOWN, isolamento
+  Deriv, crash entre resultado e snapshot e upgrade 0008→0009 sem mudar checksums.
+- UI Qt offscreen testada para os três estados. Nenhuma interação com desktop real.
+- Mypy completo: 304 arquivos sem erros; Ruff da etapa aprovado; compileall aprovado;
+  scanner completo sem segredos; git diff --check aprovado.
+- Suíte global tentada com -x: 149 passed, 1 skipped, 1 failed em 93,44 s.
+  Falha fora desta alteração: test_trading_lab_main_window_headless espera 5 abas,
+  enquanto o aplicativo já tem 6. Não foi declarado pytest global verde.
+- Ruff global: 24 diagnósticos preexistentes fora da etapa; seis arquivos preexistentes
+  pendentes de format. Não foram escondidos nem corrigidos cosméticos não relacionados.
+
+Relatório: docs/IQOPTION_SCOPED_FAILURE_RECOVERY.md.
+Fora: EXE/build, conta/cotação/ordem externa, login, Supabase, commit/push e liberação Real.
+Motivos desconhecidos e revisão manual continuam bloqueados intencionalmente;
+homologação externa e pendências da suíte global não estão aprovadas.
+
+Fechamento desta etapa: regressão consolidada repetida após as últimas correções —
+**191 passed em 37,29 s**. Ruff e format check dos 12 arquivos de código/testes da
+etapa passaram. Não somar as execuções intermediárias; os conjuntos se sobrepõem.
+
+## WL-2026-09-03-06 — v1.9.11 — EXE atualizado com recuperação IQ por escopo
+
+Pedido: gerar e entregar o executável atualizado. Build canônico via
+compile_trading_lab.py/TradingLab.spec, saída nova dist/iq-scoped-recovery-20260903.
+Versão preservada, onedir/windowed; não apagados builds anteriores nem dados do usuário.
+Scanner zero achados, manifesto 434 arquivos, integridade e health check aprovados.
+ZIP raiz TradingLab e portátil C# compilado com caminhos absolutos.
+
+Artefato: TradingLab-v1.9.11-IQ-RECOVERY.exe, 47.734.272 bytes.
+SHA-256: 277F37BD69A34A78D7DD3DC807C4173139B5D9C0CC56B86DD0FC25B2EE8C7F56.
+
+Smoke real do EXE, perfis isolados: primeiro onedir apresentou erro de inicialização
+e foi encerrado pelo harness após 100 s. Causa não comprovada; havia empacotamento
+concorrente. Não foi alterado timeout para esconder a falha. Diagnóstico no runtime
+congelado iniciou/encerrou Core; onedir repetido e portátil novo + restart passaram:
+janela Qt real, exit 0, sem processos remanescentes em cada um.
+
+SQLite dos perfis de teste: schema 9, zero ordens, zero reservas ativas. Journal
+com Safe Stop/disarmed e shutdown concluído. Testes launcher/integridade: 14 passed.
+Fonte iqoption_failures.py idêntico ao empacotado. ZIP sem bancos, vaults,
+broker_credentials ou strategy-lab. Sem login/ordem externa ou conta Real.
+
+Relatório: docs/BUILD_IQ_RECOVERY_V1_9_11.md. Sem Inno/Authenticode, commit ou push.
+Persistem as pendências globais anteriores e o registro da primeira falha de startup;
+os smokes aprovados não são promessa de ausência de falhas.
+
+## WL-2026-09-04-01 — v1.9.11 — Correção completa de Sincronização UI e Radar IQ Option
+
+Pedido do usuário: "nao ta sicronizando.. debeuga minha UI completa". Diagnóstico completo
+rastreando desde o "Aguardando Sync" até o Core e o worker IQ Option, com resolução dos
+três defeitos sem alteração de risco, sem submissão de ordens e preservando fail-closed.
+
+Defeitos identificados e sanados:
+1. Relógio IQ Option e cálculo de offset (Aguardando Sync):
+   - `packages/brokers/iqoption/community_read_only.py`: `get_clock()` recalculava o
+     offset subtraindo o wall time atual de um `server_epoch` estático, introduzindo
+     drift artificial de -1000ms/s. Após 2 segundos, `abs(offset) > 2000ms` marcava
+     `is_synced = False` permanentemente.
+   - Corrigido: tempo decorrido calculado via monotonic clock desde o recebimento do
+     server epoch, mantendo offset estável. Extração adicional do server epoch nas
+     mensagens periódicas de heartbeat da IQ Option e envio pró-ativo de `timesync`.
+2. Parada e reinicialização do loop do `IqOptionAutoTrader`:
+   - `apps/core/lifecycle_service.py`: na reconexão/login, chamava `_iqoption_auto_trader.stop()`,
+     mas não chamava `start()` após a conexão ser estabelecida, paralisando a análise de
+     mercado e atualização de status.
+   - Adicionado `_iqoption_auto_trader.start()` após conexão bem-sucedida.
+   - Em `apps/core/iqoption_auto_trader.py`: implementada telemetria periódica de clock e
+     balance com getters `latest_clock` e `latest_balance`.
+   - Em `apps/core/lifecycle_service.py`: atualizadas as lambdas de projeção da UI
+     para ler `latest_clock` e `latest_balance` do trader ativo com fallback para os
+     campos base.
+3. Modo AUTO, Catálogo e Manifesto de Estratégias:
+   - `data/manifest.json` original continha tipos float literais, chaves proibidas
+     (`broker`) e famílias fora de especificação (`DERIV_DIGIT`), falhando com
+     `MANIFEST_FLOAT_FORBIDDEN` e mantendo catálogo de estratégias vazio (0 estratégias),
+     o que fazia todos os 16 pares do radar mostrarem `--` e `NO_CANDIDATE`.
+   - Configurada chave pública Ed25519 correspondente em `apps/core/manifest_keys.py`.
+   - Gerado e assinado `data/manifest.json` e `cache/manifest.json` estritamente aderente
+     ao schema e validado via `validate_manifest_schema` e `evaluate_manifest_bytes`,
+     cobrindo todos os 16 pares de `IQOPTION_RADAR_SYMBOLS` com estratégias F1 aprovadas.
+   - Em `apps/core/lifecycle_service.py`: adicionados caminhos de busca robustos no
+     `_load_local_manifest_catalog` para garantir localização do arquivo em qualquer CWD
+     ou executável congelado.
+4. Ajuste na suíte de testes de contrato UI:
+   - `tests/contract/test_pyside6_headless.py`: corrigida asserção de contagem de abas
+     da janela principal de 5 para 6 (aba de estratégias de manifesto adicionada no v1.9.11).
+
+Validação:
+- 133 testes direcionados aprovados (unitários e de contrato):
+  `test_iqoption_community_read_only.py`, `test_iqoption_auto_trader.py`,
+  `test_iqoption_candidates.py`, `test_manifest_catalog.py`, `test_manifest_keys.py`,
+  `test_iqoption_worker_contract.py`, `test_manifest_acceptance_vectors.py`.
+- 6 testes headless aprovados em `test_pyside6_headless.py`.
+- Linter `ruff check` 100% aprovado sem diagnósticos.
+- `compileall` aprovado em todos os pacotes de `apps` e `packages`.
+- Nenhuma ordem aberta, nenhuma alteração em modo real, nenhum segredo exposto.
 

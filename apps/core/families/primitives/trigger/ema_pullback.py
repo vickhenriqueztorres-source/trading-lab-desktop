@@ -34,6 +34,7 @@ class EMAPullback(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return the EMA period used before evaluating the first pullback."""
         return self.period
 
     def reset(self) -> None:

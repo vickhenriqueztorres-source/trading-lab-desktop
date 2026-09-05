@@ -30,6 +30,7 @@ class QuadrantMajority(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``window`` eligible quadrant candles, the minimum possible input count."""
         return self.window
 
     def reset(self) -> None:

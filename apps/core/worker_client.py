@@ -768,6 +768,28 @@ class SocketWorkerClient:
             candles=candles,
         )
 
+    def iqoption_binary_payout(self, symbol: str) -> Decimal:
+        if self._worker_role is not EndpointRole.IQOPTION_WORKER:
+            raise ValueError("IQ Option payout requires IQ Option worker")
+        expected = {
+            "broker_symbol": symbol,
+            "product": "BINARY_OPTION",
+            "duration": 1,
+            "duration_unit": "m",
+        }
+        response = self._read_only_request(MessageType.BROKER_QUOTE_REQUEST, expected)
+        if response.message_type is not MessageType.BROKER_QUOTE_RESPONSE or any(
+            response.payload.get(k) != v for k, v in expected.items()
+        ):
+            raise ValueError("IQOPTION_PAYOUT_CONTEXT_MISMATCH")
+        raw = response.payload.get("payout_return_ratio")
+        if not isinstance(raw, str):
+            raise ValueError("IQOPTION_PAYOUT_INVALID")
+        payout = Decimal(raw)
+        if not payout.is_finite() or not 0 < payout <= 1:
+            raise ValueError("IQOPTION_PAYOUT_INVALID")
+        return payout
+
     def broker_clock(self) -> BrokerClockSnapshot:
         response = self._read_only_request(MessageType.BROKER_CLOCK_REQUEST, {})
         return parse_broker_clock_response(response)

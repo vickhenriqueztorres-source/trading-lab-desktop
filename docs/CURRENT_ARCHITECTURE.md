@@ -383,3 +383,37 @@ O build onedir contém `release_manifest.json` com tamanho e SHA-256 de cada arq
 startup congelado, arquivo ausente, extra ou modificado falha antes de iniciar subprocessos. O
 manifesto é auto-hashado, mas ainda não é assinatura Authenticode nem substitui uma cadeia de
 confiança de distribuição.
+
+## 19. Portões de manifesto IQ Option — Causa 3 (2026-09-03)
+
+O lifecycle valida o manifesto local com schema/assinatura/contrato numérico e inicia
+`LiveMonitor`. O trader consulta payout atual pelo worker, usa `is_eligible` e revalida
+conta, sessão e validade antes da persistência. O catálogo serializa atualizações com
+a admissão; `notify_order_opened` ocorre após commit e antes do envio.
+
+A migration aditiva 0008 vincula cada ordem à revisão numérica do manifesto. Um consumidor
+em background processa settlements persistidos (eventos ou reconciliação) com marcador
+idempotente e estado SPRT na mesma transação. Reinício restaura rebaixamentos; nenhum
+resultado financeiro é refeito por esse consumidor. Entradas aguardam settlements ainda
+não analisados. O monitor é encerrado antes de fechar o banco.
+
+Real permanece bloqueado. O RSI local explícito continua não validado, somente
+SINGLE/Practice, sem inventar estatísticas de manifesto. Limites e evidências em
+[MANIFEST_EXECUTION_GATES_VALIDATION.md](MANIFEST_EXECUTION_GATES_VALIDATION.md).
+
+## 20. Recuperação de rejeições IQ por escopo — Causa 5 (2026-09-03)
+
+O trader não mantém mais um latch global para toda rejeição. A política tipada
+separa ativo/produto, configuração e conta IQ. Somente rejeições explicitamente
+temporárias recebem backoff e consulta read-only, seguidos de novo sinal e todos
+os gates originais. Motivo desconhecido ou sequência excessiva exige revisão;
+UNKNOWN continua responsabilidade da reconciliação, com reserva ativa.
+
+A migration aditiva 0009 guarda epochs consumidos e política de falhas no writer
+do Core. Uma correlação pendente permite reconstruir o resultado de submit após
+crash. Rearme/restart não limpam essa proteção. Erros provados de pré-admissão
+não viram um bloqueio global duplicado. Resposta de compra inválida depois de um
+possível envio não é rejeição confirmada.
+
+Detalhes, limites, testes e pendências em
+[IQOPTION_SCOPED_FAILURE_RECOVERY.md](IQOPTION_SCOPED_FAILURE_RECOVERY.md).

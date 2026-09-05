@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from manifest_schema.families import family_warmup_required
 from manifest_schema.models import Management, Manifest, StrategyEntry, Validated
 from sprt.test import WaldSprt
 
@@ -140,6 +141,11 @@ def build_manifest(
             status=target_status,
             management=management,
             reason_pt=reason_pt,
+            warmup_required=family_warmup_required(
+                raw["family"],
+                raw["params"],
+                raw["hours_utc"],
+            ),
         )
         strategies.append(entry)
 
@@ -148,6 +154,7 @@ def build_manifest(
     # Create unsigned Manifest model
     manifest = Manifest(
         schema_version=1,
+        schema_revision="1.1",
         manifest_version=manifest_version,
         key_id=key_id,  # type: ignore[arg-type]
         published_at=now_epoch,

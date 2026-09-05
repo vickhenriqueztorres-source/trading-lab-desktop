@@ -92,7 +92,7 @@ def test_trading_lab_main_window_headless(qapp: QApplication) -> None:
     assert window._lbl_pnl_val.text() == "+USD 45.00"
     assert window._btn_bot.isEnabled() is True
     assert "BOT" in window._btn_bot.text()
-    assert window._main_tabs.count() == 5
+    assert window._main_tabs.count() == 6
     assert window._main_tabs.tabText(window._TAB_DERIV) == "Deriv — PRÁCTICA"
     assert window._main_tabs.tabText(window._TAB_IQ_OPTION) == "IQ Option — PRÁCTICA"
     assert window._deriv_workspace.tabs.count() == 4

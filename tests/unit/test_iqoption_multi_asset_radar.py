@@ -11,6 +11,7 @@ from packages.domain.models import Broker, Direction, OrderState
 from packages.protocol.ui_messages import (
     UiIqOptionAssetRank,
 )
+from tests.unit.test_iqoption_auto_trader import explicit_signal_catalog
 
 
 def _make_candles_for_symbol(
@@ -43,7 +44,8 @@ def test_iqoption_radar_scans_all_assets_and_selects_triggered():
     orders_submitted = []
 
     class FakeClient:
-        pass
+        def iqoption_binary_payout(self, symbol):
+            return Decimal("0.85")
 
     fake_supervisor = SimpleNamespace(client=FakeClient())
 
@@ -69,13 +71,20 @@ def test_iqoption_radar_scans_all_assets_and_selects_triggered():
         orders_submitted.append(request)
         return SimpleNamespace(order_id="iq-order-1", intent_id="iq-intent-1")
 
-    runtime = SimpleNamespace(reader=reader, health_gate=health_gate, submit=submit)
+    runtime = SimpleNamespace(
+        reader=reader,
+        health_gate=health_gate,
+        submit=submit,
+        event_sink=SimpleNamespace(emit=lambda *a, **kw: None),
+    )
     trader = IqOptionAutoTrader(
         supervisor_provider=lambda: fake_supervisor,
         runtime_provider=lambda: runtime,
         risk_config_provider=lambda: risk_config,
         operator_armed=lambda: armed,
         evaluation_interval_seconds=0.01,
+        catalog_provider=lambda: explicit_signal_catalog(("GBPUSD-OTC",)),
+        monitor_provider=lambda: SimpleNamespace(ready=True),
     )
 
     # Mock candle provider:
@@ -88,7 +97,9 @@ def test_iqoption_radar_scans_all_assets_and_selects_triggered():
         flat = [1.0850 + ((i % 2) * 0.00001) for i in range(20)]
         return _make_candles_for_symbol(symbol, flat, tf)
 
-    trader._fetch_candles = lambda _supervisor, symbol, tf: custom_candles(symbol, tf)
+    trader._fetch_candles = lambda _supervisor, symbol, tf, *, warmup_need: custom_candles(
+        symbol, tf
+    )
     for _ in IQOPTION_RADAR_SYMBOLS:
         trader._evaluate_cycle()
 

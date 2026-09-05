@@ -13,7 +13,7 @@ TEST_KEY = bytes.fromhex(TEST_KEY_HEX)
 
 # Production public trust roots for key IDs "A" and "B" (32-byte Ed25519 public keys)
 PROD_PUBLIC_KEYS: dict[str, bytes] = {
-    "A": bytes.fromhex("a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"),
+    "A": bytes.fromhex("a865c63da214266748a500044ace980f897772d458930ad915b8c6f1903d7114"),
     "B": bytes.fromhex("b1c2d3e4f5061728394a5b6c7d8e9f0123456789abcdef0123456789abcdef01"),
 }
 

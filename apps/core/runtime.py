@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -99,6 +100,9 @@ class CoreRuntime:
         self._iqoption_event_pump: BrokerEventPump | None = None
         self._deriv_reconciliation_completed: Callable[[], None] | None = None
         self._submission_router: MultiBrokerSubmissionRouter | None = None
+        self.iqoption_entry_validator: Callable[[OrderRequest], None] | None = None
+        self.iqoption_execution_lock: AbstractContextManager[object] = nullcontext()
+        self.iqoption_order_registered: Callable[[str, str], None] | None = None
 
     @property
     def writer(self) -> SingleDatabaseWriter:
@@ -360,6 +364,17 @@ class CoreRuntime:
             callback()
 
     def submit(self, request: OrderRequest, *, dispatch: bool = True) -> PersistedOrder:
+        if self.iqoption_entry_validator is not None and request.broker is Broker.IQ_OPTION:
+            with self.iqoption_execution_lock:
+                result = self.coordinator.submit(
+                    request,
+                    dispatch=dispatch,
+                    pre_persist=self.iqoption_entry_validator,
+                    on_persisted=self.iqoption_order_registered
+                    if request.manifest_context is not None
+                    else None,
+                )
+                return result
         return self.coordinator.submit(request, dispatch=dispatch)
 
     def update_digit_risk_config(

@@ -313,6 +313,7 @@ class TradingRequestWebSocket(FakeWebSocket):
                                     "max": "1.1010",
                                     "min": "1.0990",
                                     "close": "1.1005",
+                                    "volume": 37,
                                 }
                             ]
                         },
@@ -733,6 +734,7 @@ def test_practice_session_fetches_broker_candles_and_opens_binary_option() -> No
     assert candles[0].broker is Broker.IQ_OPTION
     assert candles[0].broker_symbol == "EURUSD-OTC"
     assert candles[0].close == Decimal("1.1005")
+    assert candles[0].tick_volume == 37
     assert order == {"status": True, "id": "12345", "result": {"id": 12345}}
     assert event is not None
     assert event["msg"]["id"] == 12345
@@ -743,6 +745,30 @@ def test_practice_session_fetches_broker_candles_and_opens_binary_option() -> No
     ]
     assert "get-candles" in sent_names
     assert "binary-options.open-option" in sent_names
+
+
+def test_market_candle_tick_volume_mapped_from_adapter() -> None:
+    websocket = TradingRequestWebSocket()
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda _email, _credential, _timeout: SecretValue.from_text(
+            secrets.token_urlsafe(24)
+        ),
+        websocket_factory=lambda: websocket,
+        wall_time=lambda: 1_800_000_000,
+    )
+    try:
+        session.connect()
+        candles = session.get_candles("EURUSD-OTC", count=4)
+        assert candles[0].tick_volume == 37
+        messages = [raw["msg"] for raw in websocket.sent if raw.get("name") == "sendMessage"]
+        history = next(msg for msg in messages if msg["name"] == "get-candles")
+        assert history["body"]["count"] == 4
+        assert all(msg["name"] != "binary-options.open-option" for msg in messages)
+    finally:
+        session.close()
 
 
 def test_practice_session_queries_exact_binary_option_status_read_only() -> None:
@@ -922,3 +948,43 @@ def test_worker_never_repeats_http_login_after_first_connection_attempt() -> Non
 
     assert session.connect_calls == 1
     assert session.reconnect_calls == 1
+
+
+def test_clock_remains_synchronized_over_time_and_heartbeat() -> None:
+    clock_wall = [1_800_000_000.0]
+    clock_mono = [100.0]
+    websocket = FakeWebSocket(_messages())
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text("secret"),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda _email, _pwd, _t: SecretValue.from_text("session"),
+        websocket_factory=lambda: websocket,
+        wall_time=lambda: clock_wall[0],
+        monotonic=lambda: clock_mono[0],
+    )
+    try:
+        session.connect()
+        clock_initial = session.get_clock()
+        assert clock_initial.is_synced is True
+        assert clock_initial.server_epoch == 1_800_000_000
+
+        # Advance 10 seconds: clock must advance and remain is_synced without drift
+        clock_wall[0] += 10.0
+        clock_mono[0] += 10.0
+        clock_after = session.get_clock()
+        assert clock_after.is_synced is True
+        assert clock_after.server_epoch == 1_800_000_010
+        assert clock_after.offset_milliseconds == 0
+
+        # Heartbeat packet with timestamp also updates epoch
+        clock_wall[0] = 1_800_000_020.0
+        clock_mono[0] = 120.0
+        session._handle_message(json.dumps({"name": "heartbeat", "msg": 1_800_000_020_000}))
+        clock_hb = session.get_clock()
+        assert clock_hb.is_synced is True
+        assert clock_hb.server_epoch == 1_800_000_020
+        assert clock_hb.offset_milliseconds == 0
+    finally:
+        session.close()
+

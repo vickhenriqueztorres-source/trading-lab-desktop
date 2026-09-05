@@ -420,5 +420,32 @@ posteriores.
 - **Agendador Windows**: `powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1` executou com sucesso e criou as 4 tarefas no Windows Task Scheduler (`Get-ScheduledTask` confirmou todas em estado `Ready`).
 - **Runbook Operacional**: 11/11 pontos de falha da Arquitetura §9 cobertos com ações concretas imediatas.
 
+## WL-2026-09-03-02 — Contrato aditivo de warmup no manifesto
 
+R-MAN-1/3/4, R-PUB-1, R-PRIM-1/3/6, R-ISO-2..6.
+
+- Pacote tl-manifest-schema 1.1.0; schema_version inteiro 1 preservado,
+  schema_revision 1.1 aditiva exige warmup_required em cada estratégia nova.
+  Campo calculado por instanciação dos primitivos locais conforme FAMILY_BINDINGS;
+  nenhuma importação do projeto Desktop. F1/F2/F3/F4/F5 default: 28/20/1/39/15.
+- Validação equivalente no JSON Schema e Hub. Manifestos e fixtures históricos
+  sem revisão permanecem compatíveis. Preflight preserva fields-set do modelo
+  ao verificar assinatura, evitando adicionar defaults aos bytes históricos.
+- Volume opcional no Candle e comportamento explícito do TickVolumeRatio sem
+  volume. Canonicalização do canário somente ampliou a anotação de retorno para
+  None; fixture e comparação estrita não foram alteradas.
+- Primeira suíte completa: 306 passed, 3 staging skipped por ausência de URL.
+  Subset schema/publish após endurecimento v1.1: 131 passed. Nova rodada completa
+  com testes adicionais está registrada no fechamento abaixo quando disponível.
+- Fora do escopo: Supabase remoto, publicação, coleta autenticada, ordens,
+  avaliação incremental e rebuild. Não foi validada uma segunda máquina.
+
+Fechamento: **312 passed, 3 skipped** (exclusivamente staging sem URL);
+**mypy --strict: 79 arquivos aprovados**; **Ruff check: aprovado**.
+Format-check global encontrou somente formatação anterior em
+`tests/test_closing_checklist_lab.py`, não alterado. Compileall aprovado.
+Paridade numérica pública mantida; Desktop executou seu próprio vetor e testes
+de isolamento (86 testes focados aprovados no conjunto final).
+Teste Deno aditivo criado mas não executado por ausência de runtime local.
+Nenhuma alteração de Supabase/deploy ou conta de corretora foi realizada.
 

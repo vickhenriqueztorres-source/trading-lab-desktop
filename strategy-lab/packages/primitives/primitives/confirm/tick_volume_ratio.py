@@ -21,6 +21,7 @@ from primitives.base import (
 class TickVolumeRatio(Indicator):
     category = Category.CONFIRM
     name = "tick_volume_ratio"
+    requires_tick_volume = True
     param_spec: dict[str, ParamRange] = {
         "length": int_range(2, 200),
         "minimum_ratio": decimal_range("0.5", "5", "0.1"),
@@ -35,12 +36,15 @@ class TickVolumeRatio(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``length + 1``: N baseline volumes plus the compared candle."""
         return self.length + 1
 
     def reset(self) -> None:
         self._volumes: deque[Decimal] = deque(maxlen=self.length)
 
     def update(self, candle: Candle) -> Output | None:
+        if candle.tick_vol is None:
+            return None
         if len(self._volumes) < self.length:
             self._volumes.append(Decimal(candle.tick_vol))
             return None

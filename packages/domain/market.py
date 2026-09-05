@@ -84,6 +84,14 @@ def _required_int(payload: Mapping[str, object], name: str) -> int:
     return value
 
 
+def _optional_non_negative_int(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer or null")
+    return value
+
+
 def _decimal(value: object, name: str, *, positive: bool = False) -> Decimal:
     if not isinstance(value, str):
         raise ValueError(f"{name} must use a decimal string")
@@ -349,6 +357,7 @@ class MarketCandle:
     low: Decimal
     close: Decimal
     is_closed: bool
+    tick_volume: int | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.open_time, "open_time")
@@ -362,6 +371,10 @@ class MarketCandle:
             raise ValueError("candle prices must be positive finite decimals")
         if not (self.low <= self.open <= self.high and self.low <= self.close <= self.high):
             raise ValueError("candle OHLC range is inconsistent")
+        if self.tick_volume is not None and (
+            type(self.tick_volume) is not int or self.tick_volume < 0
+        ):
+            raise ValueError("candle tick_volume must be a non-negative integer or None")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -375,6 +388,7 @@ class MarketCandle:
             "low": str(self.low),
             "close": str(self.close),
             "is_closed": self.is_closed,
+            "tick_volume": self.tick_volume,
         }
 
     @classmethod
@@ -393,6 +407,7 @@ class MarketCandle:
             low=_decimal(payload.get("low"), "low", positive=True),
             close=_decimal(payload.get("close"), "close", positive=True),
             is_closed=closed,
+            tick_volume=_optional_non_negative_int(payload.get("tick_volume"), "tick_volume"),
         )
 
 

@@ -35,8 +35,4 @@ class F2Pullback(FamilyStrategyBase):
         self._regime = EMAAlignment(short=ema_short, medium=ema_medium, long=ema_long)
         self._trigger = EMAPullback(period=pullback_len, tolerance=pullback_tolerance)
         self._confirm = CandleRejection(max_body_ratio=body_max, min_wick_ratio=wick_min)
-        self._warmup_required = max(
-            self._regime.warmup_required,
-            self._trigger.warmup_required,
-            self._confirm.warmup_required,
-        )
+        self._finalize_warmup()

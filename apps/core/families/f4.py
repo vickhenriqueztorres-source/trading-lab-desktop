@@ -38,11 +38,7 @@ class F4SqueezeBreak(FamilyStrategyBase):
         self._regime = BBWidthRatio(length=bb_len, median_length=width_median_len, k=bb_k)
         self._trigger = RangeBreak(length=break_len)
         self._confirm = TickVolumeRatio(length=volume_len, minimum_ratio=volume_min)
-        self._warmup_required = max(
-            self._regime.warmup_required,
-            self._trigger.warmup_required,
-            self._confirm.warmup_required,
-        )
+        self._finalize_warmup()
 
     def _check_composition_gate(self, regime_out: Output | None) -> bool:
         if regime_out is None or regime_out.value is None:

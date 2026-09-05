@@ -38,6 +38,7 @@ class CandleRejection(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return one candle because body and wick ratios are candle-local."""
         return 1
 
     def reset(self) -> None:

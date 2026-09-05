@@ -729,6 +729,20 @@
         },
         "validated": {
           "$ref": "#/$defs/Validated"
+        },
+        "warmup_required": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warmup Required"
         }
       },
       "required": [
@@ -806,6 +820,31 @@
   "$id": "urn:strategy-lab:manifest:v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "schema_revision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "strategies": {
+            "items": {
+              "properties": {
+                "warmup_required": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "warmup_required"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "expires_at": {
       "$ref": "#/$defs/Epoch"
@@ -836,6 +875,12 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_.-]+$(?![\\s\\S])",
       "title": "Research Run Id",
+      "type": "string"
+    },
+    "schema_revision": {
+      "const": "1.1",
+      "default": "1.1",
+      "title": "Schema Revision",
       "type": "string"
     },
     "schema_version": {

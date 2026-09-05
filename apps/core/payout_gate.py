@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 PAYOUT_GATE_EDGE_OFFSET = Decimal("0.015")
 PAYOUT_BELOW_VALIDATED_EDGE = "PAYOUT_BELOW_VALIDATED_EDGE"
@@ -37,9 +37,23 @@ class PayoutGate:
         payout_min: Decimal | float | str | int,
     ) -> PayoutGateResult:
         """Check if current payout provides sufficient edge before order dispatch."""
-        payout = normalize_ratio(current_payout)
-        p_min_manifest = normalize_ratio(payout_min)
-        w_lower = Decimal(str(wilson_lower))
+        try:
+            payout = normalize_ratio(current_payout)
+            p_min_manifest = normalize_ratio(payout_min)
+            w_lower = Decimal(str(wilson_lower))
+            if not all(x.is_finite() for x in (payout, p_min_manifest, w_lower)):
+                raise ValueError("nonfinite payout evidence")
+            if not (0 <= payout <= 1 and 0 <= p_min_manifest <= 1 and 0 < w_lower <= 1):
+                raise ValueError("invalid payout evidence")
+        except (ValueError, InvalidOperation):
+            return PayoutGateResult(
+                False,
+                "PAYOUT_EVIDENCE_INVALID",
+                "Payout inválido.",
+                Decimal(1),
+                Decimal(0),
+                Decimal(0),
+            )
 
         if payout <= Decimal(0):
             payout_min_pct = int(round(p_min_manifest * Decimal(100)))

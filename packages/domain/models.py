@@ -148,6 +148,8 @@ class OrderRequest:
     duration: int = 1
     duration_unit: str = "m"
     prediction_digit: int | None = None
+    # Core-private validated manifest snapshot; never sent to a broker.
+    manifest_context: str | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.deadline_at, "deadline_at")

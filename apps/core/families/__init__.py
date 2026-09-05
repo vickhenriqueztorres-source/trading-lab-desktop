@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from apps.core.families.base import (
+    EvalResult,
     FamilyStrategyBase,
     agreed_direction,
     is_within_trading_hours,
@@ -28,6 +29,7 @@ __all__ = [
     "F3LevelRejection",
     "F4SqueezeBreak",
     "F5Quadrant",
+    "EvalResult",
     "FamilyStrategyBase",
     "agreed_direction",
     "is_within_trading_hours",

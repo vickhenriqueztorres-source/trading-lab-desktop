@@ -22,6 +22,7 @@ class ADX(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return ``2 * period``: one seed candle, period DM/TR values and period DX values."""
         return self.period * 2
 
     def reset(self) -> None:

@@ -362,6 +362,34 @@ SPRT_AND_OUTCOMES = Migration(
     ),
 )
 
+MANIFEST_EXECUTION = Migration(
+    version=8,
+    name="0008_manifest_execution",
+    statements=(
+        """CREATE TABLE manifest_order_bindings (
+            order_id TEXT PRIMARY KEY REFERENCES orders(order_id),
+            strategy_key TEXT NOT NULL, revision TEXT NOT NULL, context TEXT NOT NULL,
+            consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0,1))
+        )""",
+        "CREATE INDEX ix_manifest_unconsumed ON manifest_order_bindings(consumed, order_id)",
+        """CREATE TABLE manifest_monitor_states (
+            revision TEXT PRIMARY KEY, strategy_key TEXT NOT NULL,
+            state_json TEXT NOT NULL
+        )""",
+    ),
+)
+
+IQOPTION_EXECUTION_STATE = Migration(
+    version=9,
+    name="0009_iqoption_execution_state",
+    statements=(
+        """CREATE TABLE iqoption_execution_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            state_json TEXT NOT NULL CHECK (length(state_json) <= 65536)
+        )""",
+    ),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
@@ -370,6 +398,8 @@ MIGRATIONS = (
     DIGIT_RISK_RUNTIME,
     DIGIT_TEST_SESSION,
     SPRT_AND_OUTCOMES,
+    MANIFEST_EXECUTION,
+    IQOPTION_EXECUTION_STATE,
 )
 
 

@@ -99,6 +99,7 @@ class StrategyEntry(WireModel):
     status: Literal["approved", "observation", "rejected"]
     management: Management
     reason_pt: Label | None = None
+    warmup_required: Annotated[int, Field(ge=1, le=10_000)] | None = None
 
     @model_validator(mode="after")
     def validate_entry(self) -> Self:
@@ -121,6 +122,7 @@ class StrategyEntry(WireModel):
 
 class Manifest(WireModel):
     schema_version: Literal[1]
+    schema_revision: Literal["1.1"] = "1.1"
     manifest_version: Annotated[int, Field(ge=1, le=MAX_SAFE_INTEGER)]
     key_id: KeyId
     published_at: Epoch
@@ -149,6 +151,10 @@ class Manifest(WireModel):
     @model_validator(mode="after")
     def validate_manifest(self) -> Self:
         validate_lifetime(self.published_at, self.expires_at)
+        if "schema_revision" in self.model_fields_set and any(
+            entry.warmup_required is None for entry in self.strategies
+        ):
+            raise ValueError("MANIFEST_WARMUP_REQUIRED")
         keys = [entry.key for entry in self.strategies]
         if len(keys) != len(set(keys)):
             raise ValueError("MANIFEST_DUPLICATE_KEY")

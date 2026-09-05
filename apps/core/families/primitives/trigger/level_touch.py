@@ -38,6 +38,7 @@ class LevelTouch(Indicator):
 
     @property
     def warmup_required(self) -> int:
+        """Return one candle because injected levels need no rolling history."""
         return 1
 
     def reset(self) -> None:

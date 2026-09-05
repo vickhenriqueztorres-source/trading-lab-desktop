@@ -95,17 +95,17 @@ def run_preflight(
     """Execute preflight check on candidate manifest before diff and upload."""
     if isinstance(manifest, Manifest):
         manifest_model = manifest
-        manifest_dict = manifest.model_dump()
     else:
         try:
             manifest_model = Manifest.model_validate(manifest)
-            manifest_dict = manifest
         except Exception as e:
             raise PreflightError("MANIFEST_SCHEMA_INVALID", str(e)) from e
 
     # Check signature if signed
     if manifest_model.signature:
-        sig_ok = verify(manifest_dict, dict(public_keys), allow_test_keys=allow_test_keys)
+        # Keep Pydantic's fields-set information: legacy v1 manifests omit the
+        # additive v1.1 defaults from their signed canonical document.
+        sig_ok = verify(manifest_model, dict(public_keys), allow_test_keys=allow_test_keys)
         if not sig_ok:
             raise PreflightError(
                 "MANIFEST_SIGNATURE_INVALID",

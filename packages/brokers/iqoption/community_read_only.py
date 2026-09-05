@@ -88,9 +88,10 @@ class IQOptionAccountMode(StrEnum):
 
 
 class IQOptionExternalError(RuntimeError):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, submission_not_sent: bool = False) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
+        self.submission_not_sent = submission_not_sent
 
 
 class IQOptionWebSocket(Protocol):
@@ -244,6 +245,8 @@ class IQOptionCommunityReadOnlySession:
         self._profile: dict[str, object] | None = None
         self._balances: list[dict[str, object]] | None = None
         self._server_epoch: int | None = None
+        self._server_epoch_received_at = 0.0
+        self._server_epoch_monotonic = 0.0
         self._connected_at_monotonic = 0.0
         self._connect_round_trip = 0.0
         self._pending: dict[str, queue.Queue[dict[str, Any]]] = {}
@@ -319,6 +322,8 @@ class IQOptionCommunityReadOnlySession:
             self._profile = None
             self._balances = None
             self._server_epoch = None
+            self._server_epoch_received_at = 0.0
+            self._server_epoch_monotonic = 0.0
         websocket = self._websocket_factory()
         self._websocket = websocket
         self._stop.clear()
@@ -401,12 +406,25 @@ class IQOptionCommunityReadOnlySession:
     def get_clock(self) -> BrokerClockSnapshot:
         with self._lock:
             server_epoch = self._server_epoch
-        if server_epoch is None:
+            received_at = self._server_epoch_received_at
+            received_mono = self._server_epoch_monotonic
+        now_mono = self._monotonic()
+        now_wall = self._wall_time()
+        if server_epoch is not None and received_at > 0 and received_mono > 0:
+            elapsed = max(0.0, now_mono - received_mono)
+            current_epoch = int(Decimal(str(server_epoch)) + Decimal(str(elapsed)))
+            estimated_offset = Decimal(str(server_epoch)) - Decimal(str(received_at))
+        elif server_epoch is not None:
+            current_epoch = server_epoch
+            estimated_offset = Decimal(str(server_epoch)) - Decimal(str(now_wall))
+        elif self.is_connected:
+            current_epoch = int(now_wall)
+            estimated_offset = Decimal("0.0")
+        else:
             raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
         local_received_at = datetime.now(UTC)
-        estimated_offset = Decimal(server_epoch) - Decimal(str(self._wall_time()))
         return BrokerClockSnapshot(
-            server_epoch=server_epoch,
+            server_epoch=current_epoch,
             local_received_at=local_received_at,
             round_trip_seconds=self._connect_round_trip,
             estimated_offset_seconds=estimated_offset,
@@ -427,7 +445,9 @@ class IQOptionCommunityReadOnlySession:
             raise IQOptionExternalError("IQOPTION_REAL_MARKET_EXECUTION_FORBIDDEN")
         if timeframe_seconds not in {60, 300, 600, 900}:
             raise IQOptionExternalError("IQOPTION_TIMEFRAME_UNSUPPORTED")
-        if not 15 <= count <= 200:
+        # History sizing belongs to the active strategy's warm-up contract.
+        # Stateless families legitimately need fewer than the legacy RSI's 15.
+        if type(count) is not int or not 1 <= count <= 200:
             raise IQOptionExternalError("IQOPTION_CANDLE_COUNT_INVALID")
         active_id = self._active_id(symbol)
         clock_epoch = end_epoch or self.get_clock().server_epoch
@@ -459,6 +479,19 @@ class IQOptionCommunityReadOnlySession:
             try:
                 open_epoch = int(raw["from"])
                 close_epoch = int(raw.get("to", open_epoch + timeframe_seconds))
+                raw_volume = raw.get("volume")
+                tick_volume: int | None = None
+                if raw_volume is not None:
+                    if isinstance(raw_volume, bool):
+                        raise ValueError("invalid candle volume")
+                    decimal_volume = Decimal(str(raw_volume))
+                    if (
+                        not decimal_volume.is_finite()
+                        or decimal_volume < 0
+                        or decimal_volume != decimal_volume.to_integral_value()
+                    ):
+                        raise ValueError("invalid candle volume")
+                    tick_volume = int(decimal_volume)
                 parsed.append(
                     MarketCandle(
                         broker=Broker.IQ_OPTION,
@@ -471,11 +504,48 @@ class IQOptionCommunityReadOnlySession:
                         low=Decimal(str(raw.get("min", raw.get("low")))),
                         close=Decimal(str(raw["close"])),
                         is_closed=close_epoch <= int(clock_epoch),
+                        tick_volume=tick_volume,
                     )
                 )
             except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
                 raise IQOptionExternalError("IQOPTION_CANDLES_INVALID") from exc
         return tuple(candle for candle in parsed if candle.is_closed)
+
+    def get_binary_payout(
+        self, symbol: str, *, duration_minutes: int = 1, timeout: float = 2.0
+    ) -> Decimal:
+        """Read current turbo commission; no subscription, login or financial retry.
+
+        Community API get-initialization-data v3, turbo.option.profit.commission.
+        W = (100 - commission) / 100. Never substitute a historic settlement.
+        """
+        if self._account_mode is not IQOptionAccountMode.PRACTICE:
+            raise IQOptionExternalError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
+        if duration_minutes != 1:
+            raise IQOptionExternalError("IQOPTION_OPERATION_UNSUPPORTED")
+        active_id = self._active_id(symbol)
+        response = self._request_message(
+            {
+                "name": "sendMessage",
+                "msg": {"name": "get-initialization-data", "version": "3.0", "body": {}},
+            },
+            expected_names=frozenset({"initialization-data"}),
+            timeout=timeout,
+        )
+        try:
+            active = response["msg"]["turbo"]["actives"][str(active_id)]
+            if (
+                active["name"].split(".")[-1] != symbol
+                or active["enabled"] is not True
+                or active["is_suspended"] is not False
+            ):
+                raise ValueError("unavailable exact asset")
+            commission = Decimal(str(active["option"]["profit"]["commission"]))
+            if not commission.is_finite() or not 0 <= commission < 100:
+                raise ValueError("invalid commission")
+            return (Decimal(100) - commission) / Decimal(100)
+        except (KeyError, TypeError, ValueError, InvalidOperation, AttributeError) as exc:
+            raise IQOptionExternalError("IQOPTION_PAYOUT_UNAVAILABLE") from exc
 
     def request(
         self,
@@ -562,7 +632,7 @@ class IQOptionCommunityReadOnlySession:
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="replace")
         try:
-            message = json.loads(raw)
+            message = json.loads(raw, parse_float=Decimal)
         except json.JSONDecodeError:
             return
         if not isinstance(message, Mapping):
@@ -589,6 +659,16 @@ class IQOptionCommunityReadOnlySession:
             return
         if name == "heartbeat":
             self._send({"name": "heartbeat", "msg": message.get("msg")})
+            raw_epoch = message.get("msg")
+            if isinstance(raw_epoch, (int, float, Decimal)) and not isinstance(raw_epoch, bool):
+                epoch = int(raw_epoch)
+                if epoch > 100_000_000_000:
+                    epoch //= 1_000
+                if epoch > 0:
+                    with self._lock:
+                        self._server_epoch = epoch
+                        self._server_epoch_received_at = self._wall_time()
+                        self._server_epoch_monotonic = self._monotonic()
             return
         if name == "profile":
             profile = message.get("msg")
@@ -607,13 +687,15 @@ class IQOptionCommunityReadOnlySession:
             raw_epoch = message.get("msg")
             if isinstance(raw_epoch, Mapping):
                 raw_epoch = raw_epoch.get("server_time") or raw_epoch.get("time")
-            if isinstance(raw_epoch, (int, float)) and not isinstance(raw_epoch, bool):
+            if isinstance(raw_epoch, (int, float, Decimal)) and not isinstance(raw_epoch, bool):
                 epoch = int(raw_epoch)
                 if epoch > 100_000_000_000:
                     epoch //= 1_000
                 if epoch > 0:
                     with self._lock:
                         self._server_epoch = epoch
+                        self._server_epoch_received_at = self._wall_time()
+                        self._server_epoch_monotonic = self._monotonic()
             return
         if name in {"option-opened", "option-closed"}:
             normalized = self._normalize_contract_event(name, message.get("msg"))
@@ -650,6 +732,8 @@ class IQOptionCommunityReadOnlySession:
                 "request_id": "iqoption-read-balances",
             }
         )
+        with suppress(Exception):
+            self._send({"name": "timesync", "msg": int(self._wall_time() * 1000)})
 
     def _request_message(
         self,
@@ -704,11 +788,16 @@ class IQOptionCommunityReadOnlySession:
         duration = int(msg.get("duration", 1))
         if direction not in {"call", "put"} or price <= 0 or duration != 1:
             return {"status": False, "reason": "IQOPTION_ORDER_INVALID"}
-        balance = self._selected_balance()
-        balance_id = balance.get("id")
-        if isinstance(balance_id, bool) or not isinstance(balance_id, int):
-            raise IQOptionExternalError("IQOPTION_BALANCE_ID_INVALID")
-        expiry = self._binary_expiration(duration)
+        try:
+            balance = self._selected_balance()
+            balance_id = balance.get("id")
+            if isinstance(balance_id, bool) or not isinstance(balance_id, int):
+                raise IQOptionExternalError("IQOPTION_BALANCE_ID_INVALID")
+            expiry = self._binary_expiration(duration)
+            active_id = self._active_id(symbol)
+        except IQOptionExternalError as exc:
+            # This boundary is strictly before _request_message/_send.
+            raise IQOptionExternalError(exc.reason_code, submission_not_sent=True) from exc
         response = self._request_message(
             {
                 "name": "sendMessage",
@@ -717,7 +806,7 @@ class IQOptionCommunityReadOnlySession:
                     "version": "1.0",
                     "body": {
                         "price": price,
-                        "active_id": self._active_id(symbol),
+                        "active_id": active_id,
                         "expired": expiry,
                         "direction": direction,
                         "option_type_id": 3,
@@ -732,9 +821,14 @@ class IQOptionCommunityReadOnlySession:
         if not isinstance(raw, Mapping):
             raise IQOptionExternalError("IQOPTION_ORDER_RESPONSE_INVALID")
         broker_id = raw.get("id")
+        if broker_id is not None and raw.get("status") is False:
+            raise IQOptionExternalError("IQOPTION_ORDER_RESPONSE_INVALID")
         if broker_id is None:
-            reason = raw.get("message", "IQOPTION_ORDER_REJECTED")
-            return {"status": False, "reason": str(reason)}
+            # A missing id alone is not evidence of rejection after open-option.
+            reason = raw.get("message")
+            if isinstance(reason, str) and reason.strip() and raw.get("status") is False:
+                return {"status": False, "reason": reason}
+            raise IQOptionExternalError("IQOPTION_ORDER_RESPONSE_INVALID")
         return {"status": True, "id": str(broker_id), "result": dict(raw)}
 
     def _get_options(

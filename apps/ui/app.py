@@ -553,6 +553,10 @@ class TradingLabMainWindow(QMainWindow):
         self._synthetic_config_panel.set_cooldown_remaining(snapshot.cooldown_remaining_seconds)
         if snapshot.iqoption_risk_config is not None:
             self._iqoption_config_panel.set_config(snapshot.iqoption_risk_config)
+        iq_card = next((c for c in snapshot.broker_cards if c.broker == "IQ_OPTION"), None)
+        self._iqoption_config_panel.set_account_type(
+            "UNKNOWN" if iq_card is None else iq_card.account_mode.value
+        )
 
         # 7. Each broker state is authoritative from its own Core projection.
         self._bot_enabled = snapshot.deriv_bot_armed
@@ -594,14 +598,15 @@ class TradingLabMainWindow(QMainWindow):
                     data = json.loads(path.read_text(encoding="utf-8"))
                     account_type = "real" if self._deriv_real_selected else "practice"
                     self._manifest_strategy_panel.set_manifest(data, account_type=account_type)
+                    self._iqoption_config_panel.set_manifest(data)
                     return
                 except Exception:
                     continue
 
     def _on_manifest_strategy_toggled(self, strategy_key: str, active: bool) -> None:
         if not strategy_key:
-            for card in self._manifest_strategy_panel._cards.values():
-                card.set_live_status("Pausada", "Desativada pelo usuário")
+            for existing_card in self._manifest_strategy_panel._cards.values():
+                existing_card.set_live_status("Pausada", "Desativada pelo usuário")
             return
 
         card = self._manifest_strategy_panel.get_card(strategy_key)
@@ -615,13 +620,18 @@ class TradingLabMainWindow(QMainWindow):
             card.set_live_status("Pausada", "Desativada pelo usuário")
             if "IQ OPTION" in broker:
                 remaining_iq = [
-                    c for c in self._manifest_strategy_panel._cards.values()
+                    c
+                    for c in self._manifest_strategy_panel._cards.values()
                     if c._is_active and "IQ OPTION" in getattr(c, "broker", "").upper()
                 ]
                 if len(remaining_iq) == 1:
                     first = remaining_iq[0]
                     first_e = first._strategy_entry
-                    first_asset = first_e.get("asset", "EURUSD-OTC") if isinstance(first_e, dict) else getattr(first_e, "asset", "EURUSD-OTC")
+                    first_asset = (
+                        first_e.get("asset", "EURUSD-OTC")
+                        if isinstance(first_e, dict)
+                        else getattr(first_e, "asset", "EURUSD-OTC")
+                    )
                     self._controller.update_iqoption_risk_config(
                         UiIqOptionRiskConfig(strategy_id=first.strategy_key, symbol=first_asset)
                     )
@@ -632,11 +642,13 @@ class TradingLabMainWindow(QMainWindow):
             return
 
         active_iq_cards = [
-            c for c in self._manifest_strategy_panel._cards.values()
+            c
+            for c in self._manifest_strategy_panel._cards.values()
             if c._is_active and "IQ OPTION" in getattr(c, "broker", "").upper()
         ]
         active_deriv_cards = [
-            c for c in self._manifest_strategy_panel._cards.values()
+            c
+            for c in self._manifest_strategy_panel._cards.values()
             if c._is_active and "DERIV" in getattr(c, "broker", "").upper()
         ]
 
@@ -650,17 +662,23 @@ class TradingLabMainWindow(QMainWindow):
             losses = current_config.max_consecutive_losses if current_config else 3
             cooldown = current_config.cooldown_seconds_after_loss if current_config else 30.0
             conf = current_config.min_quantum_confidence_pct if current_config else Decimal("85.0")
-            asset = entry.get("asset", "1HZ100V") if isinstance(entry, dict) else getattr(entry, "asset", "1HZ100V")
+            asset = (
+                entry.get("asset", "1HZ100V")
+                if isinstance(entry, dict)
+                else getattr(entry, "asset", "1HZ100V")
+            )
 
             active_deriv_ids = frozenset(
-                c.strategy_key for c in active_deriv_cards if c.strategy_key in {
-                    "tail-probability-edge", "selective-differs-edge", "parity-regime-edge"
-                }
+                c.strategy_key
+                for c in active_deriv_cards
+                if c.strategy_key
+                in {"tail-probability-edge", "selective-differs-edge", "parity-regime-edge"}
             )
             mode = "multi" if len(active_deriv_ids) > 1 else "single"
             strat_id = (
                 strategy_key
-                if strategy_key in {"tail-probability-edge", "selective-differs-edge", "parity-regime-edge"}
+                if strategy_key
+                in {"tail-probability-edge", "selective-differs-edge", "parity-regime-edge"}
                 else (next(iter(active_deriv_ids)) if active_deriv_ids else "tail-probability-edge")
             )
             digit_config = UiDigitRiskConfig(
@@ -681,20 +699,24 @@ class TradingLabMainWindow(QMainWindow):
         if "IQ OPTION" in broker or active_iq_cards:
             # Activate IQ Option strategy
             snap = self._controller.snapshot
-            current_config = snap.iqoption_risk_config if snap else None
-            stake = current_config.stake_minor_units if current_config else 100
-            stop = current_config.daily_stop_loss_minor_units if current_config else 1000
-            take = current_config.daily_take_profit_minor_units if current_config else 1000
-            losses = current_config.max_consecutive_losses if current_config else 3
-            cooldown = current_config.cooldown_seconds_after_loss if current_config else 30
-            trades = current_config.max_daily_trades if current_config else 10
+            iq_current_config = snap.iqoption_risk_config if snap else None
+            stake = iq_current_config.stake_minor_units if iq_current_config else 100
+            stop = iq_current_config.daily_stop_loss_minor_units if iq_current_config else 1000
+            take = iq_current_config.daily_take_profit_minor_units if iq_current_config else 1000
+            losses = iq_current_config.max_consecutive_losses if iq_current_config else 3
+            iq_cooldown = iq_current_config.cooldown_seconds_after_loss if iq_current_config else 30
+            trades = iq_current_config.max_daily_trades if iq_current_config else 10
 
             if len(active_iq_cards) > 1:
                 strat_id = "AUTO"
                 asset = "AUTO"
             else:
                 strat_id = strategy_key
-                asset = entry.get("asset", "EURUSD-OTC") if isinstance(entry, dict) else getattr(entry, "asset", "EURUSD-OTC")
+                asset = (
+                    entry.get("asset", "EURUSD-OTC")
+                    if isinstance(entry, dict)
+                    else getattr(entry, "asset", "EURUSD-OTC")
+                )
 
             iq_config = UiIqOptionRiskConfig(
                 strategy_id=strat_id,
@@ -705,7 +727,7 @@ class TradingLabMainWindow(QMainWindow):
                 daily_stop_loss_minor_units=stop,
                 daily_take_profit_minor_units=take,
                 max_consecutive_losses=losses,
-                cooldown_seconds_after_loss=cooldown,
+                cooldown_seconds_after_loss=iq_cooldown,
                 max_daily_trades=trades,
             )
             self._controller.update_iqoption_risk_config(iq_config)

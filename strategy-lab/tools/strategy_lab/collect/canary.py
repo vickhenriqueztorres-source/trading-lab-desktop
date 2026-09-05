@@ -65,7 +65,7 @@ def _load_expected() -> dict[tuple[str, int], dict[str, str | int]]:
     return result
 
 
-def _canonical_candle(candle: Candle) -> dict[str, str | int]:
+def _canonical_candle(candle: Candle) -> dict[str, str | int | None]:
     return {
         "o": str(candle.o),
         "h": str(candle.h),

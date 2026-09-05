@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +16,7 @@ from packages.persistence.health import DatabaseFailureReason
 from packages.persistence.writer import (
     AccountBusyError,
     FinancialUnitOfWork,
+    ManifestMonitorPendingError,
     PersistenceError,
     RiskLimitExceededError,
     SingleDatabaseWriter,
@@ -186,7 +187,14 @@ class OrderCoordinator:
             self._risk_ledger.configure_active_exposure_port(PersistedActiveExposurePort(writer))
         self._entry_authorizer = entry_authorizer
 
-    def submit(self, request: OrderRequest, *, dispatch: bool = True) -> PersistedOrder:
+    def submit(
+        self,
+        request: OrderRequest,
+        *,
+        dispatch: bool = True,
+        pre_persist: Callable[[OrderRequest], None] | None = None,
+        on_persisted: Callable[[str, str], None] | None = None,
+    ) -> PersistedOrder:
         self._risk_ledger.refresh_digit_health_gate(self._health_gate)
         if self._entry_authorizer is not None:
             self._entry_authorizer.ensure_new_entry_allowed(
@@ -196,6 +204,8 @@ class OrderCoordinator:
             )
         self._health_gate.ensure_open(request.broker.value, request.account_id)
         with self._serializer.serialize(request.broker.value, request.account_id):
+            if pre_persist is not None:
+                pre_persist(request)
             self._risk_ledger.reserve(request, self._health_gate)
             created_at = utc_now()
             intent_id = str(uuid4())
@@ -232,11 +242,15 @@ class OrderCoordinator:
                 )
             except AccountBusyError:
                 raise
+            except ManifestMonitorPendingError:
+                raise
             except RiskLimitExceededError:
                 raise
             except PersistenceError:
                 self._health_gate.fail_database(DatabaseFailureReason.DB_WRITE_FAILED)
                 raise
+            if on_persisted is not None:
+                on_persisted(request.strategy_id, order_id)
             if dispatch:
                 self._dispatcher.dispatch_next(
                     broker=request.broker.value, account_id=request.account_id

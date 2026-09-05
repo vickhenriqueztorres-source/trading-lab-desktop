@@ -11,6 +11,7 @@ a = Analysis(
     datas=[
         (str(project_root / "apps"), "apps"),
         (str(project_root / "packages"), "packages"),
+        (str(project_root / "data" / "manifest.json"), "data"),
     ],
     hiddenimports=[
         "PySide6",

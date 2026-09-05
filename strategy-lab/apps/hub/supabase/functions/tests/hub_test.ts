@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { canonicalBytes } from "../_shared/canonical.ts";
+import { validateManifestSchema } from "../_shared/manifest_schema.ts";
 import type { ManifestKeyEnv } from "../_shared/ed25519.ts";
 import type {
   HubDatabase,
@@ -21,6 +22,17 @@ const TEST_PUBLIC_KEY = (await Deno.readTextFile(TEST_PUBKEY_URL)).trim();
 const JWT_SECRET = "test-only-local-hub-secret";
 const CLIENT_ID = "018f81d6-25d4-4f3f-8e1d-294f5bcdef01";
 const NOW_TS = 1_788_350_500;
+
+Deno.test("additive v1.1 requires integer warmup and preserves legacy input", async () => {
+  const manifest = JSON.parse(await Deno.readTextFile(MANIFEST_URL));
+  assertEquals(validateManifestSchema(manifest), null);
+  manifest.schema_revision = "1.1";
+  assertEquals(validateManifestSchema(manifest), "MANIFEST_WARMUP_REQUIRED");
+  for (const strategy of manifest.strategies) strategy.warmup_required = 28;
+  assertEquals(validateManifestSchema(manifest), null);
+  manifest.strategies[0].warmup_required = "28";
+  assertEquals(validateManifestSchema(manifest), "STRATEGY_WARMUP");
+});
 
 class FakeDatabase implements HubDatabase {
   insertedManifest: ManifestRow | null = null;

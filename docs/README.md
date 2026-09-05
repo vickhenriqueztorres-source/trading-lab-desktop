@@ -59,6 +59,11 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 
 ## Documentos legados ou especializados
 
+- [Recuperação de rejeições IQ por escopo — Causa 5](IQOPTION_SCOPED_FAILURE_RECOVERY.md)
+
+- [Validação do roteamento IQ pelo manifesto — Causa 2](IQOPTION_MANIFEST_ROUTING_VALIDATION.md)
+- [Contrato de warmup verificado](WARMUP_CONTRACT_VALIDATION.md)
+
 Os arquivos abaixo continuam úteis, mas alguns descrevem a evolução do projeto e não substituem a
 visão consolidada da v1.9.11:
 
@@ -73,6 +78,8 @@ visão consolidada da v1.9.11:
 - [Arquitetura de informação da UI](UI_INFORMATION_ARCHITECTURE.md)
 
 ## Convenção de precisão
+
+- [Portões de execução do manifesto: plano, implementação e validação](MANIFEST_EXECUTION_GATES_VALIDATION.md)
 
 - **Implementado** significa que existe código executável e testes correspondentes.
 - **Somente leitura** significa que a sessão pode consultar dados, mas não recebe capacidade de

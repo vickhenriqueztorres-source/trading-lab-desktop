@@ -27,7 +27,7 @@ class Candle(BaseModel):
     h: Decimal
     l: Decimal  # noqa: E741 - canonical OHLC field required by R-PRIM-1
     c: Decimal
-    tick_vol: int = Field(ge=0)
+    tick_vol: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_candle(self) -> Candle:
@@ -76,6 +76,7 @@ class Indicator(ABC):
     category: Category
     name: str
     param_spec: dict[str, ParamRange]
+    requires_tick_volume = False
 
     @abstractmethod
     def update(self, candle: Candle) -> Output | None:
