@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from strategy_lab.cli import main
+from strategy_lab.research.dataset import synthetic_snapshot
 from strategy_lab.research.payout_lookup import PayoutLookup, PayoutPoint
 from strategy_lab.research.runner import (
     SanityCheckFailedError,
@@ -58,6 +59,7 @@ def test_research_pipeline_synthetic_approves_only_injected_edge(tmp_path: Path)
         seed=seed,
         max_candidates=10,
         output_dir=tmp_path,
+        dataset_snapshot=synthetic_snapshot(candles, asset="EURUSD-OTC", seed=seed),
         override_candidates=pool,
         min_oos_trades=50,
         enforce_holdout_pass=False,
@@ -92,6 +94,7 @@ def test_research_step8_sanity_check_random_walk_approves_zero(
             seed=seed,
             max_candidates=10,
             output_dir=tmp_path,
+            dataset_snapshot=synthetic_snapshot(rw_candles, asset="EURUSD-OTC", seed=seed),
             override_candidates=[edge_cand],
             min_oos_trades=50,
             enforce_holdout_pass=False,
@@ -107,7 +110,7 @@ def test_research_cli_end_to_end_with_seed_1(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Critério de aceite CLI: `strategy-lab research --seed 1` executa e aprova somente o edge."""
-    code = main(["research", "--seed", "1", "--output-dir", str(tmp_path)])
+    code = main(["research", "--synthetic", "--seed", "1", "--output-dir", str(tmp_path)])
     captured = capsys.readouterr().out
     assert code == 0
 
@@ -115,6 +118,8 @@ def test_research_cli_end_to_end_with_seed_1(
     assert payload["event"] == "strategy_lab_research_completed"
     assert payload["status"] == "ok"
     assert payload["approved_count"] == 1
+    assert payload["dataset_origin"] == "synthetic"
+    assert payload["production_eligible"] is False
     assert Path(payload["ranking_md"]).exists()
     assert Path(payload["candidates_json"]).exists()
 
@@ -154,6 +159,7 @@ def test_research_runner_aborts_run_if_sanity_check_fails(
             seed=seed,
             max_candidates=10,
             output_dir=tmp_path,
+            dataset_snapshot=synthetic_snapshot(candles, asset="EURUSD-OTC", seed=seed),
             override_candidates=[edge_cand],
             min_oos_trades=50,
             enforce_holdout_pass=False,

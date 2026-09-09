@@ -186,7 +186,7 @@ def test_dataset_coverage_refuses_low_or_unresolved_gaps() -> None:
     """R-RES-1: cobertura <95% ou gap in_session não resolvido aborta a pesquisa."""
     candles = [
         {
-            "asset": "EURUSD-OTC",
+            "asset": "EURUSD",
             "ts": BASE_TS + index * 60,
             "o": "1",
             "h": "2",
@@ -197,15 +197,15 @@ def test_dataset_coverage_refuses_low_or_unresolved_gaps() -> None:
         for index in range(95)
     ]
     dataset = ResearchDataset.from_rows(candles, [], [])
-    assert dataset.coverage("EURUSD-OTC", BASE_TS, BASE_TS + 99 * 60) == Decimal("0.95")
+    assert dataset.coverage("EURUSD", BASE_TS, BASE_TS + 99 * 60) == Decimal("0.95")
 
-    dataset.refuse_if_coverage_below("EURUSD-OTC", BASE_TS, BASE_TS + 99 * 60)
+    dataset.refuse_if_coverage_below("EURUSD", BASE_TS, BASE_TS + 99 * 60)
     low = ResearchDataset.from_rows(candles[:-1], [], [])
     with pytest.raises(ResearchDatasetError, match="RES_COVERAGE_BELOW_MINIMUM"):
-        low.refuse_if_coverage_below("EURUSD-OTC", BASE_TS, BASE_TS + 99 * 60)
+        low.refuse_if_coverage_below("EURUSD", BASE_TS, BASE_TS + 99 * 60)
 
     gap = {
-        "asset": "EURUSD-OTC",
+        "asset": "EURUSD",
         "from_ts": BASE_TS,
         "to_ts": BASE_TS + 60,
         "in_session": True,
@@ -213,30 +213,41 @@ def test_dataset_coverage_refuses_low_or_unresolved_gaps() -> None:
     }
     blocked = ResearchDataset.from_rows(candles, [], [gap])
     with pytest.raises(ResearchDatasetError, match="RES_COVERAGE_BELOW_MINIMUM"):
-        blocked.refuse_if_coverage_below("EURUSD-OTC", BASE_TS, BASE_TS + 99 * 60)
+        blocked.refuse_if_coverage_below("EURUSD", BASE_TS, BASE_TS + 99 * 60)
 
 
-def test_payout_lookup_uses_hour_bucket_and_samples() -> None:
-    """R-RES-4: payout usa hour_ts e retorna None quando samples=0."""
+def test_payout_lookup_requires_point_in_time_evidence() -> None:
+    """R-RES-4: hourly legacy averages never leak future payout into a signal."""
+    hour_ts = BASE_TS - BASE_TS % 3600
     lookup = PayoutLookup.from_rows(
         [
             {
                 "asset": "EURUSD-OTC",
-                "hour_ts": BASE_TS - BASE_TS % 3600,
+                "hour_ts": hour_ts,
                 "payout_pct": "87.00",
                 "samples": 3,
             },
             {
                 "asset": "EURUSD-OTC",
-                "hour_ts": BASE_TS - BASE_TS % 3600 + 3600,
+                "hour_ts": hour_ts,
+                "observed_at": BASE_TS,
+                "payout_pct": "86.00",
+                "samples": 1,
+                "source": "test",
+            },
+            {
+                "asset": "EURUSD-OTC",
+                "hour_ts": hour_ts + 3600,
                 "payout_pct": "90.00",
                 "samples": 0,
             },
         ]
     )
 
-    assert lookup.payout("EURUSD-OTC", BASE_TS + 120) == Decimal("0.87")
-    assert lookup.payout("EURUSD-OTC", BASE_TS - BASE_TS % 3600 + 3600) is None
+    assert lookup.payout("EURUSD-OTC", BASE_TS - 60) is None
+    assert lookup.decision("EURUSD-OTC", BASE_TS - 60).reason == "RES_PAYOUT_OBSERVED_AFTER_SIGNAL"
+    assert lookup.payout("EURUSD-OTC", BASE_TS + 120) == Decimal("0.86")
+    assert lookup.payout("EURUSD-OTC", hour_ts + 3600) is None
 
 
 def test_research_coverage_report_cli_with_parquet(
@@ -247,7 +258,7 @@ def test_research_coverage_report_cli_with_parquet(
     pl = pytest.importorskip("polars")
     candles = [
         {
-            "asset": "EURUSD-OTC",
+            "asset": "EURUSD",
             "ts": BASE_TS + index * 60,
             "o": "1",
             "h": "2",
@@ -263,7 +274,7 @@ def test_research_coverage_report_cli_with_parquet(
     pl.DataFrame(
         [
             {
-                "asset": "EURUSD-OTC",
+                "asset": "EURUSD",
                 "hour_ts": BASE_TS - BASE_TS % 3600,
                 "payout_pct": "87.00",
                 "samples": 1,
@@ -276,7 +287,7 @@ def test_research_coverage_report_cli_with_parquet(
             "research",
             "--coverage-report",
             "--assets",
-            "EURUSD-OTC",
+            "EURUSD",
             "--from",
             str(BASE_TS),
             "--to",
@@ -302,7 +313,7 @@ def test_research_coverage_report_cli_refuses_low_coverage(
     pl = pytest.importorskip("polars")
     candles = [
         {
-            "asset": "EURUSD-OTC",
+            "asset": "EURUSD",
             "ts": BASE_TS + index * 60,
             "o": "1",
             "h": "2",
@@ -318,7 +329,7 @@ def test_research_coverage_report_cli_refuses_low_coverage(
     pl.DataFrame(
         [
             {
-                "asset": "EURUSD-OTC",
+                "asset": "EURUSD",
                 "hour_ts": BASE_TS - BASE_TS % 3600,
                 "payout_pct": "87.00",
                 "samples": 1,
@@ -331,7 +342,7 @@ def test_research_coverage_report_cli_refuses_low_coverage(
             "research",
             "--coverage-report",
             "--assets",
-            "EURUSD-OTC",
+            "EURUSD",
             "--from",
             str(BASE_TS),
             "--to",

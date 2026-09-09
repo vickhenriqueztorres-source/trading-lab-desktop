@@ -91,3 +91,27 @@ def test_market_message_budget_blocks_before_exceeding_limit() -> None:
     assert denied.allowed is False
     assert denied.used_in_window == 2
     assert budget.try_acquire(70.1).allowed is True
+
+
+def test_market_lane_cannot_consume_operational_reserve() -> None:
+    budget = IQOptionMessageBudget(
+        limit=2,
+        pressure_at=2,
+        total_limit=4,
+        total_pressure_at=4,
+    )
+
+    assert budget.try_acquire(10.0).allowed is True
+    assert budget.try_acquire(10.1).allowed is True
+    assert budget.try_acquire(10.2).allowed is False
+    assert budget.try_acquire_operational(10.3).allowed is True
+    assert budget.try_acquire_operational(10.4).allowed is True
+    assert budget.try_acquire_operational(10.5).allowed is False
+
+
+def test_total_budget_window_expires_monotonically() -> None:
+    budget = IQOptionMessageBudget(limit=1, total_limit=1)
+
+    assert budget.try_acquire_operational(5.0).allowed is True
+    assert budget.try_acquire(5.1).allowed is False
+    assert budget.try_acquire(65.1).allowed is True

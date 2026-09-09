@@ -449,3 +449,483 @@ de isolamento (86 testes focados aprovados no conjunto final).
 Teste Deno aditivo criado mas não executado por ausência de runtime local.
 Nenhuma alteração de Supabase/deploy ou conta de corretora foi realizada.
 
+## 2026-09-05 — CAT-00: baseline e contrato de semântica (diagnóstico)
+
+R-ISO-1..6, R-PRIM-1..7, R-RES-1..11, R-BOT-1..13.
+
+- O CAT-00 registrou o baseline conjunto em
+  `../docs/CAT00_BASELINE_AND_CATALOG_AUDIT.md` e a decisão estrutural em
+  `../docs/ADR_EXECUTION_SEMANTICS_AND_BOOTSTRAP.md`.
+- LAB: 312 testes passaram; 3 testes staging foram ignorados por ausência de
+  `SUPABASE_STAGING_DB_URL`. Ruff check, mypy strict (79 arquivos) e pip check passaram.
+  Format-check apontou o arquivo preexistente `tests/test_closing_checklist_lab.py`.
+- Deno check/test/fmt não foi executado porque o runtime não está disponível neste host.
+- O manifesto foi somente auditado: assinatura aceita, mas o run de origem
+  `run_complete_catalog` não foi localizado e Wilson 0.557 não reproduz o cálculo atual
+  para 578/1000 (0.5471483340786791358059675999). Nenhum dado foi reclassificado.
+- Encontrado, não corrigido: replay e bot divergem em bootstrap, gates de composição,
+  timeframe, horário e tratamento da próxima vela; o relatório escreve `8/8` e deriva
+  `holdout_passed` do estado geral de aprovação.
+- Fora do escopo: código operacional, Supabase remoto, migration, coleta, pesquisa,
+  publicação, exclusão, build e corretoras. Nenhuma ordem foi enviada.
+
+## 2026-09-05 — CAT-01: inventário e orçamento Supabase somente leitura
+
+R-HUB-1..8, R-COL-1..13, R-OPS-1..4, apenas diagnóstico.
+
+- Relatório conjunto criado em `../docs/CAT01_SUPABASE_INVENTORY_AND_CAPACITY_BUDGET.md`.
+- Supabase CLI 2.116.0 pinada foi verificada; acesso remoto recusado sem token seguro.
+  URL/ref de staging e ref de produção também não estão configurados, então staging não foi
+  inferido pelo nome e toda medição remota foi marcada `BLOCKED`.
+- Seis migrations, onze tabelas pretendidas, cinco Edge Functions e contratos de Storage foram
+  inventariados localmente. Foram registrados, sem alterar código aplicado, os riscos de archive
+  stub, callback por contagem, grants de funções, publicação parcial, calendário incompleto e
+  índices potencialmente redundantes.
+- Modelo de crescimento e budgets warning/critical foram propostos, mas médias/p95, quota e
+  capacidade restante continuam desconhecidos até o inventário autenticado de staging.
+- Nenhuma migration editada, nenhum deploy, DDL, DELETE, coleta, pesquisa, publicação, acesso a
+  broker ou ordem. Credenciais anteriormente expostas não foram usadas.
+
+## 2026-09-05 — CAT-02: contrato público v1.2 de receita e capacidades
+
+R-MAN-1..7, R-ISO-1..6, R-PRIM-1..7; contrato preparatório de R-RES/R-BOT, sem pesquisa ou
+execução.
+
+- `tl-manifest-schema` atualizado de 1.1.0 para 1.2.0. A revisão aditiva 1.2 exige semântica
+  `tl.candle-close.v2`, revisão/fingerprint determinístico da receita, composição fechada F1..F5,
+  evidência do dataset e requisitos de produto, timeframe, warmup e tick volume.
+- Modelo Pydantic, JSON Schema exportado e oráculo de testes foram sincronizados. A revisão 1.1
+  preserva compatibilidade e rejeita contrabando de campos 1.2; documentos históricos assinados
+  e o vetor v1 permanecem imutáveis.
+- `strategy_contract_vectors.v2.json` é público, canônico, auto-hasheado e consumido
+  independentemente pelo Lab e pelo Desktop. Abrange F1..F5, consenso, bootstrap, tie=loss,
+  elegibilidade/capabilities, assinatura, campos hostis, origem sintética e telemetria opt-in.
+- Dataset sintético nunca pode publicar estratégia `approved`. Não foi introduzido código
+  arbitrário, família, parâmetro, fórmula ou mudança na paridade dos primitivos.
+- Rollout fixado: leitor 1.2 primeiro; dataset/replay; engine incremental/paridade; shadow no bot;
+  só depois Hub e publisher 1.2. O publisher atual continua emitindo 1.1.
+- Validação: schema/contrato **140 passed**; vetor CAT-02 isolado **16 passed**; suíte integral
+  **328 passed, 3 skipped** (staging sem URL). Ruff check aprovado; mypy strict em 81 arquivos e
+  pip check aprovados. Format-check mantém apenas o arquivo preexistente
+  `tests/test_closing_checklist_lab.py`.
+- O Desktop executou sua suíte contratual independente com **83 passed** e recusa a semântica v2
+  por capability enquanto o engine correspondente não existe. Scanner de segredos e diff-check
+  aprovados.
+- Nenhuma chamada Supabase, migration, função, Storage, publicação, corretora ou ordem. Segredos
+  expostos na conversa não foram usados nem gravados; rotação externa permanece necessária.
+
+## 2026-09-05 — CAT-03: dataset real, identidade e payout as-of
+
+R-COL-3..9, R-RES-1, R-RES-4, R-RES-11, R-ISO-1..6.
+
+- `ResearchDataset` passou a gerar `DatasetSnapshot` com origem, fonte, ativo exato, timeframe,
+  intervalo, qualidade e fingerprint imutável. `EURUSD` e `EURUSD-OTC` não são normalizados nem
+  misturados.
+- Pesquisa real agora exige fonte explícita (`--supabase` ou Parquet completo); sintético só roda
+  com `--synthetic` e seus relatórios seguem `production_eligible=false`.
+- Agregação M1->M5/M15 exige buckets UTC completos e recusa vela corrente/parcial. Cobertura usa
+  sessão de mercado e gaps `in_session`, sem penalizar período fechado.
+- Payout ganhou regra point-in-time: observações têm `observed_at`; média horária legada sem
+  as-of recebe `RES_PAYOUT_LEGACY_NO_ASOF` e não alimenta sinais.
+- Criada migration local `0007_payout_observations.sql`; `FakeRepository`, `PostgresRepository`
+  e sampler foram adaptados para observações pontuais e agregado horário compatível.
+- Volume ausente permanece `None`; candidatos que dependem de `tick_volume_ratio` ficam
+  inelegíveis com `RES_TICK_VOLUME_UNAVAILABLE`.
+- Relatórios de pesquisa incluem evidência pública do snapshot e elegibilidade de produção.
+- Testes novos em `tests/test_cat03_dataset_contract.py` cobrem ativo exato, TFs, vela corrente,
+  payout futuro/samples zero/legado, volume ausente, sessões, fingerprint e fonte explícita.
+- Validação: **336 passed, 3 skipped**; Ruff check e format-check aprovados; mypy strict em
+  81 arquivos aprovado; compileall aprovado; `scrub_secrets.py --all` e `git diff --check`
+  aprovados.
+- Não executado: Supabase remoto/staging, deploy de migration, coleta real, archive hot/cold,
+  publicação, corretora ou ordem. Skips staging continuam por ausência de `SUPABASE_STAGING_DB_URL`.
+
+## 2026-09-05 — CAT-04: replay de referência e contrato público
+
+R-RES-4, R-RES-5, R-RES-6, R-BOT contrato independente.
+
+- `replay_simulator.py` passou a aplicar os gates de composição F1 `adx_max` e F4
+  `width_ratio_max`, respeitar `candidate.tf`, `candidate.hours` e derivar `SessionWindow`
+  diretamente de `hours_utc`.
+- A liquidação do replay agora exige a próxima vela completa do mesmo timeframe; a próxima linha
+  após gap é classificada como `SETTLEMENT_GAP`, não como `t+1`.
+- Volume ausente em família com `tick_volume_ratio` bloqueia como
+  `TICK_VOLUME_UNAVAILABLE` após warmup suficiente.
+- Criado o vetor público `contracts/replay_contract_vectors.v1.json`, SHA-256
+  `1059d58db4ead251e9be720218427b5dcb883437142d1af76a07ce43782acdde`, com 7 casos cobrindo
+  F1..F5, múltiplos ativos/TFs, gate, volume ausente, fora de horário, empate, gap e
+  reinicialização por prefixo.
+- O Desktop Bot ganhou teste contratual independente que consome apenas o JSON público e valida
+  as famílias locais sem importar Strategy Lab.
+- Validação: Lab focado **27 passed**, Ruff check/format e mypy aprovados; Bot contrato
+  **7 passed**, Ruff check/format e mypy scoped aprovados.
+- Não executado: Supabase remoto/staging, coleta real, publicação, corretora, ordem, build do EXE
+  ou aprovação de estratégia nova.
+
+## 2026-09-05 — CAT-05: evidência durável e holdout protegido
+
+R-HUB-1, R-HUB-2, R-HUB-8, R-RES-2, R-RES-11.
+
+- Criada migration local `apps/hub/supabase/migrations/0008_research_evidence.sql` com
+  `dataset_snapshots`, `holdout_reservations`, `research_attempts` e
+  `research_evidence_artifacts`; RLS habilitado e acesso `anon/authenticated` revogado.
+- Criado `research/evidence.py` com contratos tipados, `FakeEvidenceRepository`,
+  `MemoryArtifactStore`, reserva concorrente de holdout e artefatos privados hash-addressed.
+- Criado `research/pg_evidence_repository.py` para persistir snapshot, reserva, abertura,
+  burn/rollback de holdout, tentativas e artefatos no Postgres/Supabase.
+- `run_research_pipeline` agora falha fechado quando dataset elegível para produção não possui
+  repositório de evidência; quando fornecido, registra snapshot, reserva holdout, bloqueia range
+  queimado, grava tentativa por candidato e artefato de TradeLog sem duplicar candles.
+- `HoldoutManager` legado passou a carregar ranges queimados do banco no startup e não engole
+  falhas de banco com `except/pass`.
+- Testes novos em `tests/test_cat05_evidence_contract.py` cobrem falta de evidência, burn após
+  run aprovado, bloqueio em restart/run seguinte, rollback sem pré-aprovados, concorrência,
+  falha de leitura/escrita e erro de banco não silenciado.
+- Validação: suíte integral **345 passed, 3 skipped**; Ruff check/format, mypy strict em
+  84 arquivos, compileall, scanner de segredos raiz e `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, aplicação da migration, Storage real, deploy,
+  publicação, corretora, ordem, aprovação de estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-06: aprovação estatística sem atalhos
+
+R-RES-2, R-RES-7, R-RES-8, R-RES-9, R-RES-11.
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT06_STATISTICAL_APPROVAL_NO_SHORTCUTS.md`.
+- `approve_candidate` agora registra gates preliminares reais (`payout_available`,
+  `sample_size`, `pessimistic_wilson`) e reprova payout ausente com `RES_PAYOUT_MISSING`.
+- O FDR/BH usa o conjunto real de candidatos da rodada, com p-values derivados de `TradeLog`,
+  em vez de tratar todo candidato como rank 1.
+- `windows_passed` no `candidates.json` agora resume janelas reais do walk-forward; `gates_passed`
+  ficou separado para contagem total dos portões.
+- `holdout_passed` deixou de ser derivado de `approved`; no runner real só é preenchido após a
+  abertura controlada do holdout.
+- Dataset elegível a produção com candidato pré-aprovado falha fechado em holdout curto com
+  `RES_HOLDOUT_WINDOW_TOO_SHORT`.
+- Família desconhecida não cai mais em F1; falha com `RES_UNKNOWN_FAMILY`.
+- Caminhos de permutação/FDR e PBO foram mantidos em `Decimal`, sem chamada a `float`.
+- Validação do Lab: focados **23 passed**; regressão P10/CAT03/CAT06 **10 passed**; suíte integral
+  **351 passed, 3 skipped**; Ruff check/format, mypy, compileall, scanner de segredos raiz e
+  `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, aplicação de migration remota, coleta real, publicação,
+  corretora, ordem, aprovação de estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-07: pesquisa ampla, limitada e compatível com executor
+
+R-RES-3, R-MAN-3, R-ISO-6.
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT07_EXECUTOR_COMPATIBLE_RESEARCH_GRAMMAR.md`.
+- A gramática passou a consumir capacidades do executor antes da amostragem: famílias, TFs,
+  tick volume, ativos suportados, warmup máximo e budget de trials.
+- Criado budget nomeado `DEFAULT_TRIAL_BUDGET = 500`; enumeração agora usa amostragem
+  determinística por seed + hash, em fluxo e com deduplicação.
+- `GrammarResult.audit_report()` registra universo teórico, elegíveis, amostrados, descartes por
+  motivo e diversidade por família/ativo/timeframe/horário.
+- Corrigida a eliminação indevida da F5: o trio canônico
+  `session_window + quadrant_majority + rsi_extreme` é permitido por existir no contrato público;
+  combinações não canônicas com o par incompatível continuam proibidas.
+- F3/`level_touch` exige perfil explícito de níveis por ativo e não usa defaults sintéticos 99/101
+  para Forex.
+- `generate_param_values` preserva grade declarada em min/mid/max; último valor desalinhado ao
+  step não é emitido.
+- Audit padrão com seed 7: 116.640 elegíveis, 500 amostrados, diversidade F1=123, F2=152,
+  F4=119, F5=106.
+- Validação do Lab: gramática/CAT07 **10 passed**; suíte integral **357 passed, 3 skipped**;
+  Ruff check/format e mypy aprovados; smoke CLI sintético concluído com `status=ok`.
+- Não executado: Supabase remoto/staging, aplicação de migration remota, coleta real, publicação,
+  corretora, ordem, aprovação de estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-11: replay da frequência realmente executável do portfólio
+
+R-RES-4, R-RES-5, R-RES-9, R-RES-11, R-ISO-3.
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT11_PORTFOLIO_EXECUTABLE_REPLAY.md`.
+- Criado `research/portfolio_replay.py`, uma camada data-only para transformar oportunidades
+  aprovadas pelo replay individual em frequência executável de portfólio.
+- O replay de portfólio aplica arbitragem determinística por ativo/timeframe/fechamento, TTL,
+  atraso de execução, payout observado, capital, stop/take, limite de perdas, cooldown e exatamente
+  uma ordem em voo por conta.
+- Cada oportunidade recebe motivo estável: `ELIGIBLE`, `CONFLICT`, `ORDER_IN_FLIGHT`,
+  `MISSING_PAYOUT`, `OUTSIDE_HOURS`, `WARMUP`, `STALE`, `RISK`, `DEADLINE_EXPIRED`,
+  `EXECUTION`, `RECONNECTING`, `CANDLE_DELAYED` ou `INVALID_DIRECTION`.
+- Adicionado carregador do artefato público `contracts/replay_contract_vectors.v1.json`, sem
+  importar o Desktop Bot, para provar que o replay de portfólio parte dos mesmos vetores de decisão
+  CAT-04.
+- Evidência numérica: 4 sinais sintéticos em 10 min equivaleram a 576 sinais/dia, mas apenas 2
+  operações executáveis, 288 ops/dia; 50 receitas
+  duplicando o mesmo evento produziram 50 sinais e só 1 operação executável, com 49 `CONFLICT`.
+- Validação no `.venv` próprio do Lab: CAT-11 **8 passed**; regressão research/contrato
+  **33 passed**; suíte completa **365 passed, 3 skipped**; Ruff check/format, mypy, compileall e
+  `git diff --check` aprovados.
+- Observação: pytest emitiu aviso de cleanup do diretório temporário `pytest-current` no Windows
+  após concluir com código 0; não houve falha de teste.
+- Não executado: Supabase remoto/staging, coleta real, publicação, corretora, ordem, seleção de
+  portfólio CAT-12, benchmark do EXE, build do EXE ou qualquer validação financeira externa.
+
+## 2026-09-05 — Supabase Hub apply remoto preparado, não executado
+
+R-HUB-1, R-HUB-2, R-HUB-3, R-HUB-4, R-HUB-5, R-HUB-6, R-HUB-8, R-OPS-1.
+
+- Validada localmente a CLI pinada `state/tools/supabase-cli-v2.116.0/supabase.exe` e o Deno
+  pinado `state/tools/deno-v2.9.6/deno.exe`.
+- Edge Functions locais validadas: `deno fmt --check`, `deno lint`, `deno check` e `deno test`
+  concluíram com **13 passed**.
+- Criado `scripts/supabase_apply_remote.ps1` para aplicar o Hub remoto via CLI sem secrets
+  hardcoded: migrations, buckets `manifests`/`parquet`, secrets temporários em `state/` com remoção
+  no `finally`, e deploy das Edge Functions.
+- O script foi executado sem credenciais ambientais e falhou fechado com
+  `SUPABASE_STAGING_DB_URL is required`, como esperado.
+- Checagem `rg` confirmou que as credenciais coladas no chat não foram gravadas em arquivos do
+  repositório.
+- Não executado: `db push`, criação de buckets remotos, `secrets set`, deploy de functions,
+  smoke remoto ou alteração de dados, porque `SUPABASE_STAGING_DB_URL`, `SUPABASE_PROJECT_REF` e
+  `SUPABASE_ACCESS_TOKEN` não estavam configurados no ambiente seguro.
+
+## 2026-09-05 — Supabase Hub staging aplicado e validado remotamente
+
+R-HUB-1, R-HUB-2, R-HUB-3, R-HUB-4, R-HUB-5, R-HUB-6, R-HUB-7, R-HUB-8.
+
+- Supabase CLI `2.116.0` autenticada pelo fluxo oficial, Hub inicializado e vinculado ao projeto
+  staging explicitamente indicado pelo operador.
+- Preflight confirmou PostgreSQL `17.6` e extensão `pg_net` disponível.
+- Migrations `0001` a `0008` aplicadas; conferência final mostrou todas presentes tanto localmente
+  quanto no histórico remoto.
+- As 13 tabelas de domínio presentes no projeto estão com RLS habilitado (13/13).
+- Buckets criados idempotentemente: `manifests` público e `parquet` privado.
+- Secrets de staging configurados sem persistência no repositório: `HUB_ENV`, uma nova chave
+  aleatória `HUB_JWT_SECRET` gerada em memória e a chave pública de teste. O segredo colado na
+  conversa não foi reutilizado.
+- Edge Functions remotas ativas: `archive`, `mirror`, `publish`, `client_token` e `outcomes`.
+  `client_token`/`outcomes` usam autenticação própria; as demais preservam o gate JWT da Supabase.
+- Smoke remoto `client_token` retornou 201. O primeiro smoke de `outcomes` revelou contrato
+  incompleto: timestamp fora da grade M1 chegava ao check do banco e virava 500. A fronteira agora
+  rejeita `ts % 60 != 0` com 422; regressão Deno adicionada; novo smoke retornou 202, persistiu uma
+  linha e a limpeza confirmou zero linhas restantes.
+- Smoke remoto `publish`: primeira versão 201, reenvio 409, objeto público 200 e ETag presente.
+  O metadado de `current.json` e `v14.json` gravou `max-age=900`; o endpoint público hospedado
+  respondeu `no-cache`, limitação externa documentada em `supabase/storage#1290`. Fixture, linha de
+  manifesto e objetos foram removidos; estado final: zero manifestos, outcomes e objetos de smoke.
+- `scripts/supabase_apply_remote.ps1` passou a aceitar projeto já vinculado, rejeitar URL HTTPS no
+  lugar de PostgreSQL, usar a sessão salva da CLI, fixar `--agent no` e separar deploy JWT-protegido
+  de custom-auth. Reexecução completa passou e informou banco atualizado.
+- Validação local final: Deno fmt/lint/check e **15 passed**; Strategy Lab **365 passed, 3 skipped**;
+  Ruff check/format, mypy strict, compileall, parse PowerShell, scanner de segredos e
+  `git diff --check` aprovados. Os três skips seguem sendo os testes que exigem uma URL PostgreSQL
+  staging explícita, embora os smokes equivalentes tenham sido executados remotamente pela CLI.
+- Limitações externas reais: R2 não possui credenciais/configuração; `mirror` está implantada mas
+  não consegue espelhar. `archive` continua sendo stub e o cron ativo não possui URL/token de
+  arquivo; arquivamento frio não foi validado. Chaves Ed25519 A/B de produção não foram fornecidas;
+  o Hub permanece estritamente em staging com trust root de teste.
+- Nenhuma corretora, conta financeira, ordem ou ambiente Real foi acessado.
+
+## 2026-09-06 — CAT-12: seleção offline por qualidade e complementaridade
+
+Requisitos cobertos: CAT-12; dependências preservadas: CAT-07 e CAT-11.
+
+- Criado `research/portfolio_selection.py`, isolado de publisher, Supabase, coleta, bot e broker.
+- A composição recebe somente receitas com veredito individual e referência de evidência. Receita
+  reprovada não participa do ranking, mesmo quando possui mais sinais no fixture.
+- Seleção gulosa determinística mede ganho marginal no replay executável CAT-11 e desempata por
+  robustez, menor sobreposição `(asset, signal_ts)` e `recipe_key` lexical.
+- Configuração imutável declara antes do holdout: seed/snapshot, targets 10/20/30/50/100,
+  correlação, concentrações por ativo/hora, ganho marginal, capacidade, 6.000 tentativas e gates
+  finais. O `config_hash` e o `selection_hash` tornam a escolha reproduzível.
+- Pesquisa sintética e histórico real não podem ser misturados na mesma seleção. O holdout exige
+  snapshot e intervalo temporal próprios e `HoldoutLedger` recusa uma segunda abertura do mesmo
+  snapshot, inclusive após falha.
+- Relatório inclui Wilson 95%, payout observado/de equilíbrio, EV/stake, sensibilidades −0,5 pp e
+  −1,0 pp, frequência OOS, drawdown, streak, concentração e custo computacional.
+- Rascunho de manifesto referencia evidência, permanece sem assinatura e fixa
+  `publish_automatically=false`; não existe caminho de publicação automática.
+- Comparação diária com 12 receitas prova targets indisponíveis sem inventar receita. Ensaio
+  adicional com 100 receitas concluiu com **9 passed**, 100 operações executáveis e 141,61 s; o
+  custo fica documentado para CAT-19 e o caso longo não integra a suíte diária.
+- Documento: `docs/CAT12_OFFLINE_QUALITY_COMPLEMENTARITY_SELECTION.md` no projeto principal.
+- Validação focada CAT-11/CAT-12: **19 passed**. Suíte completa do Lab: **376 passed, 3 skipped**.
+  Ruff check/format, mypy strict e compileall aprovados; teste de isolamento do projeto principal:
+  **4 passed**. O aviso de cleanup `pytest-current` no Windows ocorreu após exit code 0.
+- Nenhum dataset real ou holdout real foi aberto nesta fase; não há alegação de retorno garantido.
+  Nenhum backend remoto, corretora, conta financeira ou ordem foi acessado.
+
+## 2026-09-06 — CAT-13: publicação recuperável e ponteiro autoritativo de manifesto
+
+Requisitos cobertos: CAT-13; dependências preservadas: CAT-10, CAT-11 e CAT-12.
+
+- Criada migration `apps/hub/supabase/migrations/0009_publication_pipeline.sql` com
+  `publication_journal`, `manifest_pointers`, `manifest_mirror_outbox` e RPCs de reserva,
+  confirmação de objeto, commit, marcação de projeção legada, falha, claim/complete/fail do mirror.
+- `publish` passou a validar schema/assinatura/política de produção, gravar `vN.json` imutável
+  (`x-upsert=false`), verificar SHA-256, commitar o ponteiro apenas após objeto confirmado, reparar
+  `current.json` a partir do ponteiro e responder reenvio idempotente com `200`.
+- Publicação em produção exige `schema_revision=1.2`, dataset `real_market`, run selado, snapshot
+  elegível, tentativa aprovada e artefato `portfolio_selection`; chave de teste continua restrita
+  a staging.
+- Criada Edge Function pública `manifest_current`, que resolve o ponteiro confirmado no banco,
+  verifica hash do objeto imutável, devolve `ETag`/cache e usa fallback last-good quando o ponteiro
+  atual estiver indisponível ou corrompido.
+- `mirror` deixou de depender de disparo best-effort: agora consome outbox durável, limita tentativas
+  com backoff, verifica hash na origem e no destino e registra falha sem Promises soltas.
+- `scripts/supabase_apply_remote.ps1` agora implanta `manifest_current` no grupo custom-auth e
+  `apps/hub/supabase/config.toml` fixa `verify_jwt=false` para o endpoint público.
+- Documentação adicionada em `docs/CAT13_RECOVERABLE_MANIFEST_PUBLICATION.md` e README do Hub
+  atualizado com a semântica de saga, `manifest_current`, idempotência e `current.json` legado.
+- Aplicado remotamente no projeto staging via Supabase CLI: preflight `pg_net`, `db push` da
+  migration `0009`, buckets conferidos e deploy de `archive`, `mirror`, `publish`, `client_token`,
+  `outcomes` e `manifest_current`.
+- Smoke remoto controlado: criado `research_run` mínimo para fixture, `publish=201`,
+  `manifest_current=200`, reenvio idempotente `publish=200`, versão retornada `14`, fallback
+  `false`. Registros de smoke e objetos `v14.json`/`current.json` foram removidos; contagem final
+  de `publication_journal`, `manifest_pointers`, `manifest_mirror_outbox`, `manifests` e
+  `research_run_smoke` voltou a zero.
+- Validação local: Deno fmt/lint/check e **20 passed**; teste CAT-13 Python **6 passed**; suíte
+  completa do Lab **382 passed, 3 skipped**; Ruff check/format, mypy strict, compileall,
+  parse PowerShell, scanner de segredos e `git diff --check` aprovados; isolamento do projeto
+  principal **4 passed**.
+- Limitações: os três skips seguem exigindo `SUPABASE_STAGING_DB_URL` explícita no pytest. R2 não
+  possui credenciais/configuração, então o mirror foi validado localmente com fake e implantado, mas
+  não espelhou para R2 no smoke remoto. Nenhuma corretora, conta financeira, ordem ou ambiente Real
+  foi acessado.
+
+## 2026-09-06 — CAT-15: outcomes versionados, privados e limitados
+
+Requisitos cobertos: R-HUB-2, R-HUB-4, R-RES-12; invariantes I-1, I-2, I-6, I-7, I-8 e I-14.
+
+- Criadas migrations `0010_outcomes_v2.sql` e `0011_outcome_budgets.sql`. Histórico v1 foi
+  preservado; inserção anon direta foi revogada e v2 usa tabelas/RPCs sem grants públicos.
+- Payload v2 identifica receita/revisão, manifesto/engines, série, produto, ambiente, origem,
+  grupo dependente e evento terminal. Payout é decimal textual; PII/campos extras são recusados.
+- Ingestão e agregado são transacionais e exactly-once por evento e cliente+sinal. Relatos do
+  mesmo sinal não são tratados como amostras estatísticas independentes.
+- JWT novo vincula `client_id` e ambiente. Token legado só escreve v1. Quotas globais e por cliente
+  cobrem requests e quantidade de eventos; UUID rotativo não remove o teto global.
+- Retenção: evento mínimo normalizado 90 dias, agregado 400 dias; nenhum payload bruto persistido.
+  Outcomes não possuem caminho de promoção, aprovação ou mutação de manifesto.
+- Migrations `0010` e `0011` aplicadas e funções redeployadas no Supabase staging vinculado.
+  Smoke remoto Practice: primeira ingestão `1`, retry duplicado `0`; dados sintéticos removidos.
+  Smoke legado v1 retornou `accepted=1`; consulta remota confirmou zero grants/policies/RPC de
+  budget para anon. Todos os registros sintéticos dos smokes foram removidos.
+- Validação final: Deno fmt/lint/check e **25 passed**; Lab completo **382 passed, 3 skipped**;
+  Ruff check/format, mypy strict (**85 arquivos**) e compileall aprovados. Os três skips exigem
+  `SUPABASE_STAGING_DB_URL` explícita nos testes Postgres; o apply/smoke remoto foi executado
+  separadamente pela CLI vinculada. O aviso `pytest-current` ocorreu após exit code 0 no Windows.
+- Nenhuma corretora, conta financeira, ordem, credencial de broker ou ambiente Real foi acessado.
+
+## 2026-09-06 — CAT-17: arquivo frio verificável, hot+cold e restore
+
+Requisitos cobertos: R-HUB-7, R-OPS-1, continuidade de R-COL-3, R-COL-6 e R-RES-1;
+invariantes I-1, I-2, I-6, I-7, I-8 e I-14 preservadas.
+
+- Migrations `0012`–`0014` criaram jobs/recortes congelados, claims com lease/token, índice de
+  objetos verificados e watermark durável separado da tabela quente. A conclusão antiga por
+  contagem foi desabilitada e perdeu grants públicos.
+- A remoção segura compara PK e todo conteúdo OHLC/volume/source/collected_at antes de apagar
+  apenas as linhas congeladas. Atualização tardia falha sem delete.
+- Executor local gera Parquet Zstandard com Decimal, faz upload privado imutável, baixa novamente
+  e verifica bytes, schema, contagem, PK, OHLC, payouts point-in-time e fingerprint.
+- Reader research une hot+cold sem duplicação e recusa conteúdo divergente. Backup inclui objetos
+  frios e manifesto selado; restore foi verificado em destino isolado.
+- Edge `archive` virou control-plane autenticado: planeja e alerta backlog, mas nunca converte nem
+  remove. O cron usa partições de até 30 dias e piso de 1.000 velas para evitar microarquivos.
+- Staging antes da aplicação: zero candles, jobs e objetos. Migrations aplicadas e função archive
+  v7 publicada. Smoke HTTP do control-plane: 200, backlog zero, `deletion_performed=false`.
+- O primeiro round-trip revelou regex de path superescapada; falhou fechado sem remover as três
+  velas. A correção foi adicionada na migration 0013, sem reescrever a 0012 já aplicada.
+- Round-trip staging final: 3 velas/payouts, 1 objeto de 4.341 bytes, fingerprint
+  `04db071ac8f4755f35b98e950c814bc35063ac9967901fcf5fa36edce658ed9a`, 3 deletes exatos,
+  reconstrução research 3/3 e restore isolado 1/1. O fixture `CAT17TEST` foi removido por alvo
+  exato; estado final voltou a zero candles, payouts, jobs e objetos do smoke.
+- Testes CAT-17: 14 aprovados. Lab completo: **396 passed, 3 skipped** (URL PostgreSQL staging
+  ausente no processo pytest). Ruff check/format, mypy strict em 88 fontes, compileall,
+  `db lint --linked --level error` e `git diff --check` aprovados.
+- Não houve corretora, conta financeira, ordem, conta Real, dado de cliente ou exclusão de
+  produção. Medição de compressão representativa aguarda partição real com pelo menos 1.000 linhas.
+
+## 2026-09-06 — CAT-18: retenção e quota com plano fechado
+
+Requisitos cobertos: R-OPS-1, R-HUB-7 e invariantes I-1, I-2, I-6, I-7, I-8 e I-14.
+
+- Criado `retention.py` com inventário tipado, categorias de retenção, política explícita,
+  plano determinístico por SHA-256, referências protegidas, confirmação e aplicação fail-closed.
+- Produção exige aprovação explícita; qualquer alteração no projeto, snapshot, alvo, tamanho,
+  versão ou hash aborta antes do primeiro delete. Wildcards, cascade e drop não existem.
+- CLI `strategy-lab retention` é dry-run por padrão e pode salvar plano JSON para revisão. A
+  execução exige `--execute`, plano, token `RETENTION-APPLY:<hash>` e, em produção, flag adicional.
+- Adaptador REST Supabase lista objetos do bucket `manifests` sem imprimir credenciais e só aceita
+  remoção de caminho exato. Migration `0015_retention_plans.sql` registra planos/alvos/eventos
+  append-only, com RLS sem acesso anon/authenticated.
+- Quota reporta bytes físicos, backlog e severidade; em crítico recomenda pausar ingestão/pesquisa,
+  nunca apagar evidências. Índices e dados financeiros permanecem fora da limpeza automática.
+- Migration `0015` aplicada no Supabase vinculado (`jciclczthkbpvvqnrnbf`); `db lint --level error`
+  e inventário de migrations confirmaram o schema remoto. O inventário Storage, somente leitura,
+  retornou zero objetos no bucket `manifests`; seu plano ficou vazio e não autorizou remoção.
+  Testes CAT-17/CAT-18: 22 aprovados; suíte integral do Lab: 404 aprovados, 3 skips de staging
+  (sem `SUPABASE_STAGING_DB_URL` no processo pytest). Ruff, formatação, mypy strict (90 fontes),
+  compileall e `git diff --check` aprovados.
+- Nenhuma exclusão remota, corretora, ordem, conta Real ou alteração de produção foi executada.
+
+## 2026-09-08 — Início da pesquisa real: bootstrap seguro da credencial de coleta
+
+**Requisitos:** R-COL-1; invariantes I-7, I-8 e I-14.
+
+- A inspeção remota somente leitura confirmou zero velas, payouts, runs de coleta, snapshots e
+  objetos frios no Supabase vinculado. Os rankings locais existentes usam dados sintéticos e não
+  constituem evidência de estratégia rentável ou publicável.
+- Adicionado `strategy-lab credentials set`, que recebe e-mail e senha somente por prompt
+  interativo, mascara a senha, valida a gravação e usa exclusivamente o destino
+  `StrategyLab/IQOption/collection` do cofre do sistema operacional.
+- Adicionado `strategy-lab credentials status`, que retorna somente disponibilidade booleana e
+  não expõe identidade, senha ou conteúdo da credencial.
+- O caminho não lê credenciais, vault, estado ou arquivos privados do Desktop Bot. Não houve
+  coleta externa, autenticação na corretora, publicação de manifesto ou ordem financeira.
+- Testes focados de credencial e coleta: 19 aprovados. Ruff e mypy dos arquivos alterados
+  aprovados após o ajuste final.
+
+**Pendente:** o operador deve preencher o prompt mascarado no próprio terminal. Depois disso,
+gravar um canário real revisado e iniciar o backfill/payout antes de qualquer pesquisa ou promoção.
+
+## 2026-09-08 — Primeira coleta IQ real e validação point-in-time
+
+**Requisitos:** R-COL-1, R-COL-2, R-COL-3, R-COL-5, R-COL-6, R-COL-7, R-COL-8,
+R-COL-10, R-COL-12, R-COL-13 e R-RES-1; invariantes I-1, I-2, I-4, I-7, I-8 e I-14.
+
+- A credencial cadastrada no WinVault foi consumida apenas pelo adaptador externo e sem expor
+  identidade ou segredo. Nenhuma credencial foi gravada em relatório, argumento ou arquivo do Lab.
+- O catálogo real continha 240 linhas, das quais 64 nomes não canônicos foram explicitamente
+  excluídos. Corrupção estrutural, duplicidade de ativo canônico e payout canônico inválido
+  continuam falhando fechados; não foi criada normalização ou alias implícito.
+- A semântica inclusiva do fim de intervalo do broker foi comprovada e o adaptador passou a
+  consultar `end_ts - 1`, preservando o contrato local de limite superior exclusivo.
+- Foi gravado e reconsultado um canário real de cinco velas M1 fechadas de `EURUSD-OTC`, com
+  SHA-256 `af1604bcc3487937d4593b4fa42eb2d65e38cddb28fd7bab7469c329b955769f`.
+- A primeira transação persistente gravou 995 velas reais, uma observação de payout `0.82` e o
+  run `7759af72ed9e408c8a81249d4b79b297`. O estado remoto final confirmado contém 995 velas,
+  de `1788818160` a `1788878100`, sem ordens ou ações financeiras.
+- O horário observado no catálogo para esse ativo foi registrado pela migration
+  `0019_eurusd_otc_schedule_20260908.sql`: todos os dias, 00:00–08:00 e 08:30–24:00 UTC.
+  A migration foi aplicada no Supabase vinculado; o gap 08:05–08:10 ficou fora de sessão.
+- A cobertura point-in-time do intervalo elegível foi 970/970 (`1.000000`), sem gap em sessão.
+  As 25 velas presentes na pausa 08:00–08:30 foram preservadas, mas não contam na grade elegível.
+- O UPSERT PostgreSQL passou de uma execução por vela para um único lote parametrizado com
+  `unnest`. O teste de staging usa ativo aleatório e rollback obrigatório. Uma única vela fake
+  deixada pelo teste antigo foi identificada por chave exata e removida; a contagem real voltou
+  imediatamente a 995.
+- A consulta de research escapou corretamente o operador módulo em SQL parametrizado (`%%`),
+  com teste real de staging. Idempotência, constraints e consulta de cobertura foram exercitadas.
+- Foi descoberto que o limite documentado de duas tentativas de login IQ por dia não tinha
+  implementação. As sessões diagnósticas anteriores à descoberta excederam essa intenção.
+  `login_budget.py` agora reserva antes da rede, persiste por dia UTC, usa lock entre processos,
+  escrita atômica e falha fechada em corrupção, regressão de relógio ou contenção. O orçamento
+  do dia ficou esgotado e nenhuma nova sessão externa foi aberta depois da correção.
+- A observação de payout ocorreu depois da última vela coletada e não foi aplicada
+  retroativamente. Por isso não houve replay, ranking, aprovação, publicação de manifesto ou
+  alegação de assertividade/frequência nesta etapa.
+- Validação final: Lab completo com **454 passed, 4 skipped**; integração real de staging com
+  **3 passed, 1 skipped** (URL anônima de RLS ausente); Ruff check/format, mypy strict em 92
+  fontes de produção, compileall, `db lint --linked --level error` e diff-check com
+  `cr-at-eol` para o checkout Windows aprovados.
+  O pytest terminou com exit code 0 e depois emitiu apenas o aviso conhecido de permissão ao
+  limpar `pytest-current` no Windows.
+- Nenhuma ordem, compra, conta Real, retry financeiro, manifesto ou alteração do EXE principal
+  foi executada nesta coleta.

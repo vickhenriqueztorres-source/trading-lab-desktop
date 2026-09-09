@@ -130,6 +130,24 @@ class CatalogStrategyInfo:
     added_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedCatalogStrategy:
+    """A fully parsed and constructed recipe, still invisible to evaluation."""
+
+    entry: StrategyCatalogEntry
+    instance: FamilyStrategyBase
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCatalogManifest:
+    """Catalog generation prepared off the execution lock and ready for one swap."""
+
+    manifest_version: int | None
+    expires_at: int | None
+    published_at: int | None
+    strategies: tuple[PreparedCatalogStrategy, ...]
+
+
 class DynamicManifestCatalog:
     """Manages strategy instances loaded dynamically from applied manifests."""
 
@@ -177,28 +195,31 @@ class DynamicManifestCatalog:
         if self._event_sink is not None:
             self._event_sink(event, payload)
 
-    @_locked
-    def apply_manifest(self, manifest: Any) -> None:
-        """Dynamically instantiate strategies from the applied manifest."""
-        now = self._utc_clock()
+    def prepare_manifest(self, manifest: Any) -> Callable[[], None]:
+        """Compile every executable recipe without changing the active generation.
+
+        The returned commit is intentionally tiny and performs one catalog swap under
+        ``execution_lock``.  A malformed or unsupported recipe therefore cannot leave
+        a partially updated catalog visible to an evaluation or financial admission.
+        """
         expiry = (
             manifest.get("expires_at")
             if isinstance(manifest, dict)
             else getattr(manifest, "expires_at", None)
         )
-        self._expires_at = None if expiry is None else int(expiry)
         published = (
             manifest.get("published_at")
             if isinstance(manifest, dict)
             else getattr(manifest, "published_at", None)
         )
-        self._published_at = None if published is None else int(published)
+        manifest_version: int | None = None
         if hasattr(manifest, "manifest_version"):
-            self._manifest_version = manifest.manifest_version
+            manifest_version = int(manifest.manifest_version)
         elif hasattr(manifest, "version"):
-            self._manifest_version = manifest.version
+            manifest_version = int(manifest.version)
         elif isinstance(manifest, dict):
-            self._manifest_version = manifest.get("manifest_version", manifest.get("version"))
+            raw_version = manifest.get("manifest_version", manifest.get("version"))
+            manifest_version = None if raw_version is None else int(raw_version)
 
         raw_strategies: Sequence[Any]
         if hasattr(manifest, "strategies"):
@@ -208,48 +229,14 @@ class DynamicManifestCatalog:
         else:
             raw_strategies = ()
 
-        incoming_keys = set()
+        prepared: list[PreparedCatalogStrategy] = []
         for raw in raw_strategies:
             entry = parse_strategy_entry(raw)
-            if self._demotions.get(entry.key) == entry.validated:
-                entry = replace(entry, status="observation")
             if entry.status == "rejected":
                 continue
-
-            existing = self._active_strategies.get(entry.key)
-            if (
-                existing is not None
-                and existing.entry.family == entry.family
-                and existing.entry.params == entry.params
-                and existing.entry.hours_utc == entry.hours_utc
-                and existing.entry.asset == entry.asset
-                and existing.entry.timeframe == entry.timeframe
-            ):
-                if (
-                    entry.warmup_required is not None
-                    and entry.warmup_required != existing.instance.warmup_required
-                ):
-                    self._emit(
-                        "WARMUP_MISMATCH",
-                        strategy_key=entry.key,
-                        declared=entry.warmup_required,
-                        calculated=existing.instance.warmup_required,
-                    )
-                    continue
-                incoming_keys.add(entry.key)
-                existing.entry = entry
-                existing.status = entry.status
-                continue
-
-            # Build new family instance
             cls = FAMILY_CLASSES.get(entry.family)
             if cls is None:
-                logger.warning(
-                    "Unknown strategy family %s for key %s; skipping",
-                    entry.family,
-                    entry.key,
-                )
-                continue
+                raise ValueError("MANIFEST_FAMILY_UNSUPPORTED")
 
             instance = cls(
                 strategy_key=entry.key,
@@ -269,31 +256,88 @@ class DynamicManifestCatalog:
                     calculated=instance.warmup_required,
                 )
                 continue
-            incoming_keys.add(entry.key)
-            self._active_strategies[entry.key] = CatalogStrategyInfo(
-                entry=entry,
-                instance=instance,
-                status=entry.status,
-                added_at=now,
-            )
+            prepared.append(PreparedCatalogStrategy(entry=entry, instance=instance))
 
-        # Process removed entries (R-BOT-9)
-        removed_keys = set(self._active_strategies.keys()) - incoming_keys
-        for key in removed_keys:
-            info = self._active_strategies.pop(key)
+        generation = PreparedCatalogManifest(
+            manifest_version=manifest_version,
+            expires_at=None if expiry is None else int(expiry),
+            published_at=None if published is None else int(published),
+            strategies=tuple(prepared),
+        )
+        return lambda: self.commit_prepared(generation)
+
+    @_locked
+    def commit_prepared(self, prepared: PreparedCatalogManifest) -> None:
+        """Atomically replace active recipes while retaining in-flight revisions."""
+        now = self._utc_clock()
+        previous_active = self._active_strategies
+        next_active: dict[str, CatalogStrategyInfo] = {}
+        incoming_keys: set[str] = set()
+
+        for candidate in prepared.strategies:
+            entry = candidate.entry
+            if self._demotions.get(entry.key) == entry.validated:
+                entry = replace(entry, status="observation")
+            existing = previous_active.get(entry.key)
+            unchanged = (
+                existing is not None
+                and existing.entry.family == entry.family
+                and existing.entry.params == entry.params
+                and existing.entry.hours_utc == entry.hours_utc
+                and existing.entry.asset == entry.asset
+                and existing.entry.timeframe == entry.timeframe
+            )
+            next_active[entry.key] = CatalogStrategyInfo(
+                entry=entry,
+                instance=(
+                    existing.instance if unchanged and existing is not None else candidate.instance
+                ),
+                status=entry.status,
+                added_at=existing.added_at if unchanged and existing is not None else now,
+            )
+            incoming_keys.add(entry.key)
+
+        # Removed or behaviour-changing revisions stay available only for settlement
+        # bookkeeping while their durable orders are non-terminal.
+        retired_candidates = {
+            key
+            for key, old in previous_active.items()
+            if key not in incoming_keys
+            or (
+                key in next_active
+                and (
+                    old.entry.family != next_active[key].entry.family
+                    or old.entry.params != next_active[key].entry.params
+                    or old.entry.hours_utc != next_active[key].entry.hours_utc
+                    or old.entry.asset != next_active[key].entry.asset
+                    or old.entry.timeframe != next_active[key].entry.timeframe
+                )
+            )
+        }
+        next_retiring = dict(self._retiring_strategies)
+        for key in retired_candidates:
+            info = previous_active[key]
             open_orders = self._in_flight_orders.get(key, set())
             if open_orders:
-                # Strategy has in-flight orders: mark retiring until orders settle
                 info.status = "retiring"
-                self._retiring_strategies[key] = info
+                next_retiring[key] = info
                 logger.info(
                     "Strategy %s marked retiring with %d orders in flight",
                     key,
                     len(open_orders),
                 )
             else:
-                # No orders in flight: discard immediately
                 logger.info("Strategy %s discarded immediately upon manifest update", key)
+
+        self._manifest_version = prepared.manifest_version
+        self._expires_at = prepared.expires_at
+        self._published_at = prepared.published_at
+        self._active_strategies = next_active
+        self._retiring_strategies = next_retiring
+
+    def apply_manifest(self, manifest: Any) -> None:
+        """Prepare off-lock, then atomically expose one complete generation."""
+        self.prepare_manifest(manifest)()
 
     @_locked
     def notify_order_opened(self, strategy_key: str, order_id: str) -> None:

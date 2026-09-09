@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import signal
 import sys
@@ -175,7 +176,8 @@ def _notify_launcher_startup_failure(reason: str | None) -> None:
     if reason == "LAUNCHER_INSTANCE_ALREADY_RUNNING":
         msg = (
             "O Trading Lab já está em execução em segundo plano neste computador.\n\n"
-            "Verifique o ícone na barra de tarefas ou feche a instância anterior pelo Gerenciador de Tarefas."
+            "Verifique o ícone na barra de tarefas ou feche a instância anterior "
+            "pelo Gerenciador de Tarefas."
         )
         title = "Trading Lab — Já em Execução"
     elif reason in {"RELEASE_INTEGRITY_VIOLATION", "ReleaseIntegrityViolationError"}:
@@ -185,14 +187,13 @@ def _notify_launcher_startup_failure(reason: str | None) -> None:
         )
         title = "Trading Lab — Verificação de Integridade"
     else:
-        msg = f"Não foi possível inicializar o Trading Lab.\nMotivo: {reason or 'Falha na inicialização dos processos'}"
+        fallback = "Falha na inicialização dos processos"
+        msg = f"Não foi possível inicializar o Trading Lab.\nMotivo: {reason or fallback}"
         title = "Trading Lab — Erro de Inicialização"
 
-    try:
+    with contextlib.suppress(Exception):
         # MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
         ctypes.windll.user32.MessageBoxW(0, msg, title, 0x00000030 | 0x00010000 | 0x00040000)
-    except Exception:
-        pass
 
 
 def main(argv: Sequence[str] | None = None) -> int:

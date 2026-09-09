@@ -40,6 +40,7 @@ class OrderTableView(QFrame):
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         self._setup_headers()
+        self._orders: tuple[OrderSummary, ...] | None = None
         layout.addWidget(self._table)
 
         self._empty_label = QLabel(t("orders.empty"))
@@ -60,6 +61,10 @@ class OrderTableView(QFrame):
         self._table.setHorizontalHeaderLabels(headers)
 
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
+        incoming = tuple(orders)
+        if incoming == self._orders:
+            return
+        self._orders = incoming
         if not orders:
             self._table.setRowCount(0)
             self._table.setVisible(False)
@@ -120,6 +125,10 @@ class OrderTableView(QFrame):
         self._title.setText(t("orders.title"))
         self._empty_label.setText(t("orders.empty"))
         self._setup_headers()
+        orders = self._orders
+        self._orders = None
+        if orders is not None:
+            self.update_orders(orders)
 
     @property
     def order_count(self) -> int:

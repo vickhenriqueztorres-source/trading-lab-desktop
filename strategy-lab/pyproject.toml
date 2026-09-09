@@ -44,7 +44,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["vendor", "state", "dist"]
+extend-exclude = ["vendor", "state", "dist", "build"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -54,3 +54,4 @@ python_version = "3.12"
 strict = true
 mypy_path = ["packages/primitives", "packages/manifest_schema", "packages/sprt", "tools"]
 files = ["packages/primitives/primitives", "packages/manifest_schema/manifest_schema", "packages/sprt/sprt", "tools/strategy_lab"]
+exclude = ["build"]

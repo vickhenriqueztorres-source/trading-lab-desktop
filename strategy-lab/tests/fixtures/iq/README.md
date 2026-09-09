@@ -11,6 +11,17 @@ arquivo ou conversa.
 No Windows, cadastrar uma Credencial Genérica no Gerenciador de Credenciais:
 destino StrategyLab/IQOption/collection; usuário = email; senha = senha da conta
 de coleta. O Lab só lê esse destino, não enumera outros.
+
+O caminho recomendado não coloca a senha no histórico do terminal nem nos argumentos:
+
+```powershell
+.venv/Scripts/strategy-lab.exe credentials set
+.venv/Scripts/strategy-lab.exe credentials status
+```
+
+`credentials set` solicita o e-mail e a senha mascarada de forma interativa e grava somente
+no cofre do Windows. `status` informa apenas `configured=true|false`; nunca imprime a identidade
+ou o segredo. A credencial do aplicativo principal não é lida nem compartilhada.
 Na VPS, secret injection para STRATEGY_LAB_IQ_USERNAME e STRATEGY_LAB_IQ_PASSWORD.
 
 No ambiente próprio, após instalação editável do Lab:

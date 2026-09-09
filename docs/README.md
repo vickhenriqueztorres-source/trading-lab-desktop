@@ -15,6 +15,7 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 2. [Manual do usuário](USER_GUIDE.md)
 3. [Estratégias Deriv e gestão de risco](DERIV_STRATEGIES_AND_RISK.md)
 4. [Solução de problemas](TROUBLESHOOTING.md)
+5. [IQ Option: correção da confirmação do relógio](IQ_CLOCK_SYNC_FIX_20260909.md)
 
 ### Para desenvolvimento e manutenção
 
@@ -26,6 +27,17 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 6. [Persistência e recuperação](PERSISTENCE_AND_RECOVERY.md)
 7. [Protocolo IPC v1](IPC_PROTOCOL_V1.md)
 8. [Segurança](../SECURITY.md)
+9. [Plano do catálogo incremental e Supabase](PLANO_CATALOGO_INCREMENTAL_SUPABASE_PROMPTS.md)
+10. [CAT-00 — baseline e auditoria do catálogo](CAT00_BASELINE_AND_CATALOG_AUDIT.md)
+11. [ADR — semântica de execução e bootstrap](ADR_EXECUTION_SEMANTICS_AND_BOOTSTRAP.md)
+12. [CAT-01 — inventário e orçamento do Supabase](CAT01_SUPABASE_INVENTORY_AND_CAPACITY_BUDGET.md)
+13. [CAT-02 — contrato público de receita e capacidades](CAT02_PUBLIC_RECIPE_CONTRACT.md)
+14. [CAT-03 — dataset, identidade e payout as-of](CAT03_DATASET_IDENTITY_AND_ASOF.md)
+15. [CAT-13 — publicação recuperável do manifesto](CAT13_RECOVERABLE_MANIFEST_PUBLICATION.md)
+16. [CAT-14 — consumo do manifesto no runtime](CAT14_MANIFEST_RUNTIME_CONSUMPTION.md)
+17. [CAT-15 — outcomes, privacidade e budgets](CAT15_OUTCOMES_PRIVACY_AND_BUDGETS.md)
+18. [CAT-16 — UI verdadeira e telemetria local](CAT16_TRUE_UI_AND_LOCAL_TELEMETRY.md)
+19. [CAT-17 — arquivo frio verificável e restaurável](CAT17_VERIFIED_COLD_ARCHIVE.md)
 
 ### Para produto e governança
 
@@ -58,6 +70,9 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 | Assinatura Authenticode | Não implementada |
 
 ## Documentos legados ou especializados
+
+- [CAT-19 — Baseline local do catálogo incremental](CAT19_CATALOG_BENCHMARK_BASELINE.md)
+- [CAT-18 — Retenção, quota e limpeza fechada](CAT18_RETENTION_AND_QUOTA.md)
 
 - [Recuperação de rejeições IQ por escopo — Causa 5](IQOPTION_SCOPED_FAILURE_RECOVERY.md)
 

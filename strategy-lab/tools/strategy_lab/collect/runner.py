@@ -10,11 +10,12 @@ from pathlib import Path
 
 from strategy_lab.collect.backfill import backfill_asset
 from strategy_lab.collect.backup import backup_dir_default, latest_backup_age_days
+from strategy_lab.collect.buffer import CollectionBuffer
 from strategy_lab.collect.canary import run_canary
 from strategy_lab.collect.clock import Clock
-from strategy_lab.collect.invariants import check_invariants
-from strategy_lab.collect.iq_client import LAB_ROOT, IQClient, IQClientProtocol
+from strategy_lab.collect.iq_client import LAB_ROOT, FakeIQClient, IQClient, IQClientProtocol
 from strategy_lab.collect.payout_sampler import sample_payout
+from strategy_lab.collect.recorded_canary import RecordedCanaryError, load_recorded_canary
 from strategy_lab.collect.repository import FakeRepository, Repository
 
 
@@ -32,9 +33,15 @@ def run_collect(
     payout_only: bool = False,
     initial_from_ts: int | None = None,
     check_ntp: bool = True,
+    canary_path: Path | None = None,
 ) -> dict[str, object]:
     started = time.monotonic()
     now_ts = clock.now_ts()
+    reference = (
+        load_recorded_canary(canary_path, now_ts=now_ts) if canary_path is not None else None
+    )
+    if client_factory is IQClient and reference is None:
+        raise RecordedCanaryError("COL_RECORDED_CANARY_REQUIRED")
     asset_reports: list[dict[str, object]] = []
     report: dict[str, object] = {
         "event": "strategy_lab_collect_report",
@@ -46,54 +53,47 @@ def run_collect(
         "assets": asset_reports,
         "duration_s": "0.000000",
     }
-    completed = False
+    buffer = CollectionBuffer(repository)
     if check_ntp:
         clock.check_ntp()
     client = client_factory()
+    if isinstance(client, IQClient) and not isinstance(client, FakeIQClient) and reference is None:
+        raise RecordedCanaryError("COL_RECORDED_CANARY_REQUIRED")
     try:
         client.login()
-        run_canary(client)
+        run_canary(client, reference=reference)
         for asset in assets:
             asset_report: dict[str, object] = {"asset": asset}
             payout = sample_payout(
                 client=client,
-                repository=repository,
+                repository=buffer,
                 asset=asset,
                 now_ts=now_ts,
-                dry_run=dry_run,
+                dry_run=False,
+                observed_clock=clock.now_ts,
             )
             asset_report["payout_return_ratio"] = None if payout is None else str(payout)
             if not payout_only:
                 result = backfill_asset(
                     client=client,
-                    repository=repository,
+                    repository=buffer,
                     asset=asset,
                     now_ts=now_ts,
                     upstream_commit=read_upstream_commit(),
                     initial_from_ts=initial_from_ts,
-                    dry_run=dry_run,
+                    dry_run=False,
                 )
                 asset_report.update(
                     {
                         "fetched": result.fetched,
-                        "written": result.written,
+                        "written": 0,
                         "gaps_in_session": result.gaps_in_session,
                         "gaps_out_session": result.gaps_out_session,
                         "next_watermark": result.next_watermark,
                     }
                 )
-                if isinstance(repository, FakeRepository):
-                    stored = [
-                        candle
-                        for (stored_asset, _ts), (candle, _source) in repository.candles.items()
-                        if stored_asset == asset
-                    ]
-                    issues = check_invariants(sorted(stored, key=lambda candle: candle.ts))
-                    if issues:
-                        asset_report["invariant_issues"] = [issue.code for issue in issues]
-                        report["status"] = "suspect"
             asset_reports.append(asset_report)
-        completed = True
+        buffer.validate()
     except Exception:
         report["status"] = "aborted"
         report["error"] = "COLLECT_ABORTED"
@@ -101,8 +101,8 @@ def run_collect(
     finally:
         client.logout()
         report["duration_s"] = f"{time.monotonic() - started:.6f}"
-        if completed and not dry_run:
-            repository.record_run(report)
+    if not dry_run:
+        buffer.persist(report, asset_reports)
     return report
 
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -14,19 +16,46 @@ from typing import Any
 from uuid import uuid4
 
 from apps.core.families.base import EvalResult
+from apps.core.indicator_cache import (
+    IndicatorCache,
+    IndicatorCacheReason,
+    IndicatorKey,
+    IndicatorNodeState,
+    ShadowComparison,
+    ShadowComparisonStatus,
+    canonical_indicator_params,
+)
 from apps.core.iqoption_candidates import (
     CandidateSignal,
     arbitrate,
     next_open_utc,
     resolve_candidates,
 )
-from apps.core.iqoption_connection_safety import IQOptionMessageBudget
+from apps.core.iqoption_connection_safety import (
+    IQOptionMessageBudget,
+    IQOptionMessageBudgetDecision,
+)
 from apps.core.iqoption_failures import IQFailurePolicy, ScopedFailure
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
+from apps.core.iqoption_series_hub import (
+    IQOPTION_SERIES_PRODUCT,
+    IQOptionSeriesHub,
+    IQOptionSeriesKey,
+    IQOptionSeriesReason,
+)
 from apps.core.live_monitor import LiveMonitor
 from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSupervisor
 from apps.core.runtime import CoreRuntime
-from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot, MarketCandle
+from apps.core.worker_client import WorkerDispatchError
+from packages.domain.market import (
+    BrokerAccountBalance,
+    BrokerClockSnapshot,
+    BrokerInstrument,
+    BrokerInstrumentAvailability,
+    BrokerInstrumentCatalog,
+    BrokerInstrumentProduct,
+    MarketCandle,
+)
 from packages.domain.models import (
     Broker,
     BrokerOrderEvent,
@@ -41,7 +70,7 @@ from packages.persistence.writer import (
     BrokerEventApplyStatus,
     RiskLimitExceededError,
 )
-from packages.protocol.ui_messages import UiIqOptionAssetRank
+from packages.protocol.ui_messages import UiIqOptionAssetRank, UiIqOptionExecutionMetrics
 from packages.strategies.iqoption_rsi import (
     IQOptionRsiDemoStrategy,
     calculate_wilder_rsi,
@@ -50,8 +79,8 @@ from packages.strategies.models import RuntimeContext
 
 logger = logging.getLogger("core.iqoption_auto_trader")
 
-# Assets whose protocol identifiers are verified by the worker adapter. AUTO
-# rotates one asset per cycle instead of creating a burst of WebSocket requests.
+# Compatibility fixture for older unit doubles that do not implement catalogue
+# discovery. Production uses the session catalogue and never this list.
 IQOPTION_RADAR_SYMBOLS: tuple[tuple[str, str], ...] = (
     ("EURUSD-OTC", "EUR/USD OTC"),
     ("GBPUSD-OTC", "GBP/USD OTC"),
@@ -73,6 +102,9 @@ IQOPTION_RADAR_SYMBOLS: tuple[tuple[str, str], ...] = (
 
 IQOPTION_PRACTICE_ACCOUNT_ID = "IQOPTION_PRACTICE"
 IQOPTION_ACTIVE_SUSPENSION_COOLDOWN_SECONDS = 5 * 60
+IQOPTION_TELEMETRY_CACHE_TTL_SECONDS = 10.0
+IQOPTION_INSTRUMENT_CATALOG_TTL_SECONDS = 60.0
+IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS = 180.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +117,36 @@ class _DispatchResult:
     @property
     def financially_accepted(self) -> bool:
         return self.state in {OrderState.ACCEPTED, OrderState.OPEN, OrderState.SETTLED}
+
+
+@dataclass(frozen=True, slots=True)
+class IqOptionExecutionFlags:
+    """Independent entry-engine switches.
+
+    The default keeps the audited legacy path active and the incremental engine
+    disabled.  Shadow may observe, but it cannot submit orders.
+    """
+
+    legacy_entries_enabled: bool = True
+    indicator_shadow_enabled: bool = True
+    incremental_entries_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.legacy_entries_enabled,
+            self.indicator_shadow_enabled,
+            self.incremental_entries_enabled,
+        ):
+            if type(value) is not bool:
+                raise TypeError("IQ Option execution flags must be booleans")
+
+    @property
+    def fingerprint(self) -> tuple[bool, bool, bool]:
+        return (
+            self.legacy_entries_enabled,
+            self.indicator_shadow_enabled,
+            self.incremental_entries_enabled,
+        )
 
 
 class _EntryAdmissionBlocked(RuntimeError):
@@ -112,6 +174,8 @@ class IqOptionAutoTrader:
         monotonic: Callable[[], float] = time.monotonic,
         message_budget: IQOptionMessageBudget | None = None,
         monitor_provider: Callable[[], LiveMonitor | None] | None = None,
+        execution_flags_provider: Callable[[], IqOptionExecutionFlags] | None = None,
+        recovery_notifier: Callable[[str], None] | None = None,
     ) -> None:
         if evaluation_interval_seconds <= 0:
             raise ValueError("IQ Option evaluation interval must be positive")
@@ -122,15 +186,24 @@ class IqOptionAutoTrader:
         self._catalog_provider = catalog_provider
         self._account_type_provider = account_type_provider
         self._monitor_provider = monitor_provider
+        self._execution_flags_provider = execution_flags_provider or IqOptionExecutionFlags
+        self._recovery_notifier = recovery_notifier
+        self._recovery_notified_generation: str | None = None
+        self._observed_client: object | None = None
+        # Negative availability only, never cached permission to submit.
+        # Bounded by supported symbols; expiry requires a fresh payout probe.
+        self._unavailable_assets: dict[str, tuple[float, str]] = {}
         self._execution_ticket: tuple[str, str, str | None, object, float, Decimal] | None = None
         self._utc_clock = utc_clock
-        self._decision_epochs: dict[tuple[str, str, int], None] = {}
+        self._decision_epochs: dict[tuple[str, str, int, str, str], None] = {}
+        self._last_payout_gate: dict[str, str | int | bool | None] | None = None
         self._timeframe_override_reported = False
         self._candidate_details: dict[str, str] = {}
         self._evaluation_interval = evaluation_interval_seconds
         self._monotonic = monotonic
         self._message_budget = message_budget or IQOptionMessageBudget()
         self._message_budget_pressure_reported = False
+        self._operational_budget_pressure_reported = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -142,8 +215,12 @@ class IqOptionAutoTrader:
         self._last_evaluated_epochs: dict[str, int] = {}
         self._armed_after_epoch: int | None = None
         self._warmup_cache_fingerprint: tuple[object, ...] | None = None
-        self._candle_cache: dict[tuple[str, int, int], list[MarketCandle]] = {}
-        self._candle_cache_owner: object | None = None
+        self._series_hub = IQOptionSeriesHub(
+            message_budget=self._message_budget,
+            monotonic=self._monotonic,
+            utc_clock=self._utc_clock,
+        )
+        self._indicator_cache = IndicatorCache()
         self._daily_trades_count = 0
         self._daily_profit_loss = Decimal(0)
         self._consecutive_losses = 0
@@ -165,6 +242,14 @@ class IqOptionAutoTrader:
         self._latest_clock: BrokerClockSnapshot | None = None
         self._latest_balance: BrokerAccountBalance | None = None
         self._last_telemetry_probe = 0.0
+        self._instrument_catalog: BrokerInstrumentCatalog | None = None
+        self._catalog_discovery_supported = False
+        self._instrument_catalog_received_mono = float("-inf")
+        self._last_instrument_catalog_probe = float("-inf")
+        self._cycle_started_mono: float | None = None
+        self._decision_latencies_ms: list[int] = []
+        self._waiting_since_mono: float | None = None
+        self._fencing_discards = 0
 
     @property
     def latest_clock(self) -> BrokerClockSnapshot | None:
@@ -191,6 +276,76 @@ class IqOptionAutoTrader:
         with self._lock:
             return self._asset_ranking
 
+    def execution_metrics(self) -> UiIqOptionExecutionMetrics:
+        """Return a bounded local snapshot; it never queries the database or broker."""
+        with self._lock:
+            samples = tuple(self._decision_latencies_ms[-512:])
+            waiting = (
+                None
+                if self._waiting_since_mono is None
+                else max(0, int(self._monotonic() - self._waiting_since_mono))
+            )
+            ranking = tuple(self._asset_ranking_by_symbol.values())
+        flags = self._execution_flags_provider()
+        mode = (
+            "INCREMENTAL"
+            if flags.incremental_entries_enabled
+            else "SHADOW"
+            if flags.indicator_shadow_enabled
+            else "LEGACY"
+        )
+        stats = self._series_hub.stats
+        cache = self._indicator_cache.stats
+        catalog = self._catalog_provider() if self._catalog_provider is not None else None
+        active = () if catalog is None else tuple(catalog.active_strategies.values())
+        revision = None
+        evidence_n = None
+        evidence_oos = None
+        if active:
+            revision = str(active[0].entry.key)
+            evidence_n = sum(int(item.entry.validated.ops_per_day) for item in active)
+            evidence_oos = len(active)
+
+        def percentile(percent: int) -> int:
+            if not samples:
+                return 0
+            ordered = sorted(samples)
+            index = min(len(ordered) - 1, (len(ordered) * percent + 99) // 100 - 1)
+            return ordered[max(0, index)]
+
+        has_market_evidence = any(
+            item.rsi != "--" and item.status not in {"WAITING_DATA", "NO_EVIDENCE"}
+            for item in ranking
+        )
+        return UiIqOptionExecutionMetrics(
+            source=(
+                "IQOPTION_BROKER_CLOSED_CANDLES" if has_market_evidence else "NO_MARKET_EVIDENCE"
+            ),
+            mode=mode,
+            manifest_revision=revision,
+            manifest_version=None if catalog is None else catalog.manifest_version,
+            strategy_count=len(active),
+            series_count=self._series_hub.active_series_count,
+            unique_indicator_nodes=cache.active_nodes,
+            cache_reuse_hits=cache.dedup_hits,
+            fetches=stats.fetches_sent,
+            indicator_updates=cache.indicator_calculations,
+            decisions=len(samples),
+            decision_p50_ms=percentile(50),
+            decision_p95_ms=percentile(95),
+            decision_p99_ms=percentile(99),
+            queue_depth=stats.queue_full,
+            close_delay_ms=percentile(95),
+            cache_entries=cache.active_nodes,
+            fencing_discards=self._fencing_discards,
+            waiting_reason=self.status_reason if waiting is not None else None,
+            waiting_seconds=0 if waiting is None else waiting,
+            catalog_status="SIGNED" if active else "UNAVAILABLE",
+            evidence_n=evidence_n,
+            evidence_oos=evidence_oos,
+            evidence_validity="SEALED" if active else "UNAVAILABLE",
+        )
+
     def start(self) -> None:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -211,6 +366,13 @@ class IqOptionAutoTrader:
             self._armed_after_epoch = int(self._utc_clock().timestamp())
             self._status_reason = "IQOPTION_BOT_ARMED"
 
+    def invalidate_entry_authority(self, reason: str) -> None:
+        """Drop only ephemeral admission authority; monitoring and settlement continue."""
+        with self._lock:
+            self._execution_ticket = None
+            self._armed_after_epoch = None
+            self._status_reason = reason
+
     def stop(self) -> None:
         self._stop.set()
         thread = self._thread
@@ -230,6 +392,7 @@ class IqOptionAutoTrader:
             self._stop.wait(self._evaluation_interval)
 
     def _evaluate_cycle(self) -> None:
+        self._cycle_started_mono = self._monotonic()
         risk_config = self._risk_config_provider()
         selected_symbol = risk_config.symbol or "AUTO"
         automatic = selected_symbol == "AUTO"
@@ -238,34 +401,94 @@ class IqOptionAutoTrader:
         if supervisor is None or supervisor.client is None or runtime is None:
             self._set_status("IQOPTION_CONNECTION_REQUIRED")
             return
+        if supervisor.client is not self._observed_client:
+            self._observed_client = supervisor.client
+            self._unavailable_assets.clear()
+            self._series_hub.invalidate(reason="worker_replaced")
+            self._indicator_cache.invalidate_all(reason=IndicatorCacheReason.SERIES_MISMATCH)
+            self._recovery_notified_generation = None
+            self._last_telemetry_probe = float("-inf")
+            self._instrument_catalog = None
+            self._catalog_discovery_supported = callable(
+                getattr(supervisor.client, "iqoption_instrument_catalog", None)
+            )
+            self._instrument_catalog_received_mono = float("-inf")
+            self._last_instrument_catalog_probe = float("-inf")
+            with self._lock:
+                self._latest_balance = None
+                self._latest_clock = None
         now_mono = self._monotonic()
-        if now_mono - self._last_telemetry_probe >= 2.0:
+        if now_mono - self._last_telemetry_probe >= IQOPTION_TELEMETRY_CACHE_TTL_SECONDS:
             self._last_telemetry_probe = now_mono
             clock_fn = getattr(supervisor.client, "broker_clock", None)
             if callable(clock_fn):
+                clock_budget = self._message_budget.try_acquire_operational(self._monotonic())
+                self._report_operational_budget(runtime, clock_budget)
+            if callable(clock_fn) and clock_budget.allowed:
                 try:
                     clock = clock_fn()
                     with self._lock:
                         self._latest_clock = clock
+                except WorkerDispatchError as exc:
+                    with self._lock:
+                        self._latest_clock = None
+                    runtime.health_gate.block_scope(
+                        Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
+                    )
+                    self._set_status("MD_CLOCK_UNTRUSTED")
+                    if exc.code.value != "IQOPTION_CLOCK_UNAVAILABLE":
+                        self._notify_session_failure(supervisor.client, exc.code.value)
+                    return
                 except Exception:
-                    pass
+                    with self._lock:
+                        self._latest_clock = None
             balance_fn = getattr(supervisor.client, "broker_balance", None)
             if callable(balance_fn):
+                balance_budget = self._message_budget.try_acquire_operational(self._monotonic())
+                self._report_operational_budget(runtime, balance_budget)
+            if callable(balance_fn) and balance_budget.allowed:
                 try:
                     balance = balance_fn()
                     with self._lock:
                         self._latest_balance = balance
+                except WorkerDispatchError as exc:
+                    self._notify_session_failure(supervisor.client, exc.code.value)
+                    return
                 except Exception:
-                    pass
+                    with self._lock:
+                        self._latest_balance = None
+        if callable(getattr(supervisor.client, "broker_clock", None)):
+            clock = self.latest_clock
+            clock_fresh = clock is not None and (
+                0 <= (self._utc_clock() - clock.local_received_at).total_seconds() <= 30
+            )
+            if not clock_fresh or clock is None or not clock.is_synced:
+                runtime.health_gate.block_scope(
+                    Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
+                )
+                self._set_status("MD_CLOCK_UNTRUSTED")
+                return
+            runtime.health_gate.clear_scope(
+                Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
+            )
+        self._refresh_instrument_catalog(supervisor, runtime)
         try:
             self._restore_execution_state(runtime)
         except Exception:
             self._set_status("IQOPTION_EXECUTION_STATE_UNAVAILABLE")
             return
+        flags = self._execution_flags_provider()
+        if not flags.legacy_entries_enabled and not flags.incremental_entries_enabled:
+            self._set_status("IQOPTION_ENTRY_ENGINE_DISABLED")
+            return
 
         symbols = self._symbols_for_cycle(selected_symbol)
         if not symbols:
-            self._set_status("IQOPTION_SYMBOL_UNSUPPORTED")
+            self._set_status(
+                "IQOPTION_INSTRUMENT_CATALOG_UNAVAILABLE"
+                if self._catalog_discovery_supported and self._instrument_catalog is None
+                else "IQOPTION_SYMBOL_UNSUPPORTED"
+            )
             return
 
         catalog = self._catalog_provider() if self._catalog_provider is not None else None
@@ -278,6 +501,7 @@ class IqOptionAutoTrader:
         fingerprint = (
             None if catalog is None else catalog.manifest_version,
             risk_config.active_strategy_key,
+            flags.fingerprint,
             tuple(
                 (
                     key,
@@ -293,7 +517,8 @@ class IqOptionAutoTrader:
         )
         if fingerprint != self._warmup_cache_fingerprint:
             self._warmup_cache_fingerprint = fingerprint
-            self._candle_cache.clear()
+            self._series_hub.invalidate(reason="manifest_or_strategy_changed")
+            self._indicator_cache.invalidate_all(reason=IndicatorCacheReason.SERIES_MISMATCH)
 
         signals: list[CandidateSignal] = []
         candidate: tuple[str, str, Direction, Decimal, int, str] | None = None
@@ -307,7 +532,21 @@ class IqOptionAutoTrader:
                 account_type=account_type,
                 now_utc=now_utc,
             )
+            mismatch_count = sum(reason == "ASSET_MISMATCH" for reason in rejected.values())
+            if mismatch_count:
+                self._record_decision(
+                    runtime,
+                    symbol,
+                    "",
+                    0,
+                    int(now_utc.timestamp()) // 60 * 60,
+                    "ASSET_MISMATCH",
+                    phase="CANDIDATE_RESOLUTION_SUMMARY",
+                    rejected_count=mismatch_count,
+                )
             for key, reason in rejected.items():
+                if reason == "ASSET_MISMATCH":
+                    continue
                 info = None if catalog is None else catalog.active_strategies.get(key)
                 self._record_decision(
                     runtime,
@@ -316,6 +555,7 @@ class IqOptionAutoTrader:
                     0 if info is None else self._timeframe_seconds(info.entry.timeframe),
                     int(now_utc.timestamp()) // 60 * 60,
                     reason,
+                    phase="CANDIDATE_RESOLUTION",
                     next_open=(
                         next_open_utc(info.entry.hours_utc, now_utc).isoformat()
                         if reason == "OUTSIDE_HOURS" and info is not None
@@ -333,6 +573,7 @@ class IqOptionAutoTrader:
                     else ""
                 )
                 for key, reason in rejected.items()
+                if reason != "ASSET_MISMATCH" or not candidates
             )[:2048]
             if not candidates:
                 evaluation_waiting = True
@@ -350,6 +591,7 @@ class IqOptionAutoTrader:
                     0,
                     int(now_utc.timestamp()) // 60 * 60,
                     "NO_CANDIDATE",
+                    phase="CANDIDATE_SUMMARY",
                 )
                 self._update_rank(
                     symbol,
@@ -393,12 +635,19 @@ class IqOptionAutoTrader:
                         symbol=symbol,
                         timeframe=item.timeframe_seconds,
                         warmup_need=warmups[item.timeframe_seconds],
+                        strategy_key=item.key,
                     )
                 except Exception as exc:
                     evaluation_waiting = True
                     logger.info("IQ candle request failed: %s", type(exc).__name__)
                     runtime.health_gate.block_scope(
                         Broker.IQ_OPTION.value, "market-data", "HG_MARKET_DATA_DISCONNECTED"
+                    )
+                    self._notify_session_failure(
+                        supervisor.client,
+                        exc.code.value
+                        if isinstance(exc, WorkerDispatchError)
+                        else "IQOPTION_BROKER_SESSION_UNAVAILABLE",
                     )
                     self._set_status("IQOPTION_MARKET_DATA_UNAVAILABLE")
                     self._update_rank(
@@ -435,6 +684,7 @@ class IqOptionAutoTrader:
                 runtime.health_gate.clear_scope(
                     Broker.IQ_OPTION.value, "market-data", "HG_MARKET_DATA_DISCONNECTED"
                 )
+                self._recovery_notified_generation = None
                 context = RuntimeContext(
                     strategy_id=item.key,
                     strategy_version="1.0.0",
@@ -448,10 +698,18 @@ class IqOptionAutoTrader:
                 rsi = Decimal("50")
                 try:
                     if item.entry.status == "demo_only":
-                        # Only the pure resolver can admit the explicit SINGLE/Practice recipe.
-                        decision = self._strategy.evaluate_decision(candles, context)
-                        direction, rsi = decision.direction, decision.rsi
-                        stage = "NO_SIGNAL" if direction is None else "OK"
+                        direction, rsi, stage = self._evaluate_local_rsi_candidate(
+                            supervisor=supervisor,
+                            runtime=runtime,
+                            symbol=symbol,
+                            timeframe=item.timeframe_seconds,
+                            candles=candles,
+                            context=context,
+                            flags=flags,
+                            strategy_key=item.key,
+                        )
+                    elif not flags.legacy_entries_enabled:
+                        direction, stage = None, "INCREMENTAL_ENGINE_UNSUPPORTED"
                     else:
                         assert catalog is not None  # admitted by resolver, never a fallback
                         result = catalog.active_strategies[item.key].instance.evaluate_detailed(
@@ -470,7 +728,13 @@ class IqOptionAutoTrader:
                     direction, stage = None, "INVALID_DATA"
                 epoch = int(candles[-1].close_time.timestamp())
                 self._record_decision(
-                    runtime, symbol, item.key, item.timeframe_seconds, epoch, stage
+                    runtime,
+                    symbol,
+                    item.key,
+                    item.timeframe_seconds,
+                    epoch,
+                    stage,
+                    phase="EVALUATION",
                 )
                 details.append(f"{item.entry.display_name_pt} [{item.entry.timeframe}]: {stage}")
                 self._update_rank(
@@ -487,9 +751,38 @@ class IqOptionAutoTrader:
                     selected=not automatic or direction is not None,
                     status="TRIGGERED" if direction is not None else "MONITORING",
                     direction=None if direction is None else direction.value,
+                    revision=item.key,
+                    readiness="READY",
+                    signal_observed=direction is not None,
+                    candidate_eligible=direction is not None,
                 )
                 if direction is not None:
-                    signals.append(CandidateSignal(item, direction, rsi, epoch))
+                    unavailable = self._unavailable_assets.get(symbol)
+                    if unavailable is not None and self._monotonic() < unavailable[0]:
+                        evaluation_waiting = True
+                        details.append(unavailable[1])
+                        self._record_decision(
+                            runtime,
+                            symbol,
+                            item.key,
+                            item.timeframe_seconds,
+                            epoch,
+                            unavailable[1],
+                            phase="AVAILABILITY_GATE",
+                        )
+                        self._update_rank(
+                            symbol,
+                            display_name,
+                            rsi=f"{rsi:.1f}",
+                            condition=unavailable[1],
+                            selected=False,
+                            status="MARKET_UNAVAILABLE",
+                            signal_observed=True,
+                            candidate_eligible=False,
+                        )
+                    else:
+                        self._unavailable_assets.pop(symbol, None)
+                        signals.append(CandidateSignal(item, direction, rsi, epoch))
             if details:
                 self._candidate_details[symbol] = "; ".join(
                     details + [self._candidate_details.get(symbol, "")]
@@ -507,9 +800,18 @@ class IqOptionAutoTrader:
             self._set_status("IQOPTION_SIGNAL_CONFLICT")
             for signal in signals:
                 asset = signal.candidate.entry.asset
+                self._record_decision(
+                    runtime,
+                    asset,
+                    signal.candidate.key,
+                    signal.candidate.timeframe_seconds,
+                    signal.epoch,
+                    "IQOPTION_SIGNAL_CONFLICT",
+                    phase="ARBITRATION",
+                )
                 self._update_rank(
                     asset,
-                    dict(IQOPTION_RADAR_SYMBOLS).get(asset, asset),
+                    self._display_name_for(asset),
                     rsi="--",
                     condition="SIGNAL_CONFLICT",
                     selected=False,
@@ -517,7 +819,7 @@ class IqOptionAutoTrader:
                 )
         if winner is not None:
             symbol = winner.candidate.entry.asset
-            display_name = dict(IQOPTION_RADAR_SYMBOLS).get(symbol, symbol)
+            display_name = self._display_name_for(symbol)
             candidate = (
                 symbol,
                 display_name,
@@ -528,13 +830,23 @@ class IqOptionAutoTrader:
             )
 
         if not self._operator_armed():
+            if candidate is not None:
+                self._record_decision(
+                    runtime,
+                    candidate[0],
+                    candidate[5],
+                    winner.candidate.timeframe_seconds if winner is not None else 60,
+                    candidate[4],
+                    "IQOPTION_BOT_DISARMED",
+                    phase="ADMISSION",
+                )
             self._set_status("IQOPTION_BOT_DISARMED")
             return
         if candidate is None:
             if evaluation_waiting:
                 return
             if automatic:
-                self._set_status(f"AUTO_SCAN_REAL_DATA ({len(IQOPTION_RADAR_SYMBOLS)} ASSETS)")
+                self._set_status(f"AUTO_SCAN_REAL_DATA ({len(self._executable_symbols())} ASSETS)")
             else:
                 self._set_status(f"IQOPTION_WAITING_RSI_SIGNAL ({selected_symbol})")
             return
@@ -543,29 +855,74 @@ class IqOptionAutoTrader:
         with self._lock:
             self._last_rsi_value = rsi
         if self._last_evaluated_epochs.get(symbol, -1) >= candle_epoch:
+            self._record_decision(
+                runtime,
+                symbol,
+                strat_key,
+                winner.candidate.timeframe_seconds if winner is not None else 60,
+                candle_epoch,
+                "IQOPTION_SIGNAL_ALREADY_CONSUMED",
+                phase="ADMISSION",
+            )
             self._set_status(
                 self._last_dispatch_reasons.get(symbol)
                 or f"SINAL_CONSUMIDO: {display_name} {direction.value} @ RSI={rsi:.1f}"
             )
             return
         if self._has_nonterminal_iq_order(runtime):
+            self._record_decision(
+                runtime,
+                symbol,
+                strat_key,
+                winner.candidate.timeframe_seconds if winner is not None else 60,
+                candle_epoch,
+                "IQOPTION_ORDER_IN_FLIGHT",
+                phase="ADMISSION",
+            )
             self._set_status("IQOPTION_ORDER_IN_FLIGHT")
             return
         if self._armed_after_epoch is not None and candle_epoch <= self._armed_after_epoch:
+            self._record_decision(
+                runtime,
+                symbol,
+                strat_key,
+                winner.candidate.timeframe_seconds if winner is not None else 60,
+                candle_epoch,
+                "IQOPTION_NEW_SIGNAL_REQUIRED_AFTER_ARM",
+                phase="ADMISSION",
+            )
             self._set_status("IQOPTION_NEW_SIGNAL_REQUIRED_AFTER_ARM")
             return
 
         risk_reason = self._risk_block_reason(risk_config)
         if risk_reason is not None:
+            self._record_decision(
+                runtime,
+                symbol,
+                strat_key,
+                winner.candidate.timeframe_seconds if winner is not None else 60,
+                candle_epoch,
+                risk_reason,
+                phase="RISK_GATE",
+            )
             self._set_status(risk_reason)
             return
 
         try:
             manifest_context = self._prepare_execution(symbol, strat_key, supervisor.client)
         except Exception as exc:
-            reason = str(exc) if isinstance(exc, RuntimeError) else "IQOPTION_PAYOUT_UNAVAILABLE"
+            reason = (
+                exc.code.value
+                if isinstance(exc, WorkerDispatchError)
+                else str(exc)
+                if isinstance(exc, RuntimeError)
+                else "IQOPTION_PAYOUT_UNAVAILABLE"
+            )
             if not reason or not all(c.isupper() or c == "_" for c in reason):
                 reason = "IQOPTION_PAYOUT_UNAVAILABLE"
+            payout, payout_min, payout_age_ms, payout_allowed = self._payout_event_fields(
+                symbol, strat_key
+            )
             self._record_decision(
                 runtime,
                 symbol,
@@ -573,8 +930,34 @@ class IqOptionAutoTrader:
                 winner.candidate.timeframe_seconds if winner else 60,
                 candle_epoch,
                 reason,
+                phase="PAYOUT_GATE",
+                payout=payout,
+                payout_min=payout_min,
+                payout_age_ms=payout_age_ms,
+                payout_allowed=payout_allowed,
             )
             self._set_status(reason)
+            if reason in {"IQOPTION_ACTIVE_SUSPENDED", "IQOPTION_ACTIVE_UNAVAILABLE"}:
+                self._unavailable_assets[symbol] = (self._monotonic() + 60, reason)
+                self._update_rank(
+                    symbol,
+                    display_name,
+                    rsi=f"{rsi:.1f}",
+                    condition=reason,
+                    selected=False,
+                    status="MARKET_UNAVAILABLE",
+                    signal_observed=True,
+                    candidate_eligible=False,
+                )
+            if reason in {
+                "IQOPTION_WEBSOCKET_UNAVAILABLE",
+                "IQOPTION_REQUEST_TIMEOUT",
+                "IQOPTION_RESPONSE_TOO_LARGE",
+                "IQOPTION_AUTH_FAILED",
+                "IPC_CONNECTION_LOST",
+                "WORKER_CRASHED",
+            }:
+                self._notify_session_failure(supervisor.client, reason)
             failure = self._failures.current(symbol, risk_config)
             if failure is not None:
                 self._failures.probe_failed(failure, self._monotonic())
@@ -603,6 +986,24 @@ class IqOptionAutoTrader:
             manifest_context=manifest_context,
             correlation_id=correlation_id,
         )
+        payout, payout_min, payout_age_ms, payout_allowed = self._payout_event_fields(
+            symbol, strat_key
+        )
+        self._record_decision(
+            runtime,
+            symbol,
+            strat_key,
+            winner.candidate.timeframe_seconds if winner is not None else 60,
+            candle_epoch,
+            dispatch.reason_code,
+            phase="ADMISSION" if dispatch.order_id is None else "SUBMISSION",
+            correlation_id=correlation_id,
+            order_id=dispatch.order_id,
+            payout=payout,
+            payout_min=payout_min,
+            payout_age_ms=payout_age_ms,
+            payout_allowed=payout_allowed,
+        )
         self._pending_dispatch = None
         self._last_dispatch_reasons.pop(symbol, None)
         if dispatch.reason_code == "MANIFEST_MONITOR_PENDING":
@@ -616,6 +1017,9 @@ class IqOptionAutoTrader:
             self._set_status(dispatch.reason_code)
             return
         if dispatch.financially_accepted:
+            self._mark_rank_execution(
+                symbol, submitted=True, accepted=True, terminal=False, reason=dispatch.reason_code
+            )
             if symbol in self._failures.failures or "*" in self._failures.failures:
                 runtime.event_sink.emit(
                     "iqoption_execution_recovered",
@@ -633,9 +1037,15 @@ class IqOptionAutoTrader:
             OrderState.RECONCILING,
             OrderState.SETTLEMENT_UNKNOWN,
         }:
+            self._mark_rank_execution(
+                symbol, submitted=True, accepted=False, terminal=False, reason=dispatch.reason_code
+            )
             self._daily_trades_count += 1
             self._set_status("IQOPTION_ORDER_UNKNOWN_RECONCILIATION_REQUIRED")
         else:
+            self._mark_rank_execution(
+                symbol, submitted=True, accepted=False, terminal=True, reason=dispatch.reason_code
+            )
             self._last_dispatch_reasons[symbol] = dispatch.reason_code
             # The authoritative HealthGate is reevaluated by the Core; do not
             # clone its blockers into an unrelated permanent global latch.
@@ -720,8 +1130,18 @@ class IqOptionAutoTrader:
         )
         self._set_status(failure.reason)
 
+    def _notify_session_failure(self, client: object, reason: str) -> None:
+        current = self._supervisor_provider()
+        if current is None or current.client is not client:
+            return
+        generation = self._series_generation(client)
+        if self._recovery_notifier is not None and self._recovery_notified_generation != generation:
+            self._recovery_notified_generation = generation
+            self._recovery_notifier(reason)
+
     def _prepare_execution(self, symbol: str, key: str, client: Any) -> str | None:
         self._execution_ticket = None
+        self._last_payout_gate = None
         if self._account_type_provider().upper() not in {"DEMO", "PRACTICE"}:
             raise RuntimeError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
         if not self._operator_armed():
@@ -730,27 +1150,41 @@ class IqOptionAutoTrader:
             monitor = None if self._monitor_provider is None else self._monitor_provider()
             if monitor is None or not monitor.ready:
                 raise RuntimeError("MANIFEST_MONITOR_UNAVAILABLE")
-        budget = self._message_budget.try_acquire(self._monotonic())
-        if budget.pressure and not self._message_budget_pressure_reported:
-            self._message_budget_pressure_reported = True
-            runtime = self._runtime_provider()
-            if runtime is not None:
-                runtime.event_sink.emit(
-                    "iqoption_message_budget_pressure",
-                    used_in_window=budget.used_in_window,
-                    limit=budget.limit,
-                )
-        elif not budget.pressure:
-            self._message_budget_pressure_reported = False
-        if not budget.allowed:
-            raise RuntimeError("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
         started = self._monotonic()
-        payout = client.iqoption_binary_payout(symbol)
-        if not isinstance(payout, Decimal) or not payout.is_finite() or not 0 < payout <= 1:
+        has_payout_probe = callable(getattr(client, "iqoption_binary_payout", None))
+        if key == "iqoption-rsi-demo" and not has_payout_probe:
+            payout = Decimal("0")
+        else:
+            budget = self._message_budget.try_acquire(self._monotonic())
+            if budget.pressure and not self._message_budget_pressure_reported:
+                self._message_budget_pressure_reported = True
+                runtime = self._runtime_provider()
+                if runtime is not None:
+                    runtime.event_sink.emit(
+                        "iqoption_message_budget_pressure",
+                        used_in_window=budget.used_in_window,
+                        limit=budget.limit,
+                    )
+            elif not budget.pressure:
+                self._message_budget_pressure_reported = False
+            if not budget.allowed:
+                raise RuntimeError("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
+            payout = client.iqoption_binary_payout(symbol)
+        if (key != "iqoption-rsi-demo" or has_payout_probe) and (
+            not isinstance(payout, Decimal) or not payout.is_finite() or not 0 < payout <= 1
+        ):
             raise RuntimeError("IQOPTION_PAYOUT_UNAVAILABLE")
+        self._last_payout_gate = {
+            "symbol": symbol,
+            "strategy_key": key,
+            "payout": str(payout),
+            "payout_min": None,
+            "payout_age_ms": max(0, int((self._monotonic() - started) * 1000)),
+            "payout_allowed": True,
+        }
         context = self._check_manifest_execution(symbol, key, payout)
         self._execution_ticket = (symbol, key, context, client, started, payout)
-        self._validate_execution_ticket(symbol, key, context)
+        self._validate_execution_ticket(symbol, key, context, current_client=client)
         return context
 
     def _check_manifest_execution(self, symbol: str, key: str, payout: Decimal) -> str | None:
@@ -769,9 +1203,19 @@ class IqOptionAutoTrader:
         catalog = None if self._catalog_provider is None else self._catalog_provider()
         if catalog is None:
             raise RuntimeError("STRATEGY_NOT_FOUND")
-        allowed, reason, _ = catalog.is_eligible(
+        allowed, reason, payout_result = catalog.is_eligible(
             key, account_type=account, current_payout=payout, now_utc=self._utc_clock()
         )
+        if payout_result is not None:
+            ticket = self._last_payout_gate
+            self._last_payout_gate = {
+                "symbol": symbol,
+                "strategy_key": key,
+                "payout": str(payout_result.payout),
+                "payout_min": str(payout_result.payout_min),
+                "payout_age_ms": (0 if ticket is None else int(ticket.get("payout_age_ms") or 0)),
+                "payout_allowed": payout_result.allowed,
+            }
         if not allowed:
             raise RuntimeError(reason)
         info = catalog.get_strategy(key)
@@ -779,13 +1223,24 @@ class IqOptionAutoTrader:
             raise RuntimeError("ASSET_MISMATCH")
         return json.dumps(LiveMonitor.binding(info.entry), sort_keys=True, separators=(",", ":"))
 
-    def _validate_execution_ticket(self, symbol: str, key: str, context: str | None) -> None:
+    def _validate_execution_ticket(
+        self,
+        symbol: str,
+        key: str,
+        context: str | None,
+        *,
+        current_client: object | None = None,
+    ) -> None:
         ticket = self._execution_ticket
-        supervisor = self._supervisor_provider()
+        supervisor = None if current_client is not None else self._supervisor_provider()
+        active_client = (
+            current_client
+            if current_client is not None
+            else (None if supervisor is None else supervisor.client)
+        )
         if (
             ticket is None
-            or supervisor is None
-            or supervisor.client is not ticket[3]
+            or active_client is not ticket[3]
             or (symbol, key, context) != ticket[:3]
             or not 0 <= self._monotonic() - ticket[4] < 2
         ):
@@ -828,6 +1283,10 @@ class IqOptionAutoTrader:
         correlation_id: str | None = None,
     ) -> _DispatchResult:
         try:
+            dispatch_budget = self._message_budget.try_acquire_operational(self._monotonic())
+            self._report_operational_budget(runtime, dispatch_budget)
+            if not dispatch_budget.allowed:
+                raise _EntryAdmissionBlocked("IQOPTION_OPERATIONAL_MESSAGE_BUDGET_EXHAUSTED")
             persisted = runtime.submit(
                 OrderRequest(
                     correlation_id=correlation_id or str(uuid4()),
@@ -928,28 +1387,208 @@ class IqOptionAutoTrader:
         epoch: int,
         reason: str,
         *,
+        phase: str = "EVALUATION",
         next_open: str | None = None,
+        correlation_id: str | None = None,
+        order_id: str | None = None,
+        payout: str | None = None,
+        payout_min: str | None = None,
+        payout_age_ms: int | None = None,
+        payout_allowed: bool | None = None,
+        rejected_count: int | None = None,
     ) -> None:
-        identity = (symbol, key, epoch)
+        identity = (symbol, key, epoch, phase, reason)
         if identity in self._decision_epochs:
             return
         # Bounded deduplication, no database reads in candidate routing.
         self._decision_epochs[identity] = None
+        if self._cycle_started_mono is not None:
+            elapsed = max(0, int((self._monotonic() - self._cycle_started_mono) * 1000))
+            with self._lock:
+                self._decision_latencies_ms.append(elapsed)
+                if len(self._decision_latencies_ms) > 512:
+                    del self._decision_latencies_ms[:-512]
+                self._waiting_since_mono = (
+                    self._monotonic() if reason != "OK" and phase != "SUBMISSION" else None
+                )
         if len(self._decision_epochs) > 4096:
             self._decision_epochs.pop(next(iter(self._decision_epochs)))
+        decision_material = (
+            f"IQ_OPTION|{IQOPTION_PRACTICE_ACCOUNT_ID}|{symbol}|{key}|{timeframe}|{epoch}"
+        )
+        decision_id = hashlib.sha256(decision_material.encode("utf-8")).hexdigest()[:24]
+        supervisor = self._supervisor_provider()
+        generation = "UNAVAILABLE"
+        if supervisor is not None:
+            with suppress(RuntimeError):
+                generation = self._series_generation(supervisor.client)
+                # Diagnostics cannot turn a concurrent disconnect into a trader
+                # crash or claim evidence from a missing client generation.
         runtime.event_sink.emit(
             "iqoption_decision",
+            decision_id=decision_id,
+            phase=phase,
+            broker=Broker.IQ_OPTION.value,
+            account_scope=IQOPTION_PRACTICE_ACCOUNT_ID,
+            generation=generation,
             symbol=symbol,
             strategy_key=key,
             timeframe=timeframe,
             epoch=epoch,
             stage_rejected=reason,
             next_open_utc=next_open,
+            correlation_id=correlation_id,
+            order_id=order_id,
+            payout=payout,
+            payout_min=payout_min,
+            payout_age_ms=payout_age_ms,
+            payout_allowed=payout_allowed,
+            rejected_count=rejected_count,
         )
+
+    def _payout_event_fields(
+        self,
+        symbol: str,
+        key: str,
+    ) -> tuple[str | None, str | None, int | None, bool | None]:
+        fields = self._last_payout_gate
+        if fields is None or fields.get("symbol") != symbol or fields.get("strategy_key") != key:
+            return None, None, None, None
+        payout = fields.get("payout")
+        payout_min = fields.get("payout_min")
+        payout_age_ms = fields.get("payout_age_ms")
+        payout_allowed = fields.get("payout_allowed")
+        return (
+            payout if isinstance(payout, str) else None,
+            payout_min if isinstance(payout_min, str) else None,
+            payout_age_ms if type(payout_age_ms) is int else None,
+            payout_allowed if type(payout_allowed) is bool else None,
+        )
+
+    def _report_operational_budget(
+        self,
+        runtime: CoreRuntime,
+        decision: IQOptionMessageBudgetDecision,
+    ) -> None:
+        if decision.pressure and not self._operational_budget_pressure_reported:
+            self._operational_budget_pressure_reported = True
+            runtime.event_sink.emit(
+                "iqoption_operational_budget_pressure",
+                used_in_window=decision.used_in_window,
+                limit=decision.limit,
+            )
+        elif not decision.pressure:
+            self._operational_budget_pressure_reported = False
 
     @staticmethod
     def _timeframe_seconds(timeframe: str) -> int:
         return {"M1": 60, "M5": 300, "M15": 900}.get(timeframe, 0)
+
+    def _evaluate_local_rsi_candidate(
+        self,
+        *,
+        supervisor: ReadOnlyWorkerSupervisor,
+        runtime: CoreRuntime,
+        symbol: str,
+        timeframe: int,
+        candles: list[MarketCandle],
+        context: RuntimeContext,
+        flags: IqOptionExecutionFlags,
+        strategy_key: str,
+    ) -> tuple[Direction | None, Decimal, str]:
+        if flags.incremental_entries_enabled:
+            shadow = self._shadow_rsi14(
+                supervisor=supervisor,
+                symbol=symbol,
+                timeframe=timeframe,
+                candles=candles,
+            )
+            if (
+                shadow.status is not ShadowComparisonStatus.MATCH
+                or shadow.cached is None
+                or shadow.cached.state is not IndicatorNodeState.READY
+                or shadow.cached.value is None
+            ):
+                runtime.event_sink.emit(
+                    "iqoption_incremental_engine_blocked",
+                    strategy_key=strategy_key,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    epoch=shadow.close_epoch,
+                    reason=shadow.reason.value,
+                    status=shadow.status.value,
+                )
+                return None, Decimal("50"), shadow.reason.value
+            return (
+                self._direction_from_indicator(shadow.cached.direction),
+                shadow.cached.value,
+                "OK" if shadow.cached.direction in {"call", "put"} else "NO_SIGNAL",
+            )
+
+        if flags.indicator_shadow_enabled:
+            shadow = self._shadow_rsi14(
+                supervisor=supervisor,
+                symbol=symbol,
+                timeframe=timeframe,
+                candles=candles,
+            )
+            if (
+                shadow.status is ShadowComparisonStatus.INVALID
+                or shadow.status is ShadowComparisonStatus.MISMATCH
+                or shadow.cached is None
+                or shadow.cached.state is IndicatorNodeState.INVALID
+            ):
+                runtime.event_sink.emit(
+                    "iqoption_indicator_shadow_mismatch",
+                    strategy_key=strategy_key,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    epoch=shadow.close_epoch,
+                    reason=shadow.reason.value,
+                    status=shadow.status.value,
+                )
+
+        if not flags.legacy_entries_enabled:
+            return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+
+        # Only the pure resolver can admit the explicit SINGLE/Practice recipe.
+        decision = self._strategy.evaluate_decision(candles, context)
+        return decision.direction, decision.rsi, "NO_SIGNAL" if decision.direction is None else "OK"
+
+    def _shadow_rsi14(
+        self,
+        *,
+        supervisor: ReadOnlyWorkerSupervisor,
+        symbol: str,
+        timeframe: int,
+        candles: list[MarketCandle],
+    ) -> ShadowComparison:
+        key = IndicatorKey(
+            series_key=IQOptionSeriesKey(
+                broker=Broker.IQ_OPTION,
+                account_id=IQOPTION_PRACTICE_ACCOUNT_ID,
+                product=IQOPTION_SERIES_PRODUCT,
+                generation=self._series_generation(supervisor.client),
+                asset=symbol,
+                timeframe_seconds=timeframe,
+            ),
+            name="rsi_extreme",
+            params=canonical_indicator_params(
+                {"period": 14, "lower": Decimal("30"), "upper": Decimal("70")}
+            ),
+        )
+        self._indicator_cache.acquire(
+            key, recipe_id=f"shadow:iqoption-rsi-demo:{symbol}:{timeframe}"
+        )
+        return self._indicator_cache.shadow_compare(key, candles)
+
+    @staticmethod
+    def _direction_from_indicator(direction: str) -> Direction | None:
+        if direction == "call":
+            return Direction.CALL
+        if direction == "put":
+            return Direction.PUT
+        return None
 
     def _candles_for_closed_interval(
         self,
@@ -959,45 +1598,65 @@ class IqOptionAutoTrader:
         symbol: str,
         timeframe: int,
         warmup_need: int,
+        strategy_key: str = "",
     ) -> list[MarketCandle] | None:
-        # A replacement worker/session must never consume history from its
-        # predecessor, even when both generations fall in the same minute.
-        if self._candle_cache_owner is not supervisor.client:
-            self._candle_cache_owner = supervisor.client
-            self._candle_cache.clear()
-        request_epoch = int(self._utc_clock().timestamp()) // timeframe
-        cache_key = (symbol, timeframe, request_epoch)
-        cached = self._candle_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        budget = self._message_budget.try_acquire(self._monotonic())
-        if budget.pressure and not self._message_budget_pressure_reported:
+        key = IQOptionSeriesKey(
+            broker=Broker.IQ_OPTION,
+            account_id=IQOPTION_PRACTICE_ACCOUNT_ID,
+            product=IQOPTION_SERIES_PRODUCT,
+            generation=self._series_generation(supervisor.client),
+            asset=symbol,
+            timeframe_seconds=timeframe,
+        )
+        self._series_hub.replace_message_budget(self._message_budget)
+        fetch_warmup_need = (
+            max(warmup_need, 17)
+            if strategy_key == "iqoption-rsi-demo"
+            and not callable(getattr(supervisor.client, "iqoption_binary_payout", None))
+            else warmup_need
+        )
+        outcome = self._series_hub.snapshot(
+            client=supervisor.client,
+            key=key,
+            warmup_required=warmup_need,
+            fetcher=lambda _client, series_key, count: self._fetch_candles(
+                supervisor,
+                series_key.asset,
+                series_key.timeframe_seconds,
+                warmup_need=fetch_warmup_need,
+            ),
+        )
+        budget = outcome.budget
+        if budget is not None and budget.pressure and not self._message_budget_pressure_reported:
             self._message_budget_pressure_reported = True
             runtime.event_sink.emit(
                 "iqoption_message_budget_pressure",
                 used_in_window=budget.used_in_window,
                 limit=budget.limit,
             )
-        elif not budget.pressure:
+        elif budget is not None and not budget.pressure:
             self._message_budget_pressure_reported = False
-        if not budget.allowed:
+        if outcome.reason is IQOptionSeriesReason.MESSAGE_BUDGET_EXHAUSTED:
             return None
+        if outcome.snapshot is None:
+            raise RuntimeError(f"IQOPTION_{outcome.reason.value}")
+        return list(outcome.snapshot.candles)
 
-        candles = self._fetch_candles(
-            supervisor,
-            symbol,
-            timeframe,
-            warmup_need=warmup_need,
-        )
-        # Epochs of different TFs are not comparable. Retain one window per pair.
-        self._candle_cache = {
-            key: value
-            for key, value in self._candle_cache.items()
-            if key[:2] != (symbol, timeframe)
-        }
-        self._candle_cache[cache_key] = candles
-        return candles
+    @staticmethod
+    def _series_generation(client: object) -> str:
+        for attribute in (
+            "generation",
+            "session_generation",
+            "connection_generation",
+            "worker_generation",
+            "session_id",
+        ):
+            value = getattr(client, attribute, None)
+            if value is not None:
+                text = str(value)
+                if text:
+                    return f"{attribute}:{text}"
+        return f"client:{id(client)}"
 
     @staticmethod
     def _fetch_candles(
@@ -1010,17 +1669,10 @@ class IqOptionAutoTrader:
         _ticks, candles = supervisor.client.market_history(
             symbol,
             style="candles",
-            count=min(120, warmup_need + 3),
+            count=warmup_need + 3,
             timeframe_seconds=timeframe,
         )
-        return [
-            candle
-            for candle in candles
-            if candle.is_closed
-            and candle.broker is Broker.IQ_OPTION
-            and candle.broker_symbol == symbol
-            and candle.timeframe_seconds == timeframe
-        ]
+        return list(candles)
 
     def _render_eval_waiting(
         self,
@@ -1093,17 +1745,175 @@ class IqOptionAutoTrader:
                 self._status_reason = "IQOPTION_ORDER_SETTLED_WIN"
 
     def _symbols_for_cycle(self, selected_symbol: str) -> tuple[tuple[str, str], ...]:
+        available = self._executable_symbols()
+        # Test doubles predating dynamic discovery intentionally keep the
+        # bounded legacy list. The production SocketWorkerClient always
+        # exposes iqoption_instrument_catalog and therefore never uses it.
+        if self._instrument_catalog is None and not self._catalog_discovery_supported:
+            available = IQOPTION_RADAR_SYMBOLS
         if selected_symbol != "AUTO":
             # No implicit substitution between spot and OTC after a rejection.
-            return (
-                (
-                    selected_symbol,
-                    dict(IQOPTION_RADAR_SYMBOLS).get(selected_symbol, selected_symbol),
-                ),
-            )
-        item = IQOPTION_RADAR_SYMBOLS[self._scan_cursor % len(IQOPTION_RADAR_SYMBOLS)]
-        self._scan_cursor = (self._scan_cursor + 1) % len(IQOPTION_RADAR_SYMBOLS)
+            return tuple(item for item in available if item[0] == selected_symbol)
+        if not available:
+            return ()
+        item = available[self._scan_cursor % len(available)]
+        self._scan_cursor = (self._scan_cursor + 1) % len(available)
         return (item,)
+
+    def _refresh_instrument_catalog(
+        self,
+        supervisor: ReadOnlyWorkerSupervisor,
+        runtime: CoreRuntime,
+    ) -> None:
+        now = self._monotonic()
+        catalog_fn = getattr(supervisor.client, "iqoption_instrument_catalog", None)
+        if not callable(catalog_fn):
+            return
+        if now - self._last_instrument_catalog_probe < IQOPTION_INSTRUMENT_CATALOG_TTL_SECONDS:
+            if now - self._instrument_catalog_received_mono > (
+                IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS
+            ):
+                self._instrument_catalog = None
+            return
+        self._last_instrument_catalog_probe = now
+        # One catalogue refresh emits exactly two read-only broker messages:
+        # initialization-data and digital underlying-list. Reserve both before
+        # the worker call so the Core's sliding-window ceiling remains true.
+        decisions = tuple(
+            self._message_budget.try_acquire_operational(self._monotonic()) for _ in range(2)
+        )
+        for decision in decisions:
+            self._report_operational_budget(runtime, decision)
+        if not all(decision.allowed for decision in decisions):
+            self._set_status("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
+            return
+        try:
+            catalog = catalog_fn()
+            if not isinstance(catalog, BrokerInstrumentCatalog):
+                raise ValueError("invalid IQ Option instrument catalogue")
+        except WorkerDispatchError as exc:
+            if now - self._instrument_catalog_received_mono > (
+                IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS
+            ):
+                self._instrument_catalog = None
+            runtime.event_sink.emit(
+                "iqoption_instrument_catalog_failed",
+                reason_code=exc.code.value,
+            )
+            return
+        except Exception:
+            if now - self._instrument_catalog_received_mono > (
+                IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS
+            ):
+                self._instrument_catalog = None
+            runtime.event_sink.emit(
+                "iqoption_instrument_catalog_failed",
+                reason_code="IQOPTION_CATALOG_INVALID",
+            )
+            return
+        self._instrument_catalog = catalog
+        self._instrument_catalog_received_mono = now
+        self._sync_catalog_ranking(catalog)
+        counts = {
+            product.value: sum(1 for item in catalog.instruments if item.product is product)
+            for product in BrokerInstrumentProduct
+        }
+        runtime.event_sink.emit(
+            "iqoption_instrument_catalog_refreshed",
+            generation=catalog.generation,
+            binary_count=counts[BrokerInstrumentProduct.BINARY.value],
+            turbo_count=counts[BrokerInstrumentProduct.TURBO.value],
+            digital_count=counts[BrokerInstrumentProduct.DIGITAL.value],
+            executable_count=len(self._executable_symbols()),
+            unavailable_products=",".join(item.value for item in catalog.unavailable_products)
+            or None,
+        )
+
+    def _sync_catalog_ranking(self, catalog: BrokerInstrumentCatalog) -> None:
+        manifest = self._catalog_provider() if self._catalog_provider is not None else None
+        allowed_assets = {
+            info.entry.asset
+            for info in (() if manifest is None else manifest.active_strategies.values())
+        }
+        grouped: dict[str, list[BrokerInstrument]] = {}
+        for item in catalog.instruments:
+            # The broker catalogue also contains stocks, indices and legacy
+            # products for which this client has no signed strategy.  They are
+            # useful as transport evidence but must not flood the operator's
+            # execution radar or asset selector.
+            if self._catalog_provider is not None and item.broker_symbol not in allowed_assets:
+                continue
+            grouped.setdefault(item.broker_symbol, []).append(item)
+        ranking: dict[str, UiIqOptionAssetRank] = {}
+        for symbol, raw_items in sorted(grouped.items()):
+            items = tuple(raw_items)
+            products = "/".join(sorted({item.product.value for item in items}))
+            base_name = items[0].display_name
+            executable = any(item.executable for item in items)
+            open_detected = any(
+                item.availability is BrokerInstrumentAvailability.OPEN for item in items
+            )
+            status = "WAITING_DATA" if executable else "DISCOVERY_ONLY"
+            condition = (
+                "WAITING_DATA"
+                if executable
+                else "OPEN_READ_ONLY"
+                if open_detected
+                else "MARKET_CLOSED"
+            )
+            details = "; ".join(
+                f"{item.product.value}: {item.availability.value}"
+                + (" · executável" if item.executable else " · somente detecção")
+                for item in items
+            )
+            existing = self._asset_ranking_by_symbol.get(symbol)
+            if executable and existing is not None and existing.rsi != "--":
+                ranking[symbol] = replace(
+                    existing,
+                    display_name=f"{base_name} · {products}",
+                    candidate_details=f"{details}; {existing.candidate_details}"[:2048],
+                )
+            else:
+                ranking[symbol] = UiIqOptionAssetRank(
+                    symbol=symbol,
+                    display_name=f"{base_name} · {products}",
+                    rsi="--",
+                    condition=condition,
+                    status=status,
+                    candidate_details=details,
+                    source="IQOPTION_SESSION_CATALOG",
+                    readiness="READY" if executable else "READ_ONLY",
+                )
+        with self._lock:
+            self._asset_ranking_by_symbol = ranking
+            self._asset_ranking = self._ordered_ranking()
+
+    def _executable_symbols(self) -> tuple[tuple[str, str], ...]:
+        catalog = self._instrument_catalog
+        if catalog is None:
+            return ()
+        manifest = self._catalog_provider() if self._catalog_provider is not None else None
+        allowed_assets = {
+            info.entry.asset
+            for info in (() if manifest is None else manifest.active_strategies.values())
+        }
+        symbols: dict[str, str] = {}
+        for item in catalog.instruments:
+            if (
+                item.product is BrokerInstrumentProduct.TURBO
+                and item.availability is BrokerInstrumentAvailability.OPEN
+                and item.analyzable
+                and item.executable
+                and (self._catalog_provider is None or item.broker_symbol in allowed_assets)
+            ):
+                symbols[item.broker_symbol] = self._display_name_for(item.broker_symbol)
+        return tuple(sorted(symbols.items()))
+
+    def _display_name_for(self, symbol: str) -> str:
+        rank = self._asset_ranking_by_symbol.get(symbol)
+        if rank is not None:
+            return rank.display_name
+        return dict(IQOPTION_RADAR_SYMBOLS).get(symbol, symbol)
 
     def _risk_block_reason(self, config: IqOptionRiskConfig) -> str | None:
         if self._daily_trades_count >= config.max_daily_trades:
@@ -1131,7 +1941,21 @@ class IqOptionAutoTrader:
         selected: bool,
         status: str,
         direction: str | None = None,
+        source: str = "IQOPTION_BROKER_CLOSED_CANDLES",
+        mode: str = "LEGACY",
+        revision: str | None = None,
+        readiness: str | None = None,
+        signal_observed: bool | None = None,
+        candidate_eligible: bool | None = None,
+        order_submitted: bool = False,
+        order_accepted: bool = False,
+        terminal: bool = False,
+        wait_reason: str | None = None,
+        waiting_seconds: int = 0,
     ) -> None:
+        existing = self._asset_ranking_by_symbol.get(symbol)
+        if rsi == "--" and source == "IQOPTION_BROKER_CLOSED_CANDLES":
+            source = "NO_MARKET_EVIDENCE"
         rank = UiIqOptionAssetRank(
             symbol=symbol,
             display_name=display_name,
@@ -1141,6 +1965,22 @@ class IqOptionAutoTrader:
             selected=selected,
             status=status,
             candidate_details=self._candidate_details.get(symbol, ""),
+            source=source,
+            mode=mode,
+            revision=revision
+            if revision is not None
+            else (None if existing is None else existing.revision),
+            readiness=readiness
+            or ("READY" if status not in {"WAITING_DATA", "WARMING_UP"} else status),
+            signal_observed=(direction is not None) if signal_observed is None else signal_observed,
+            candidate_eligible=(direction is not None)
+            if candidate_eligible is None
+            else candidate_eligible,
+            order_submitted=order_submitted,
+            order_accepted=order_accepted,
+            terminal=terminal,
+            wait_reason=wait_reason,
+            waiting_seconds=waiting_seconds,
         )
         with self._lock:
             self._asset_ranking_by_symbol[symbol] = rank
@@ -1149,6 +1989,41 @@ class IqOptionAutoTrader:
     def _set_status(self, reason: str) -> None:
         with self._lock:
             self._status_reason = reason
+
+    def _mark_rank_execution(
+        self,
+        symbol: str,
+        *,
+        submitted: bool,
+        accepted: bool,
+        terminal: bool,
+        reason: str,
+    ) -> None:
+        """Annotate the last signal with authoritative dispatch evidence."""
+        with self._lock:
+            previous = self._asset_ranking_by_symbol.get(symbol)
+        if previous is None:
+            return
+        self._update_rank(
+            symbol,
+            previous.display_name,
+            rsi=previous.rsi,
+            condition=previous.condition,
+            selected=previous.selected,
+            # Keep the signal lifecycle visible; dispatch evidence is carried by
+            # the explicit flags below and is never conflated with a signal.
+            status=previous.status,
+            direction=previous.direction,
+            source=previous.source,
+            mode=previous.mode,
+            readiness=previous.readiness,
+            signal_observed=previous.signal_observed,
+            candidate_eligible=previous.candidate_eligible,
+            order_submitted=submitted,
+            order_accepted=accepted,
+            terminal=terminal,
+            wait_reason=reason if not accepted else None,
+        )
 
     def _ordered_ranking(self) -> tuple[UiIqOptionAssetRank, ...]:
         return tuple(self._asset_ranking_by_symbol.values())
@@ -1159,4 +2034,5 @@ __all__ = [
     "IQOPTION_PRACTICE_ACCOUNT_ID",
     "IQOPTION_RADAR_SYMBOLS",
     "IqOptionAutoTrader",
+    "IqOptionExecutionFlags",
 ]

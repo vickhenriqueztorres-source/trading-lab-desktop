@@ -27,6 +27,7 @@ from packages.protocol.ui_messages import (
     OrderSummary,
     UiAccountMode,
     UiIqOptionAssetRank,
+    UiIqOptionExecutionMetrics,
     UiIqOptionRiskConfig,
 )
 
@@ -34,6 +35,23 @@ from packages.protocol.ui_messages import (
 def _mode_text(mode: UiAccountMode) -> str:
     translated = t(f"mode.{mode.value}")
     return mode.value if translated.startswith("mode.") else translated
+
+
+def _bot_reason_text(reason: str) -> str:
+    messages = {
+        "MD_CLOCK_UNTRUSTED": (
+            "Relógio da corretora sem confirmação recente ou com latência/desvio excessivo. "
+            "A sincronização será verificada novamente; não é necessário refazer o login."
+        ),
+        "IQOPTION_CONNECTED_REARM_REQUIRED": (
+            "Conexão recuperada. Clique em ‘Ligar Bot IQ Option’ para rearmar as entradas."
+        ),
+        "IQOPTION_BOT_DISARMED": "Bot aguardando o comando ‘Ligar Bot IQ Option’.",
+        "IQOPTION_BOT_DISARMED_AFTER_CONNECTION_CHANGE": (
+            "A conta mudou ou reconectou. Confirme ‘Ligar Bot IQ Option’ novamente."
+        ),
+    }
+    return messages.get(reason, reason)
 
 
 class IqOptionWorkspaceWidget(QWidget):
@@ -101,7 +119,8 @@ class IqOptionWorkspaceWidget(QWidget):
         identity.addWidget(self._title)
 
         self._description = QLabel(
-            "Varredura simultânea de todos os ativos OTC e Forex com execução instantânea."
+            "Catálogo dinâmico Binary/Digital, mercados regulares e OTC; "
+            "execução somente em produtos comprovadamente habilitados."
         )
         self._description.setWordWrap(True)
         self._description.setObjectName("Subtitle")
@@ -264,21 +283,46 @@ class IqOptionWorkspaceWidget(QWidget):
             lat = f" ({status.clock_latency_ms} ms)" if status.clock_latency_ms else ""
             self._clock_status.setText(f"⏱️ Sincronizado{lat}")
         else:
-            self._clock_status.setText("⏱️ Aguardando Sync")
+            latency = status.clock_latency_ms
+            detail = f" · latência medida {latency} ms" if latency is not None else ""
+            self._clock_status.setText(f"⏱️ Aguardando confirmação do relógio{detail}")
 
-    def update_bot_state(self, armed: bool, reason: str) -> None:
+    def update_bot_state(
+        self,
+        armed: bool,
+        reason: str,
+        *,
+        entry_ready: bool | None = None,
+        entry_blocker: str | None = None,
+    ) -> None:
         self._bot_armed = armed
         self._bot_reason = reason
-        if armed:
+        if armed and entry_ready is not False:
             self._automation_pill.setText("● BOT ATIVO")
             self._automation_pill.setObjectName("StatusPillOnline")
+        elif armed:
+            self._automation_pill.setText("● BOT LIGADO · ENTRADAS BLOQUEADAS")
+            self._automation_pill.setObjectName("StatusPillOffline")
         else:
             self._automation_pill.setText("○ BOT EM ESPERA")
             self._automation_pill.setObjectName("StatusPillOffline")
 
         self._automation_pill.style().unpolish(self._automation_pill)
         self._automation_pill.style().polish(self._automation_pill)
-        self._automation_detail.setText(reason)
+        self._automation_detail.setText(
+            f"Entradas bloqueadas: {_bot_reason_text(entry_blocker or reason)}"
+            if armed and entry_ready is False
+            else _bot_reason_text(reason)
+        )
+        market_reason = entry_blocker or reason
+        if market_reason == "IQOPTION_ACTIVE_SUSPENDED":
+            self._automation_detail.setText(
+                "Ativo suspenso pela IQ Option para opções turbo. Aguardando disponibilidade."
+            )
+        elif market_reason == "IQOPTION_ACTIVE_UNAVAILABLE":
+            self._automation_detail.setText(
+                "Ativo indisponível no catálogo turbo da IQ Option; nenhuma ordem enviada."
+            )
 
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
         filtered = tuple(item for item in orders if "IQ" in item.broker.upper())
@@ -293,6 +337,10 @@ class IqOptionWorkspaceWidget(QWidget):
     def update_iqoption_risk(self, config: UiIqOptionRiskConfig | None) -> None:
         if self.strategy_summary is not None:
             self.strategy_summary.update_config(config)
+
+    def update_iqoption_metrics(self, metrics: UiIqOptionExecutionMetrics | None) -> None:
+        if self.strategy_summary is not None:
+            self.strategy_summary.update_metrics(metrics)
 
     def set_iqoption_login_busy(self, busy: bool, message: str | None = None) -> None:
         if self._iqoption_login_button is not None:

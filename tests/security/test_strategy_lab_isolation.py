@@ -109,6 +109,8 @@ def test_dist_and_exe_prohibits_strategy_lab() -> None:
                 content = path.read_bytes()
                 for token in forbidden_tokens:
                     if token in content:
-                        violations.append(f"File {path.name} contains forbidden token '{token.decode()}'")
+                        violations.append(
+                            f"File {path.name} contains forbidden token '{token.decode()}'"
+                        )
 
     assert len(violations) == 0, "Found Strategy Lab artifacts in dist:\n" + "\n".join(violations)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
@@ -22,12 +23,25 @@ from apps.core.iqoption_connection_safety import (
     IQOptionConnectionSafetyController,
     IQOptionConnectionSafetyStateError,
     IQOptionConnectionSafetyStore,
+    IQOptionMessageBudget,
 )
 from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
 from apps.core.live_monitor import LiveMonitor
 from apps.core.manifest_catalog import DynamicManifestCatalog
-from apps.core.manifest_client import DEFAULT_PARITY_SHA256, evaluate_manifest_bytes
+from apps.core.manifest_client import (
+    DEFAULT_CONSUMER_CAPABILITIES,
+    DEFAULT_MANIFEST_MIRROR_URL,
+    DEFAULT_MANIFEST_PRIMARY_URL,
+    DEFAULT_PARITY_SHA256,
+    HttpTransportProtocol,
+    ManifestClient,
+    ManifestRecord,
+    ManifestRefreshService,
+    UrlLibManifestTransport,
+    evaluate_manifest_bytes,
+)
 from apps.core.manifest_keys import PROD_PUBLIC_KEYS
+from apps.core.outcomes_uploader import OutcomesUploader
 from apps.core.payout_routed_differs import (
     PAYOUT_ROUTED_DIFFERS_STRATEGY_ID,
     PayoutRoutedDiffersProposalCache,
@@ -85,6 +99,8 @@ class CoreLifecycleService:
         force_auth_simulation: bool = False,
         ui_session_token: SecretValue | None = None,
         deriv_transport: str = "fake-public",
+        manifest_http: HttpTransportProtocol | None = None,
+        manifest_remote_enabled: bool | None = None,
     ) -> None:
         if "simulated" not in workers:
             raise ValueError("the Phase 1 Core requires the simulated financial worker")
@@ -115,6 +131,7 @@ class CoreLifecycleService:
         self._iqoption_connecting: ReadOnlyWorkerSupervisor | None = None
         self._iqoption_balance: BrokerAccountBalance | None = None
         self._iqoption_clock: BrokerClockSnapshot | None = None
+        self._iqoption_session_invalidated = False
         try:
             self._iqoption_connection_safety: IQOptionConnectionSafetyController | None = (
                 IQOptionConnectionSafetyController(
@@ -133,10 +150,43 @@ class CoreLifecycleService:
             self._iqoption_risk_config = IqOptionRiskConfig()
         self._manifest_catalog = DynamicManifestCatalog(event_sink=self._emit_manifest_event)
         self._manifest_load_reason = "MANIFEST_NOT_FOUND"
+        self._manifest_bootstrap_raw: bytes | None = None
         self._live_monitor: LiveMonitor | None = None
+        self._outcomes_uploader: OutcomesUploader | None = None
         self._load_local_manifest_catalog()
+        self._manifest_client = ManifestClient(
+            http=manifest_http if manifest_http is not None else UrlLibManifestTransport(),
+            cache_dir=self._profile_dir / "cache",
+            public_keys=PROD_PUBLIC_KEYS,
+            primary_url=os.environ.get(
+                "DUALTRADE_MANIFEST_PRIMARY_URL", DEFAULT_MANIFEST_PRIMARY_URL
+            ),
+            mirror_url=os.environ.get("DUALTRADE_MANIFEST_MIRROR_URL", DEFAULT_MANIFEST_MIRROR_URL),
+            capabilities=DEFAULT_CONSUMER_CAPABILITIES,
+            on_event=self._emit_manifest_event,
+        )
+        cached_manifest = self._manifest_client.current()
+        if cached_manifest is None and self._manifest_bootstrap_raw is not None:
+            self._manifest_client.accept(self._manifest_bootstrap_raw)
+            cached_manifest = self._manifest_client.current()
+        if (
+            cached_manifest is not None
+            and self._manifest_catalog.manifest_version != cached_manifest.manifest_version
+        ):
+            self._manifest_catalog.apply_manifest(cached_manifest)
+        self._manifest_client.on_prepare(self._manifest_catalog.prepare_manifest)
+        self._manifest_client.on_change(self._on_manifest_applied)
+        remote_default = ui_session_token is not None
+        self._manifest_remote_enabled = (
+            remote_default if manifest_remote_enabled is None else manifest_remote_enabled
+        )
+        self._manifest_refresh = ManifestRefreshService(
+            self._manifest_client,
+            on_event=self._emit_manifest_event,
+        )
         self._iqoption_bot_armed = False
         self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+        self._iqoption_message_budget = IQOptionMessageBudget()
         self._iqoption_auto_trader = IqOptionAutoTrader(
             supervisor_provider=lambda: self._iqoption,
             runtime_provider=lambda: self._runtime,
@@ -149,6 +199,8 @@ class CoreLifecycleService:
                 else "UNKNOWN"
             ),
             monitor_provider=lambda: self._live_monitor,
+            recovery_notifier=self._request_iqoption_recovery,
+            message_budget=self._iqoption_message_budget,
         )
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
@@ -167,6 +219,7 @@ class CoreLifecycleService:
         self._deriv_recovery_thread: threading.Thread | None = None
         self._iqoption_startup_recovery_thread: threading.Thread | None = None
         self._deriv_generation = 0
+        self._deriv_account_id: str | None = None
         self._pending_deriv_recovery_reason: str | None = None
         self._workers_stopped = False
         self._auth_stopped = False
@@ -240,15 +293,34 @@ class CoreLifecycleService:
             self._emit_manifest_event(
                 "manifest_startup_validation", {"reason_code": self._manifest_load_reason}
             )
+            # Anonymous outcome telemetry is opt-in and strictly off the
+            # financial path.  No endpoint means no uploader and no network work.
+            telemetry_opt_in = os.environ.get("DUALTRADE_OUTCOMES_OPT_IN") == "1"
+            telemetry_endpoint = os.environ.get("DUALTRADE_OUTCOMES_ENDPOINT", "").strip()
+            if telemetry_opt_in and telemetry_endpoint.startswith("https://"):
+                self._outcomes_uploader = OutcomesUploader(
+                    writer=runtime.writer,
+                    identity_file=self._profile_dir / "telemetry" / "client_identity.json",
+                    endpoint_url=telemetry_endpoint,
+                    opt_in=True,
+                )
+                self._outcomes_uploader.start()
             self._live_monitor = LiveMonitor(
-                self._manifest_catalog, writer=runtime.writer, event_sink=runtime.event_sink
+                self._manifest_catalog,
+                writer=runtime.writer,
+                event_sink=runtime.event_sink,
+                uploader=self._outcomes_uploader,
             )
             self._live_monitor.start()
+            if self._manifest_remote_enabled:
+                self._manifest_refresh.start()
+                self._startup_sequence.append("MANIFEST_REFRESH")
             runtime.iqoption_entry_validator = self._iqoption_auto_trader.validate_runtime_entry
             runtime.iqoption_execution_lock = self._manifest_catalog.execution_lock
             runtime.iqoption_order_registered = self._manifest_catalog.notify_order_opened
-            # Automated entries always start disarmed. The user must press Ligar Bot.
-            runtime.stop_new_entries()
+            # Each broker starts independently disarmed. A global stop is
+            # reserved for shutdown and truly global failures.
+            runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
             self._safe_stop = True
             self._startup_sequence.append("SIMULATED_WORKER")
             if "deriv_read_only" in self._workers:
@@ -289,18 +361,25 @@ class CoreLifecycleService:
                         else self._deriv_auto_trader.waiting_status
                     ),
                     iqoption_health=lambda: (
-                        None if self._iqoption is None else self._iqoption.health_state
+                        None
+                        if self._iqoption is None
+                        else WorkerHealthState.DISCONNECTED
+                        if self._iqoption_session_invalidated
+                        else self._iqoption.health_state
                     ),
                     iqoption_balance=lambda: (
-                        self._iqoption_auto_trader.latest_balance
+                        None
+                        if self._iqoption_session_invalidated
+                        else self._iqoption_auto_trader.latest_balance
                         if self._iqoption_auto_trader is not None
                         and self._iqoption_auto_trader.latest_balance is not None
                         else self._iqoption_balance
                     ),
                     iqoption_clock=lambda: (
-                        self._iqoption_auto_trader.latest_clock
+                        None
+                        if self._iqoption_session_invalidated
+                        else self._iqoption_auto_trader.latest_clock
                         if self._iqoption_auto_trader is not None
-                        and self._iqoption_auto_trader.latest_clock is not None
                         else self._iqoption_clock
                     ),
                     iqoption_risk_config=lambda: self._iqoption_risk_config,
@@ -314,6 +393,11 @@ class CoreLifecycleService:
                         self._iqoption_auto_trader.asset_ranking
                         if self._iqoption_auto_trader is not None
                         else ()
+                    ),
+                    iqoption_execution_metrics=lambda: (
+                        self._iqoption_auto_trader.execution_metrics()
+                        if self._iqoption_auto_trader is not None
+                        else None
                     ),
                 )
                 ui_service = CoreUiProjectionService(
@@ -357,8 +441,9 @@ class CoreLifecycleService:
 
     def _load_local_manifest_catalog(self) -> None:
         repo_data_manifest = Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+        profile_cache_manifest = self._profile_dir / "cache" / "manifest.json"
         candidates = [
-            self._profile_dir / "cache" / "manifest.json",
+            profile_cache_manifest,
             Path("cache/manifest.json"),
             Path("data/manifest.json"),
             repo_data_manifest,
@@ -373,20 +458,31 @@ class CoreLifecycleService:
         for path in candidates:
             if path.is_file():
                 try:
+                    raw = path.read_bytes()
                     data, reason = evaluate_manifest_bytes(
-                        path.read_bytes(),
+                        raw,
                         PROD_PUBLIC_KEYS,
                         expected_primitives_version="1.0.0",
                         expected_parity_sha256=DEFAULT_PARITY_SHA256,
+                        capabilities=DEFAULT_CONSUMER_CAPABILITIES,
                     )
                     if data is None:
                         self._manifest_load_reason = reason
                         self._emit_manifest_event("manifest_rejected", {"reason_code": reason})
+                        if path == profile_cache_manifest:
+                            return
                         continue
                     self._manifest_catalog.apply_manifest(data)
+                    self._manifest_bootstrap_raw = raw
                     self._manifest_load_reason = "MANIFEST_ACCEPTED"
                     return
                 except Exception:
+                    if path == profile_cache_manifest:
+                        self._manifest_load_reason = "MANIFEST_REJECTED"
+                        self._emit_manifest_event(
+                            "manifest_rejected", {"reason_code": "MANIFEST_REJECTED"}
+                        )
+                        return
                     continue
 
     def _schedule_saved_deriv_startup(self, *, has_deriv_recovery: bool) -> None:
@@ -426,78 +522,117 @@ class CoreLifecycleService:
         if saved_mode != "practice":
             # Real remains read-only and is never selected automatically.
             return
-        current = self._iqoption_startup_recovery_thread
-        if current is not None and current.is_alive():
+        self._request_iqoption_recovery("IQOPTION_STARTUP_RECONCILIATION_REQUIRED")
+
+    def _request_iqoption_recovery_from(
+        self,
+        source: ReadOnlyWorkerSupervisor,
+        code: ProtocolErrorCode,
+    ) -> None:
+        """Fence callbacks from a supervisor that is no longer current."""
+
+        if source is self._iqoption:
+            self._request_iqoption_recovery(code.value)
+
+    def _request_iqoption_recovery(self, reason_code: str) -> None:
+        """Run one bounded IQ recovery owner without ever rearming entries."""
+
+        if self._state in {CoreServiceState.STOPPING, CoreServiceState.STOPPED}:
             return
+        runtime = self._runtime
+        if runtime is None or self._iqoption_recovery_stop.is_set():
+            return
+        with self._iqoption_switch_lock:
+            current = self._iqoption_startup_recovery_thread
+            self._iqoption_bot_armed = False
+            self._iqoption_bot_reason = "IQOPTION_RECOVERING"
+            # IPC PONG proves only process liveness. A broker failure invalidates
+            # cached evidence even when the supervisor still reports READY.
+            self._iqoption_session_invalidated = True
+            self._iqoption_balance = None
+            self._iqoption_clock = None
+            runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
+            self._iqoption_auto_trader.invalidate_entry_authority("IQOPTION_RECOVERING")
+            if current is not None and current.is_alive():
+                return
+            runtime.event_sink.emit(
+                "iqoption_recovery_requested",
+                reason_code=reason_code,
+            )
+            thread = threading.Thread(
+                target=self._iqoption_recovery_loop,
+                name="iqoption-connection-recovery",
+                daemon=True,
+            )
+            self._iqoption_startup_recovery_thread = thread
+            thread.start()
 
-        def recover() -> None:
-            terminal_reasons = {
-                "IQOPTION_AUTH_FAILED",
-                "IQOPTION_2FA_REQUIRED",
-                "IQOPTION_RATE_LIMITED",
-                "IQOPTION_CONNECTION_QUARANTINED",
-                "IQOPTION_CONNECTION_SAFETY_STATE_INVALID",
-                "IQOPTION_CREDENTIALS_NOT_CONFIGURED",
-                "IQOPTION_SAVED_LOGIN_UNAVAILABLE",
-                "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION",
-            }
-            attempt = 0
-            while (
-                attempt < IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS
-                and not self._iqoption_recovery_stop.is_set()
-            ):
-                delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
-                    min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
-                ]
-                attempt += 1
-                if self._iqoption_recovery_stop.wait(delay):
-                    return
-                runtime = self._runtime
-                if runtime is None or self._state in {
-                    CoreServiceState.STOPPING,
-                    CoreServiceState.STOPPED,
-                }:
-                    return
-                runtime.event_sink.emit(
-                    "iqoption_startup_recovery_attempt",
-                    attempt=attempt,
-                    delay_ms=int(delay * 1000),
-                )
-                accepted, connected, reason = self.connect_iqoption_selected_account("saved")
-                if accepted and connected:
-                    runtime.event_sink.emit(
-                        "iqoption_startup_recovery_connected",
-                        reason_code=reason,
-                    )
-                    return
-                runtime.event_sink.emit(
-                    "iqoption_startup_recovery_failed",
-                    reason_code=reason,
-                    attempt=attempt,
-                )
-                if reason in terminal_reasons:
-                    return
+    def _iqoption_recovery_loop(self) -> None:
+        terminal_reasons = {
+            "IQOPTION_AUTH_FAILED",
+            "IQOPTION_2FA_REQUIRED",
+            "IQOPTION_RATE_LIMITED",
+            "IQOPTION_CONNECTION_QUARANTINED",
+            "IQOPTION_CONNECTION_SAFETY_STATE_INVALID",
+            "IQOPTION_CREDENTIALS_NOT_CONFIGURED",
+            "IQOPTION_SAVED_LOGIN_UNAVAILABLE",
+            "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION",
+        }
+        attempt = 0
+        while (
+            attempt < IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS
+            and not self._iqoption_recovery_stop.is_set()
+        ):
+            delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
+                min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
+            ]
+            attempt += 1
+            if self._iqoption_recovery_stop.wait(delay):
+                return
             runtime = self._runtime
-            if runtime is not None and not self._iqoption_recovery_stop.is_set():
+            if runtime is None or self._state in {
+                CoreServiceState.STOPPING,
+                CoreServiceState.STOPPED,
+            }:
+                return
+            runtime.event_sink.emit(
+                "iqoption_recovery_attempt",
+                attempt=attempt,
+                delay_ms=int(delay * 1000),
+            )
+            accepted, connected, reason = self.connect_iqoption_selected_account("saved")
+            if accepted and connected and not self._iqoption_session_invalidated:
+                self._iqoption_bot_armed = False
+                self._iqoption_bot_reason = "IQOPTION_CONNECTED_REARM_REQUIRED"
                 runtime.event_sink.emit(
-                    "iqoption_startup_recovery_exhausted",
-                    reason_code="IQOPTION_AUTOMATED_RECOVERY_LIMIT_REACHED",
-                    attempts=attempt,
+                    "iqoption_recovery_connected",
+                    reason_code="OPERATOR_REARM_REQUIRED",
+                    attempt=attempt,
                 )
-
-        thread = threading.Thread(
-            target=recover,
-            name="iqoption-startup-recovery",
-            daemon=True,
-        )
-        self._iqoption_startup_recovery_thread = thread
-        thread.start()
+                return
+            if accepted and connected:
+                reason = "IQOPTION_BROKER_SESSION_UNAVAILABLE"
+            runtime.event_sink.emit(
+                "iqoption_recovery_failed",
+                reason_code=reason,
+                attempt=attempt,
+            )
+            if reason in terminal_reasons:
+                self._iqoption_bot_reason = reason
+                return
+        runtime = self._runtime
+        if runtime is not None and not self._iqoption_recovery_stop.is_set():
+            self._iqoption_bot_reason = "IQOPTION_AUTOMATED_RECOVERY_LIMIT_REACHED"
+            runtime.event_sink.emit(
+                "iqoption_recovery_exhausted",
+                reason_code="IQOPTION_AUTOMATED_RECOVERY_LIMIT_REACHED",
+                attempts=attempt,
+            )
 
     def safe_stop(self) -> None:
         runtime = self._require_runtime()
-        stop_entries = getattr(runtime, "stop_new_entries", None)
-        if callable(stop_entries) and not self._iqoption_bot_armed:
-            stop_entries()
+        if self._deriv_account_id is not None:
+            runtime.stop_new_entries_for(Broker.DERIV, self._deriv_account_id)
         self._safe_stop = True
         # Lifecycle READY means the Core/UI control plane is available. Trading
         # authority is represented independently by _safe_stop/HealthGate.
@@ -514,13 +649,21 @@ class CoreLifecycleService:
                 return False
             if not callable(manual_resume):
                 trader.begin_new_run()
-        accepted = runtime.resume_new_entries()
+        accepted = (
+            runtime.resume_new_entries_for(Broker.DERIV, self._deriv_account_id)
+            if self._deriv_account_id is not None
+            else runtime.resume_new_entries()
+        )
         if not accepted and self._should_reset_demo_session_before_rearm(runtime):
             reset_accepted, _reason = self.reset_digit_test_session()
             if reset_accepted:
                 if trader is not None:
                     trader.begin_new_run()
-                accepted = runtime.resume_new_entries()
+                accepted = (
+                    runtime.resume_new_entries_for(Broker.DERIV, self._deriv_account_id)
+                    if self._deriv_account_id is not None
+                    else runtime.resume_new_entries()
+                )
         self._safe_stop = not accepted
         self._state = CoreServiceState.READY
         return accepted
@@ -601,6 +744,7 @@ class CoreLifecycleService:
         with self._iqoption_switch_lock:
             if (
                 self._iqoption is not None
+                and not self._iqoption_session_invalidated
                 and self._iqoption.health_state is WorkerHealthState.READY
                 and self._iqoption_balance is not None
                 and (
@@ -611,13 +755,35 @@ class CoreLifecycleService:
                     or (normalized_mode == "real" and self._iqoption_balance.account_type == "REAL")
                 )
             ):
-                return (
-                    True,
-                    True,
-                    "IQOPTION_PRACTICE_ALREADY_CONNECTED"
-                    if normalized_mode == "practice"
-                    else "IQOPTION_REAL_ALREADY_CONNECTED",
-                )
+                if not self._iqoption_message_budget.try_acquire_operational(
+                    time.monotonic()
+                ).allowed:
+                    return False, False, "IQOPTION_MESSAGE_BUDGET_EXHAUSTED"
+                try:
+                    # This request reaches _ensure_connected in the worker. Do
+                    # not infer external health from a cached Core balance.
+                    verified_balance = self._iqoption.client.broker_balance()
+                    if verified_balance.account_type != self._iqoption_balance.account_type:
+                        raise RuntimeError("IQOPTION_ACCOUNT_MODE_MISMATCH")
+                except (WorkerDispatchError, ProtocolError, RuntimeError, OSError, ValueError):
+                    self._iqoption_session_invalidated = True
+                    self._iqoption_balance = None
+                    self._iqoption_clock = None
+                    self._iqoption_bot_armed = False
+                    self._iqoption_bot_reason = "IQOPTION_RECOVERING"
+                    self._require_runtime().stop_new_entries_for(
+                        Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID
+                    )
+                    self._iqoption_auto_trader.invalidate_entry_authority("IQOPTION_RECOVERING")
+                else:
+                    self._iqoption_balance = verified_balance
+                    return (
+                        True,
+                        True,
+                        "IQOPTION_PRACTICE_ALREADY_CONNECTED"
+                        if normalized_mode == "practice"
+                        else "IQOPTION_REAL_ALREADY_CONNECTED",
+                    )
             connection_safety = self._iqoption_connection_safety
             if connection_safety is None:
                 return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
@@ -638,6 +804,7 @@ class CoreLifecycleService:
             self._iqoption_bot_armed = False
             self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED_AFTER_CONNECTION_CHANGE"
             runtime = self._require_runtime()
+            runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
             self._iqoption_auto_trader.stop()
             runtime.detach_iqoption_worker()
             previous = self._iqoption
@@ -653,6 +820,7 @@ class CoreLifecycleService:
                 handshake_timeout=_IQOPTION_WORKER_HANDSHAKE_TIMEOUT_SECONDS,
                 response_timeout=_IQOPTION_WORKER_RESPONSE_TIMEOUT_SECONDS,
                 heartbeat_timeout=_IQOPTION_WORKER_HEARTBEAT_TIMEOUT_SECONDS,
+                disconnect_notifier=self._request_iqoption_recovery_from,
             )
             self._iqoption_connecting = supervisor
             try:
@@ -670,10 +838,17 @@ class CoreLifecycleService:
                 )
                 if supervisor.client.capabilities.connection_mode != expected_connection_mode:
                     raise RuntimeError("IQOPTION_ACCOUNT_MODE_MISMATCH")
+                if not self._iqoption_message_budget.try_acquire_operational(
+                    time.monotonic()
+                ).allowed:
+                    raise RuntimeError("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
                 balance = supervisor.client.broker_balance()
                 clock: BrokerClockSnapshot | None = None
                 try:
-                    clock = supervisor.client.broker_clock()
+                    if self._iqoption_message_budget.try_acquire_operational(
+                        time.monotonic()
+                    ).allowed:
+                        clock = supervisor.client.broker_clock()
                 except WorkerDispatchError as exc:
                     if exc.code is not ProtocolErrorCode.IQOPTION_CLOCK_UNAVAILABLE:
                         raise
@@ -692,7 +867,18 @@ class CoreLifecycleService:
                 supervisor.shutdown(1.0)
                 self._record_iqoption_connection_failure(exc.code.value)
                 return False, False, exc.code.value
-            except (OSError, RuntimeError, ValueError):
+            except RuntimeError as exc:
+                runtime.detach_iqoption_worker()
+                supervisor.shutdown(1.0)
+                reason = str(exc).strip()
+                if not reason or not all(
+                    character.isupper() or character.isdigit() or character == "_"
+                    for character in reason
+                ):
+                    reason = "IQOPTION_CONNECT_FAILED"
+                self._record_iqoption_connection_failure(reason)
+                return False, False, reason
+            except (OSError, ValueError):
                 runtime.detach_iqoption_worker()
                 supervisor.shutdown(1.0)
                 self._record_iqoption_connection_failure("IQOPTION_CONNECT_FAILED")
@@ -711,6 +897,7 @@ class CoreLifecycleService:
             self._iqoption = supervisor
             self._iqoption_balance = balance
             self._iqoption_clock = clock
+            self._iqoption_session_invalidated = False
             self._iqoption_bot_reason = "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK"
             if self._iqoption_auto_trader is not None:
                 self._iqoption_auto_trader.start()
@@ -777,13 +964,16 @@ class CoreLifecycleService:
             if not enabled:
                 self._iqoption_bot_armed = False
                 runtime = self._require_runtime()
-                if self._safe_stop:
-                    runtime.stop_new_entries()
+                runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
                 self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
                 return True, self._iqoption_bot_reason
             supervisor = self._iqoption
             balance = self._iqoption_balance
-            if supervisor is None or supervisor.health_state is not WorkerHealthState.READY:
+            if (
+                self._iqoption_session_invalidated
+                or supervisor is None
+                or supervisor.health_state is not WorkerHealthState.READY
+            ):
                 self._iqoption_bot_reason = "IQOPTION_CONNECTION_REQUIRED"
                 return False, self._iqoption_bot_reason
             if balance is None or balance.account_type.upper() not in {"DEMO", "PRACTICE"}:
@@ -847,9 +1037,8 @@ class CoreLifecycleService:
         runtime = self._require_runtime()
         if self._deriv_transport in {"live-demo", "live-real"} and self._has_open_deriv_orders():
             return False, "DERIV_ACCOUNT_SWITCH_BLOCKED_OPEN_ORDERS"
-        stop_entries = getattr(runtime, "stop_new_entries", None)
-        if callable(stop_entries):
-            stop_entries()
+        if self._deriv_account_id is not None:
+            runtime.stop_new_entries_for(Broker.DERIV, self._deriv_account_id)
         self._safe_stop = True
         self._state = CoreServiceState.READY
         self._stop_deriv_telemetry()
@@ -937,6 +1126,28 @@ class CoreLifecycleService:
                 event, reason_code=str(fields.get("reason_code", event)), **safe_fields
             )
 
+    def _on_manifest_applied(self, manifest: ManifestRecord) -> None:
+        """Finish a remote swap without granting or preserving entry authority."""
+        if self._iqoption_bot_armed:
+            self._iqoption_bot_armed = False
+            self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED_AFTER_MANIFEST_CHANGE"
+            if self._runtime is not None:
+                self._runtime.stop_new_entries_for(
+                    Broker.IQ_OPTION,
+                    IQOPTION_PRACTICE_ACCOUNT_ID,
+                )
+            self._iqoption_auto_trader.invalidate_entry_authority(self._iqoption_bot_reason)
+        monitor = self._live_monitor
+        if monitor is not None:
+            monitor.on_manifest_applied(manifest)
+        self._emit_manifest_event(
+            "manifest_runtime_applied",
+            {
+                "manifest_version": manifest.manifest_version,
+                "iqoption_bot_armed": self._iqoption_bot_armed,
+            },
+        )
+
     def _request_deriv_recovery(self, _reason_code: str) -> None:
         if (
             self._deriv_transport not in {"live-demo", "live-real"}
@@ -958,9 +1169,8 @@ class CoreLifecycleService:
                     transport=self._deriv_transport,
                     generation=self._deriv_generation,
                 )
-            stop_entries = getattr(runtime, "stop_new_entries", None)
-            if callable(stop_entries):
-                stop_entries()
+            if self._deriv_account_id is not None:
+                runtime.stop_new_entries_for(Broker.DERIV, self._deriv_account_id)
         self._safe_stop = True
         self._state = CoreServiceState.READY
         with self._deriv_switch_lock:
@@ -1077,6 +1287,7 @@ class CoreLifecycleService:
             return True
         self._deriv_recovery_stop.set()
         self._iqoption_recovery_stop.set()
+        self._manifest_refresh.stop()
         self._state = CoreServiceState.STOPPING
         connecting_iqoption = self._iqoption_connecting
         self._iqoption_connecting = None
@@ -1118,8 +1329,12 @@ class CoreLifecycleService:
         if self._state is CoreServiceState.STOPPED:
             return
         self._state = CoreServiceState.STOPPING
+        self._manifest_refresh.stop()
         if self._live_monitor is not None:
             self._live_monitor.stop()
+        if self._outcomes_uploader is not None:
+            self._outcomes_uploader.stop()
+            self._outcomes_uploader = None
         ui_service = self._ui_service
         self._ui_service = None
         if ui_service is not None:
@@ -1151,7 +1366,8 @@ class CoreLifecycleService:
             return True, "RESTART_COMPLETED"
         if role == "DERIV_WORKER" and "deriv_read_only" in self._workers:
             runtime = self._require_runtime()
-            runtime.stop_new_entries()
+            if self._deriv_account_id is not None:
+                runtime.stop_new_entries_for(Broker.DERIV, self._deriv_account_id)
             self._safe_stop = True
             self._state = CoreServiceState.READY
             self._stop_deriv_telemetry()
@@ -1331,6 +1547,8 @@ class CoreLifecycleService:
         credentials = DerivCredentialVault(self._profile_dir / "broker_credentials").load()
         if credentials is None or credentials.account_type != "demo":
             raise RuntimeError("DERIV_DEMO_CREDENTIALS_REQUIRED")
+        self._deriv_account_id = credentials.account_id
+        runtime.stop_new_entries_for(Broker.DERIV, credentials.account_id)
         telemetry = self._deriv_telemetry
         if telemetry is None:
             raise RuntimeError("DERIV_TELEMETRY_UNAVAILABLE")

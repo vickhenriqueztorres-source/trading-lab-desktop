@@ -1,0 +1,3393 @@
+{
+  "cases": [
+    {
+      "asset": "EURUSD",
+      "bot_comparable": true,
+      "candidate_hash": "59872f032d3c5b3fafee55abf83121c8ac3902ad90b899927e71680e2051069f",
+      "candles": [
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 4,
+          "ts": 1700000100
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 5,
+          "ts": 1700000160
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 6,
+          "ts": 1700000220
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 4,
+          "ts": 1700000280
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 5,
+          "ts": 1700000340
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 6,
+          "ts": 1700000400
+        },
+        {
+          "c": "1.1000",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.0997",
+          "tick_vol": 4,
+          "ts": 1700000460
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 5,
+          "ts": 1700000520
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 6,
+          "ts": 1700000580
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 4,
+          "ts": 1700000640
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 5,
+          "ts": 1700000700
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 6,
+          "ts": 1700000760
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 4,
+          "ts": 1700000820
+        },
+        {
+          "c": "1.1000",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.0997",
+          "tick_vol": 5,
+          "ts": 1700000880
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 6,
+          "ts": 1700000940
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 4,
+          "ts": 1700001000
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 5,
+          "ts": 1700001060
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 6,
+          "ts": 1700001120
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 4,
+          "ts": 1700001180
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 5,
+          "ts": 1700001240
+        },
+        {
+          "c": "1.1000",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.0997",
+          "tick_vol": 6,
+          "ts": 1700001300
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 4,
+          "ts": 1700001360
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 5,
+          "ts": 1700001420
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 6,
+          "ts": 1700001480
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 4,
+          "ts": 1700001540
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 5,
+          "ts": 1700001600
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 6,
+          "ts": 1700001660
+        },
+        {
+          "c": "1.1000",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.0997",
+          "tick_vol": 4,
+          "ts": 1700001720
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 5,
+          "ts": 1700001780
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 6,
+          "ts": 1700001840
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 4,
+          "ts": 1700001900
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 5,
+          "ts": 1700001960
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 6,
+          "ts": 1700002020
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 4,
+          "ts": 1700002080
+        },
+        {
+          "c": "1.1000",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.0997",
+          "tick_vol": 5,
+          "ts": 1700002140
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 6,
+          "ts": 1700002200
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 4,
+          "ts": 1700002260
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 5,
+          "ts": 1700002320
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 6,
+          "ts": 1700002380
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 4,
+          "ts": 1700002440
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 5,
+          "ts": 1700002500
+        },
+        {
+          "c": "1.1000",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.0997",
+          "tick_vol": 6,
+          "ts": 1700002560
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1005",
+          "l": "1.0992",
+          "o": "1.1000",
+          "tick_vol": 4,
+          "ts": 1700002620
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0997",
+          "tick_vol": 5,
+          "ts": 1700002680
+        },
+        {
+          "c": "1.0994",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0995",
+          "tick_vol": 6,
+          "ts": 1700002740
+        },
+        {
+          "c": "1.0994",
+          "h": "1.0999",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 4,
+          "ts": 1700002800
+        },
+        {
+          "c": "1.0995",
+          "h": "1.1000",
+          "l": "1.0989",
+          "o": "1.0994",
+          "tick_vol": 5,
+          "ts": 1700002860
+        },
+        {
+          "c": "1.0997",
+          "h": "1.1002",
+          "l": "1.0990",
+          "o": "1.0995",
+          "tick_vol": 6,
+          "ts": 1700002920
+        }
+      ],
+      "compare_outputs": true,
+      "components": [
+        "adx",
+        "bb_close_outside",
+        "rsi_extreme"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 0,
+      "expected_trace": [
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000100
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000160
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000220
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000280
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000340
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000400
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000460
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000520
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000580
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000640
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000700
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000760
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000820
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000880
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "50",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000940
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.88235294117647058823529410",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001000
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "43.93414211438474870017331021",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001060
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "43.93414211438474870017331021",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001120
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "46.56550847871768557884963101",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001180
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.47116761382840201536170470",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001240
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "57.73867354863450549357059059",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "put",
+          "trigger_value": "1.1000",
+          "ts": 1700001300
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "50.68865353260584602535117759",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700001360
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "46.60326542772630063398198071",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700001420
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "44.66486593478379851321177925",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700001480
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "44.66486593478379851321177925",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700001540
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.21132705950437889389675420",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700001600
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.97176980796758376878240488",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700001660
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "58.07863041775487466392562247",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "25.03969506975704294718453211",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.1000",
+          "ts": 1700001720
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.08362839887078395325235390",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "26.2086610839350910922775240",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700001780
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.01798817546828543022308837",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "26.21453068477518528844191381",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700001840
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.08583304021482895930175015",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "25.72904973704783259590751826",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700001900
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.08583304021482895930175015",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "25.27824599987243366712557954",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700001960
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.58394363145075040112727765",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "25.20136718943883695938933367",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700002020
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "52.26141837637409883543290339",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "25.74381185827632885053114916",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700002080
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "58.27604314704535517784771680",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "26.99057615607071212402374392",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.1000",
+          "ts": 1700002140
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.31367717201590244793499470",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "28.14828586116549659226686763",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700002200
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.25995895712434182548602546",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "28.1299735897588578127818418",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700002260
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.33164993654012035253027749",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "27.61579774700468697515679784",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700002320
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.33164993654012035253027746",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "27.13834875016152834021925702",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700002380
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.80171771906247329568777114",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "27.03031912343771817946547266",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700002440
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "52.43098000400114633533278655",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "27.53232277185758195289162898",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700002500
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "58.39185329905097961196448349",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "28.72758938277997520282701576",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.1000",
+          "ts": 1700002560
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.44886873846011575256493075",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "29.83747980720791179205273206",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0997",
+          "ts": 1700002620
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.40230123011788649002561196",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "29.76659027180048668577805689",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700002680
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.47632463183669215201996799",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "29.19987767683758042054034761",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700002740
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.47632463183669215201996799",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "28.67364455294345317424818899",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0994",
+          "ts": 1700002800
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.92995371398706723305208267",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "28.51650008883540784949795853",
+          "stage": "NO_SIGNAL",
+          "trigger_direction": "none",
+          "trigger_value": "1.0995",
+          "ts": 1700002860
+        }
+      ],
+      "expected_trades": [],
+      "family": "F1",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "id": "f1_eurusd_m1_gate_boundary",
+      "notes": "F1 covers ADX composition gate at the permissive boundary.",
+      "params": {
+        "adx_len": "14",
+        "adx_max": "100",
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "sha256": "0d28c3e39755d37590d3f14828941629fea13968cc32026a102963d2ffc09364",
+      "tf": "M1",
+      "tf_seconds": 60
+    },
+    {
+      "asset": "EURUSD-OTC",
+      "bot_comparable": true,
+      "candidate_hash": "abb5b6efba7d0f713102dbdfe2a88df2d4fbacf63e438a312259e7b0736dba2b",
+      "candles": [
+        {
+          "c": "1.0797",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0800",
+          "tick_vol": 5,
+          "ts": 1700000100
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0797",
+          "tick_vol": 6,
+          "ts": 1700000400
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0795",
+          "tick_vol": 7,
+          "ts": 1700000700
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0799",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 5,
+          "ts": 1700001000
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 6,
+          "ts": 1700001300
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0795",
+          "tick_vol": 7,
+          "ts": 1700001600
+        },
+        {
+          "c": "1.0800",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0797",
+          "tick_vol": 5,
+          "ts": 1700001900
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0800",
+          "tick_vol": 6,
+          "ts": 1700002200
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0797",
+          "tick_vol": 7,
+          "ts": 1700002500
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0795",
+          "tick_vol": 5,
+          "ts": 1700002800
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0799",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 6,
+          "ts": 1700003100
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 7,
+          "ts": 1700003400
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0795",
+          "tick_vol": 5,
+          "ts": 1700003700
+        },
+        {
+          "c": "1.0800",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0797",
+          "tick_vol": 6,
+          "ts": 1700004000
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0800",
+          "tick_vol": 7,
+          "ts": 1700004300
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0797",
+          "tick_vol": 5,
+          "ts": 1700004600
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0795",
+          "tick_vol": 6,
+          "ts": 1700004900
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0799",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 7,
+          "ts": 1700005200
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 5,
+          "ts": 1700005500
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0795",
+          "tick_vol": 6,
+          "ts": 1700005800
+        },
+        {
+          "c": "1.0800",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0797",
+          "tick_vol": 7,
+          "ts": 1700006100
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0800",
+          "tick_vol": 5,
+          "ts": 1700006400
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0797",
+          "tick_vol": 6,
+          "ts": 1700006700
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0795",
+          "tick_vol": 7,
+          "ts": 1700007000
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0799",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 5,
+          "ts": 1700007300
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 6,
+          "ts": 1700007600
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0795",
+          "tick_vol": 7,
+          "ts": 1700007900
+        },
+        {
+          "c": "1.0800",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0797",
+          "tick_vol": 5,
+          "ts": 1700008200
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0805",
+          "l": "1.0792",
+          "o": "1.0800",
+          "tick_vol": 6,
+          "ts": 1700008500
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0797",
+          "tick_vol": 7,
+          "ts": 1700008800
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0795",
+          "tick_vol": 5,
+          "ts": 1700009100
+        },
+        {
+          "c": "1.0794",
+          "h": "1.0799",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 6,
+          "ts": 1700009400
+        },
+        {
+          "c": "1.0795",
+          "h": "1.0800",
+          "l": "1.0789",
+          "o": "1.0794",
+          "tick_vol": 7,
+          "ts": 1700009700
+        },
+        {
+          "c": "1.0797",
+          "h": "1.0802",
+          "l": "1.0790",
+          "o": "1.0795",
+          "tick_vol": 5,
+          "ts": 1700010000
+        }
+      ],
+      "compare_outputs": true,
+      "components": [
+        "ema_alignment",
+        "ema_pullback",
+        "candle_rejection"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 0,
+      "expected_trace": [
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000100
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000400
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000700
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.5",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001000
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001300
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001600
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001900
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700002200
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700002500
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700002800
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.5",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700003100
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700003400
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700003700
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700004000
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700004300
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700004600
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700004900
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.5",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700005200
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700005500
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0.000011205750479703766574353",
+          "stage": "CONFIRM",
+          "trigger_direction": "call",
+          "trigger_value": "1.079593545370442814217543645",
+          "ts": 1700005800
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": "call",
+          "regime_value": "0.000038709964719731979281558",
+          "stage": "CONFIRM",
+          "trigger_direction": "call",
+          "trigger_value": "1.079632255335162546196825203",
+          "ts": 1700006100
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": "call",
+          "regime_value": "0.000006451872841662266969028",
+          "stage": "CONFIRM",
+          "trigger_direction": "call",
+          "trigger_value": "1.079638707208004208463794231",
+          "ts": 1700006400
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "-0.000013210210286115091789927",
+          "stage": "REGIME",
+          "trigger_direction": "put",
+          "trigger_value": "1.079625496997718093372004304",
+          "ts": 1700006700
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": "put",
+          "regime_value": "-0.000021475904544580321143267",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.079604021093173513050861037",
+          "ts": 1700007000
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.5",
+          "direction": "none",
+          "regime_direction": "put",
+          "regime_value": "-0.000019430580302239338177242",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.079584590512871273712683795",
+          "ts": 1700007300
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": "put",
+          "regime_value": "-0.000008056239321073686922266",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.079576534273550200025761529",
+          "ts": 1700007600
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0.000011758640614266664213188",
+          "stage": "CONFIRM",
+          "trigger_direction": "call",
+          "trigger_value": "1.079588292914164466689974717",
+          "ts": 1700007900
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": "call",
+          "regime_value": "0.000039210198651003172383360",
+          "stage": "CONFIRM",
+          "trigger_direction": "call",
+          "trigger_value": "1.079627503112815469862358077",
+          "ts": 1700008200
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.3846153846153846153846153846",
+          "direction": "none",
+          "regime_direction": "call",
+          "regime_value": "0.000006904465446145727394469",
+          "stage": "CONFIRM",
+          "trigger_direction": "call",
+          "trigger_value": "1.079634407578261615589752546",
+          "ts": 1700008500
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4166666666666666666666666667",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "-0.000012800721739201484738338",
+          "stage": "REGIME",
+          "trigger_direction": "put",
+          "trigger_value": "1.079621606856522414105014208",
+          "ts": 1700008800
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": "put",
+          "regime_value": "-0.000021105414906896581429925",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.079600501441615517523584283",
+          "ts": 1700009100
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.5",
+          "direction": "none",
+          "regime_direction": "put",
+          "regime_value": "-0.000019095375391954049865170",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.079581406066223563473719113",
+          "ts": 1700009400
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "0.4545454545454545454545454545",
+          "direction": "none",
+          "regime_direction": "put",
+          "regime_value": "-0.000007752958687958426068487",
+          "stage": "CONFIRM",
+          "trigger_direction": "put",
+          "trigger_value": "1.079573653107535605047650626",
+          "ts": 1700009700
+        }
+      ],
+      "expected_trades": [],
+      "family": "F2",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "id": "f2_eurusdotc_m5",
+      "notes": "M5 vector proves candidate timeframe, not polling cadence, drives replay.",
+      "params": {
+        "body_max": "0.35",
+        "ema_long": "20",
+        "ema_medium": "10",
+        "ema_short": "5",
+        "pullback_len": "20",
+        "pullback_tolerance": "0.002",
+        "wick_min": "0.5"
+      },
+      "sha256": "07f104eba9d46960751df804980f0b1681bc7afbb92d57d38ac64f5f369d1c71",
+      "tf": "M5",
+      "tf_seconds": 300
+    },
+    {
+      "asset": "GBPUSD",
+      "bot_comparable": true,
+      "candidate_hash": "da4da647c015de81237a1fb66f5e01c41215d4ea7893393590025a560e7ebc31",
+      "candles": [
+        {
+          "c": "99.20",
+          "h": "99.25",
+          "l": "98.95",
+          "o": "99.15",
+          "tick_vol": 5,
+          "ts": 1700000100
+        },
+        {
+          "c": "99.40",
+          "h": "99.45",
+          "l": "99.15",
+          "o": "99.20",
+          "tick_vol": 6,
+          "ts": 1700001000
+        }
+      ],
+      "compare_outputs": true,
+      "components": [
+        "session_window",
+        "level_touch",
+        "candle_rejection"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 0,
+      "expected_trace": [
+        {
+          "confirm_direction": "call",
+          "confirm_value": "0.6666666666666666666666666667",
+          "direction": "call",
+          "regime_direction": "none",
+          "regime_value": "1",
+          "stage": "OK",
+          "trigger_direction": "call",
+          "trigger_value": "0.05",
+          "ts": 1700000100
+        }
+      ],
+      "expected_trades": [
+        {
+          "asset": "GBPUSD",
+          "direction": "call",
+          "payout_return_ratio": "0.87",
+          "profit_ratio": "0.87",
+          "ts": 1700000100,
+          "update_count_at_signal": 3,
+          "won": true
+        }
+      ],
+      "family": "F3",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "id": "f3_gbpusd_m15",
+      "notes": "M15 level-rejection vector with settlement on the next M15 bucket.",
+      "params": {
+        "body_max": "0.35",
+        "level_resistance": "101",
+        "level_support": "99",
+        "level_tolerance": "0.30",
+        "wick_min": "0.5"
+      },
+      "sha256": "c81fef074f93a6ed058d34057ade4ff54128a65d120f8b76d600d2d4ae3b5ade",
+      "tf": "M15",
+      "tf_seconds": 900
+    },
+    {
+      "asset": "USDJPY",
+      "bot_comparable": true,
+      "candidate_hash": "f92bab8d17bfe66a633a8d471dd69f340cf31f8ee30af1da420aaac5efffeb66",
+      "candles": [
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.000",
+          "tick_vol": null,
+          "ts": 1700000100
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700000160
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700000220
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700000280
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700000340
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700000400
+        },
+        {
+          "c": "145.0000",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700000460
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.0000",
+          "tick_vol": null,
+          "ts": 1700000520
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700000580
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700000640
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700000700
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700000760
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700000820
+        },
+        {
+          "c": "145.0000",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700000880
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.0000",
+          "tick_vol": null,
+          "ts": 1700000940
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700001000
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700001060
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700001120
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700001180
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700001240
+        },
+        {
+          "c": "145.0000",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700001300
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.0000",
+          "tick_vol": null,
+          "ts": 1700001360
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700001420
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700001480
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700001540
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700001600
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700001660
+        },
+        {
+          "c": "145.0000",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700001720
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.0000",
+          "tick_vol": null,
+          "ts": 1700001780
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700001840
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700001900
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700001960
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700002020
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700002080
+        },
+        {
+          "c": "145.0000",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700002140
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.0000",
+          "tick_vol": null,
+          "ts": 1700002200
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700002260
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700002320
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700002380
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700002440
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700002500
+        },
+        {
+          "c": "145.0000",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700002560
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0005",
+          "l": "144.9992",
+          "o": "145.0000",
+          "tick_vol": null,
+          "ts": 1700002620
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9997",
+          "tick_vol": null,
+          "ts": 1700002680
+        },
+        {
+          "c": "144.9994",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700002740
+        },
+        {
+          "c": "144.9994",
+          "h": "144.9999",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700002800
+        },
+        {
+          "c": "144.9995",
+          "h": "145.0000",
+          "l": "144.9989",
+          "o": "144.9994",
+          "tick_vol": null,
+          "ts": 1700002860
+        },
+        {
+          "c": "144.9997",
+          "h": "145.0002",
+          "l": "144.9990",
+          "o": "144.9995",
+          "tick_vol": null,
+          "ts": 1700002920
+        }
+      ],
+      "compare_outputs": false,
+      "components": [
+        "bb_width_ratio",
+        "range_break",
+        "tick_volume_ratio"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 0,
+      "expected_trace": [
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000100
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000160
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000220
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000280
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000340
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000400
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000460
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000520
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000580
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000640
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000700
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000760
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000820
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000880
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000940
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001000
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001060
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001120
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001180
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700001240
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001300
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001360
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001420
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001480
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001540
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001600
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001660
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001720
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001780
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001840
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001900
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001960
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002020
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002080
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002140
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002200
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002260
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": null,
+          "regime_value": null,
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002320
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "1",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002380
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "1.000000068965709869741360312",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002440
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0.9000704759258066841650883150",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002500
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "1.000000068965709869741360312",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002560
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "1",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002620
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0.9808288587255909997727492589",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002680
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0.9808288587255909997727492589",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002740
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "1",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002800
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "1.000000068965709869741360312",
+          "stage": "TICK_VOLUME_UNAVAILABLE",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700002860
+        }
+      ],
+      "expected_trades": [],
+      "family": "F4",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "id": "f4_usdjpy_missing_volume",
+      "notes": "Missing tick volume must block before execution without changing formulas.",
+      "params": {
+        "bb_k": "2.0",
+        "bb_len": "20",
+        "break_len": "20",
+        "volume_len": "20",
+        "volume_min": "1.5",
+        "width_median_len": "20",
+        "width_ratio_max": "1.0"
+      },
+      "sha256": "381471ba328cf83f987c3c79e84eaf0d08b568ce63d134215fa02e31bc74700c",
+      "tf": "M1",
+      "tf_seconds": 60
+    },
+    {
+      "asset": "EURJPY",
+      "bot_comparable": true,
+      "candidate_hash": "b0efd3338e37ba71d073ec7f03db24b8b783a5c83164e9ef9bd8786e5550630b",
+      "candles": [
+        {
+          "c": "161.9997",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "162.000",
+          "tick_vol": 6,
+          "ts": 1700000100
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9997",
+          "tick_vol": 7,
+          "ts": 1700000160
+        },
+        {
+          "c": "161.9994",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9995",
+          "tick_vol": 8,
+          "ts": 1700000220
+        },
+        {
+          "c": "161.9994",
+          "h": "161.9999",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 6,
+          "ts": 1700000280
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 7,
+          "ts": 1700000340
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9995",
+          "tick_vol": 8,
+          "ts": 1700000400
+        },
+        {
+          "c": "162.0000",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "161.9997",
+          "tick_vol": 6,
+          "ts": 1700000460
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "162.0000",
+          "tick_vol": 7,
+          "ts": 1700000520
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9997",
+          "tick_vol": 8,
+          "ts": 1700000580
+        },
+        {
+          "c": "161.9994",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9995",
+          "tick_vol": 6,
+          "ts": 1700000640
+        },
+        {
+          "c": "161.9994",
+          "h": "161.9999",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 7,
+          "ts": 1700000700
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 8,
+          "ts": 1700000760
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9995",
+          "tick_vol": 6,
+          "ts": 1700000820
+        },
+        {
+          "c": "162.0000",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "161.9997",
+          "tick_vol": 7,
+          "ts": 1700000880
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "162.0000",
+          "tick_vol": 8,
+          "ts": 1700000940
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9997",
+          "tick_vol": 6,
+          "ts": 1700001000
+        },
+        {
+          "c": "161.9994",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9995",
+          "tick_vol": 7,
+          "ts": 1700001060
+        },
+        {
+          "c": "161.9994",
+          "h": "161.9999",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 8,
+          "ts": 1700001120
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 6,
+          "ts": 1700001180
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9995",
+          "tick_vol": 7,
+          "ts": 1700001240
+        },
+        {
+          "c": "162.0000",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "161.9997",
+          "tick_vol": 8,
+          "ts": 1700001300
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "162.0000",
+          "tick_vol": 6,
+          "ts": 1700001360
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9997",
+          "tick_vol": 7,
+          "ts": 1700001420
+        },
+        {
+          "c": "161.9994",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9995",
+          "tick_vol": 8,
+          "ts": 1700001480
+        },
+        {
+          "c": "161.9994",
+          "h": "161.9999",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 6,
+          "ts": 1700001540
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0000",
+          "l": "161.9989",
+          "o": "161.9994",
+          "tick_vol": 7,
+          "ts": 1700001600
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9995",
+          "tick_vol": 8,
+          "ts": 1700001660
+        },
+        {
+          "c": "162.0000",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "161.9997",
+          "tick_vol": 6,
+          "ts": 1700001720
+        },
+        {
+          "c": "161.9997",
+          "h": "162.0005",
+          "l": "161.9992",
+          "o": "162.0000",
+          "tick_vol": 7,
+          "ts": 1700001780
+        },
+        {
+          "c": "161.9995",
+          "h": "162.0002",
+          "l": "161.9990",
+          "o": "161.9997",
+          "tick_vol": 8,
+          "ts": 1700001840
+        }
+      ],
+      "compare_outputs": true,
+      "components": [
+        "session_window",
+        "quadrant_majority",
+        "rsi_extreme"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 0,
+      "expected_trace": [
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000100
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000160
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000220
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": null,
+          "trigger_value": null,
+          "ts": 1700000280
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000340
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000400
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000460
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000520
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "put",
+          "trigger_value": "-1",
+          "ts": 1700000580
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "put",
+          "trigger_value": "-3",
+          "ts": 1700000640
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000700
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700000760
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "put",
+          "trigger_value": "-1",
+          "ts": 1700000820
+        },
+        {
+          "confirm_direction": null,
+          "confirm_value": null,
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "WARMING_UP",
+          "trigger_direction": "call",
+          "trigger_value": "1",
+          "ts": 1700000880
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "50",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "call",
+          "trigger_value": "1",
+          "ts": 1700000940
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "45.88235294117647058823529410",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001000
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "43.93414211438474870017331021",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001060
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "43.93414211438474870017331021",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001120
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "46.56550847871768557884963101",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001180
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.47116761382840201536170470",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "call",
+          "trigger_value": "2",
+          "ts": 1700001240
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "57.73867354863450549357059059",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001300
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "50.68865353260584602535117759",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001360
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "46.60326542772630063398198071",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "call",
+          "trigger_value": "1",
+          "ts": 1700001420
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "44.66486593478379851321177925",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "put",
+          "trigger_value": "-1",
+          "ts": 1700001480
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "44.66486593478379851321177925",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "put",
+          "trigger_value": "-2",
+          "ts": 1700001540
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "47.21132705950437889389675420",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001600
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.97176980796758376878240488",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001660
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "58.07863041775487466392562247",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001720
+        },
+        {
+          "confirm_direction": "none",
+          "confirm_value": "51.08362839887078395325235390",
+          "direction": "none",
+          "regime_direction": "none",
+          "regime_value": "0",
+          "stage": "OUTSIDE_HOURS",
+          "trigger_direction": "none",
+          "trigger_value": "0",
+          "ts": 1700001780
+        }
+      ],
+      "expected_trades": [],
+      "family": "F5",
+      "hours_utc": [
+        0,
+        1
+      ],
+      "id": "f5_eurjpy_outside_hours",
+      "notes": "Hours are part of the manifest recipe and block at candle close time.",
+      "params": {
+        "quadrant_window": "3",
+        "rsi_hi": "70",
+        "rsi_len": "14",
+        "rsi_lo": "30"
+      },
+      "sha256": "c732cddc13205dd9c4fd48573e9420f0620c191bfac78c57ce0b24f480ac7915",
+      "tf": "M1",
+      "tf_seconds": 60
+    },
+    {
+      "asset": "AUDUSD-OTC",
+      "bot_comparable": true,
+      "candidate_hash": "2aef199a02ee2fd874ed7fa94eb7ffd8898efb186e1123d2712c327c13b90e91",
+      "candles": [
+        {
+          "c": "99.20",
+          "h": "99.25",
+          "l": "98.95",
+          "o": "99.15",
+          "tick_vol": 5,
+          "ts": 1700000100
+        },
+        {
+          "c": "99.20",
+          "h": "99.25",
+          "l": "99.15",
+          "o": "99.20",
+          "tick_vol": 6,
+          "ts": 1700000160
+        }
+      ],
+      "compare_outputs": true,
+      "components": [
+        "session_window",
+        "level_touch",
+        "candle_rejection"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 0,
+      "expected_trace": [
+        {
+          "confirm_direction": "call",
+          "confirm_value": "0.6666666666666666666666666667",
+          "direction": "call",
+          "regime_direction": "none",
+          "regime_value": "1",
+          "stage": "OK",
+          "trigger_direction": "call",
+          "trigger_value": "0.05",
+          "ts": 1700000100
+        }
+      ],
+      "expected_trades": [
+        {
+          "asset": "AUDUSD-OTC",
+          "direction": "call",
+          "payout_return_ratio": "0.87",
+          "profit_ratio": "-1",
+          "ts": 1700000100,
+          "update_count_at_signal": 3,
+          "won": false
+        }
+      ],
+      "family": "F3",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "id": "f3_tie_is_loss",
+      "notes": "A close-to-close tie at t+1 is settled as a loss.",
+      "params": {
+        "body_max": "0.35",
+        "level_resistance": "101",
+        "level_support": "99",
+        "level_tolerance": "0.30",
+        "wick_min": "0.5"
+      },
+      "sha256": "4fa35de3eb0e0c79dfbce544cc94aefc79aa6b4cdafd24fbe1687eb79489b7f8",
+      "tf": "M1",
+      "tf_seconds": 60
+    },
+    {
+      "asset": "USDCHF-OTC",
+      "bot_comparable": false,
+      "candidate_hash": "1f8f7dbf42e15c37a2c2904e1c06a9021596a72372776a21ac3719bf7192eac6",
+      "candles": [
+        {
+          "c": "99.20",
+          "h": "99.25",
+          "l": "98.95",
+          "o": "99.15",
+          "tick_vol": 5,
+          "ts": 1700000100
+        },
+        {
+          "c": "99.40",
+          "h": "99.45",
+          "l": "99.15",
+          "o": "99.20",
+          "tick_vol": 6,
+          "ts": 1700000220
+        }
+      ],
+      "compare_outputs": true,
+      "components": [
+        "session_window",
+        "level_touch",
+        "candle_rejection"
+      ],
+      "excluded_missing_payout": 0,
+      "excluded_settlement_gap": 1,
+      "expected_trace": [
+        {
+          "confirm_direction": "call",
+          "confirm_value": "0.6666666666666666666666666667",
+          "direction": "call",
+          "regime_direction": "none",
+          "regime_value": "1",
+          "stage": "SETTLEMENT_GAP",
+          "trigger_direction": "call",
+          "trigger_value": "0.05",
+          "ts": 1700000100
+        }
+      ],
+      "expected_trades": [],
+      "family": "F3",
+      "hours_utc": [
+        0,
+        24
+      ],
+      "id": "f3_settlement_gap",
+      "notes": "The next row after a gap is not a valid t+1 settlement candle.",
+      "params": {
+        "body_max": "0.35",
+        "level_resistance": "101",
+        "level_support": "99",
+        "level_tolerance": "0.30",
+        "wick_min": "0.5"
+      },
+      "sha256": "8b8472b2a5cbe67ff35fe18cc5dc422b39739794d11f19119b770228c27c21ad",
+      "tf": "M1",
+      "tf_seconds": 60
+    }
+  ],
+  "contract_version": "replay-v1",
+  "coverage": {
+    "assets": [
+      "AUDUSD-OTC",
+      "EURJPY",
+      "EURUSD",
+      "EURUSD-OTC",
+      "GBPUSD",
+      "USDCHF-OTC",
+      "USDJPY"
+    ],
+    "edge_cases": [
+      "composition_gate_boundary",
+      "missing_tick_volume",
+      "settlement_gap",
+      "tie_is_loss",
+      "outside_hours",
+      "prefix_reinitialization"
+    ],
+    "families": [
+      "F1",
+      "F2",
+      "F3",
+      "F4",
+      "F5"
+    ],
+    "timeframes": [
+      "M1",
+      "M15",
+      "M5"
+    ]
+  },
+  "primitives_version": "1.0.0",
+  "semantics": {
+    "approval_rule": "vector_scan_never_approves_manifest_entries",
+    "broker_execution_note": "Replay simulates close-to-close outcomes only; live broker entry price and expiration are separate execution evidence.",
+    "decision_time": "closed_candle_t",
+    "hash_rule": "sha256(canonical_json_without_sha256)",
+    "settlement_gap_rule": "next_row_after_gap_is_not_t_plus_1",
+    "settlement_time": "next_complete_timeframe_bucket"
+  },
+  "sha256": "1059d58db4ead251e9be720218427b5dcb883437142d1af76a07ce43782acdde"
+}

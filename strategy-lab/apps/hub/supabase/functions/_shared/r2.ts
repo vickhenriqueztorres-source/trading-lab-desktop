@@ -76,6 +76,55 @@ export class R2MirrorTarget implements MirrorTarget {
       throw new Error("R2_MIRROR_FAILED");
     }
   }
+
+  async get(path: string): Promise<Uint8Array> {
+    const url = new URL(`${trimTrailingSlash(this.config.endpoint)}/${this.config.bucket}/${path}`);
+    const now = new Date();
+    const amzDate = amzDateStamp(now);
+    const dateStamp = amzDate.slice(0, 8);
+    const payloadHash = await sha256Hex(new Uint8Array());
+    const headers = new Headers({
+      host: url.host,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    });
+    const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+    const canonicalHeaders = [
+      `host:${headers.get("host")}`,
+      `x-amz-content-sha256:${headers.get("x-amz-content-sha256")}`,
+      `x-amz-date:${headers.get("x-amz-date")}`,
+      "",
+    ].join("\n");
+    const canonicalRequest = [
+      "GET",
+      encodePath(url.pathname),
+      "",
+      canonicalHeaders,
+      signedHeaders,
+      payloadHash,
+    ].join("\n");
+    const credentialScope = `${dateStamp}/${this.config.region}/s3/aws4_request`;
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      credentialScope,
+      await sha256Hex(new TextEncoder().encode(canonicalRequest)),
+    ].join("\n");
+    const signingKey = await signatureKey(
+      this.config.secretAccessKey,
+      dateStamp,
+      this.config.region,
+      "s3",
+    );
+    const signature = bytesToHex(await hmacBytes(signingKey, stringToSign));
+    headers.set(
+      "authorization",
+      `AWS4-HMAC-SHA256 Credential=${this.config.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    );
+    const response = await fetch(url, { method: "GET", headers });
+    if (!response.ok) throw new Error("R2_MIRROR_VERIFY_FAILED");
+    return new Uint8Array(await response.arrayBuffer());
+  }
 }
 
 export function r2ConfigFromDeno(): R2Config {

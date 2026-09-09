@@ -17,12 +17,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from apps.core.live_monitor import STRATEGY_DEMOTED_BY_SPRT, LiveMonitor
-from apps.core.manifest_catalog import DynamicManifestCatalog, parse_strategy_entry
+from apps.core.live_monitor import LiveMonitor
+from apps.core.manifest_catalog import DynamicManifestCatalog
 from apps.core.manifest_client import (
+    DEFAULT_MANIFEST_PRIMARY_URL,
     Accepted,
     ClockProtocol,
     HttpResponse,
@@ -73,7 +73,9 @@ def _sign_manifest(manifest_dict: dict[str, Any], private_key: Ed25519PrivateKey
     return json.dumps(signed_doc).encode("utf-8")
 
 
-def _make_strategy(key: str, display_name: str, asset: str, status: str = "approved") -> dict[str, Any]:
+def _make_strategy(
+    key: str, display_name: str, asset: str, status: str = "approved"
+) -> dict[str, Any]:
     return {
         "key": key,
         "family": "F1",
@@ -116,7 +118,9 @@ def _make_sample_manifest(
     key_id: str,
     private_key: Ed25519PrivateKey,
     strategies: list[dict[str, Any]],
-    primitives_parity_sha256: str = "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+    primitives_parity_sha256: str = (
+        "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10"
+    ),
 ) -> bytes:
     doc = {
         "schema_version": 1,
@@ -191,9 +195,7 @@ def test_checklist_item_4_offline_cache_resilience_1h(tmp_path: Path) -> None:
 
     strat = _make_strategy("EURUSD-OTC:F1:cached", "F1 EURUSD M1", "EURUSD-OTC")
     raw_v1 = _make_sample_manifest(1, "A", priv_key_a, [strat])
-    http.responses["https://storage.dualtrade.com/manifests/latest.json"] = HttpResponse(
-        status_code=200, body=raw_v1
-    )
+    http.responses[DEFAULT_MANIFEST_PRIMARY_URL] = HttpResponse(status_code=200, body=raw_v1)
 
     # Initial online poll saves to cache
     client = ManifestClient(
@@ -239,7 +241,7 @@ def test_checklist_item_5_payout_gate_blocks_under_payout_min() -> None:
     assert result.reason_code == PAYOUT_BELOW_VALIDATED_EDGE
     # Must display explicit pt-BR status message containing 'aguardando'
     assert "aguardando" in result.message
-    assert "Opera com payout ≥ 85%. Agora: 80% — aguardando." == result.message
+    assert result.message == "Opera com payout ≥ 85%. Agora: 80% — aguardando."
 
 
 def test_checklist_item_6_sprt_demotes_under_p_min_in_under_120_ops() -> None:

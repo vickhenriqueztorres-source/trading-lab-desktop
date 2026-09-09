@@ -88,6 +88,10 @@ class HoldoutManager:
         self._db = db_connection
         self._opened_runs: set[str] = set()
         self._burned_ranges: set[tuple[int, int]] = set()
+        if self._db is not None:
+            cur = self._db.cursor()
+            cur.execute("select from_ts, to_ts from public.holdout_burned")
+            self._burned_ranges.update((int(row[0]), int(row[1])) for row in cur.fetchall())
 
     def open_once(self, run_id: str, holdout_candles: Sequence[Candle]) -> Sequence[Candle]:
         """Open the sealed holdout strictly once per run. Second invocation fails closed."""
@@ -111,21 +115,18 @@ class HoldoutManager:
         """Register range as burned in holdout_burned so future rounds use different intervals."""
         self._burned_ranges.add(range_ts)
         if self._db is not None:
-            try:
-                from_ts, to_ts = range_ts
-                range_id = f"{run_id}_{from_ts}_{to_ts}" if run_id else f"{from_ts}_{to_ts}"
-                cur = self._db.cursor()
-                cur.execute(
-                    """
-                    INSERT INTO public.holdout_burned (range_id, from_ts, to_ts, burned_at, run_id)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (range_id) DO NOTHING
-                    """,
-                    (range_id, from_ts, to_ts, burned_at or to_ts, run_id or None),
-                )
-                self._db.commit()
-            except Exception:
-                pass
+            from_ts, to_ts = range_ts
+            range_id = f"{run_id}_{from_ts}_{to_ts}" if run_id else f"{from_ts}_{to_ts}"
+            cur = self._db.cursor()
+            cur.execute(
+                """
+                INSERT INTO public.holdout_burned (range_id, from_ts, to_ts, burned_at, run_id)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (range_id) DO NOTHING
+                """,
+                (range_id, from_ts, to_ts, burned_at or to_ts, run_id or None),
+            )
+            self._db.commit()
 
     def is_burned(self, range_ts: tuple[int, int]) -> bool:
         """Return True if range has been burned or overlaps significantly with burned ranges."""

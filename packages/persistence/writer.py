@@ -2218,6 +2218,16 @@ class SingleDatabaseWriter:
                 ).fetchall()
             ]
 
+    def order_for_id(self, order_id: str) -> dict[str, Any] | None:
+        """Read one order projection for non-critical telemetry enrichment."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT o.*, ti.symbol AS intent_symbol FROM orders o "
+                "JOIN trade_intents ti ON ti.intent_id=o.intent_id WHERE o.order_id=?",
+                (order_id,),
+            ).fetchone()
+            return None if row is None else dict(row)
+
     def consume_manifest_orders(
         self,
         update: Callable[[dict[str, Any], dict[str, Any] | None, int], dict[str, Any]],
@@ -2363,11 +2373,74 @@ class SingleDatabaseWriter:
             self._connection.commit()
             return int(cur.lastrowid or 0)
 
+    def enqueue_outcome_v2(
+        self,
+        *,
+        event_id: str,
+        strategy_key: str,
+        recipe_revision: int,
+        manifest_version: int,
+        execution_semantics_version: str,
+        primitives_version: str,
+        asset: str,
+        timeframe_s: int,
+        product: str,
+        account_environment: str,
+        source: str,
+        signal_group_id: str,
+        ts: int,
+        won: bool,
+        payout_pct: str,
+        created_at: str,
+        max_pending: int = 10_000,
+    ) -> int:
+        """Persist a complete terminal evidence record exactly once.
+
+        This queue is telemetry only; the authoritative order/settlement remains
+        in ``orders``.  A bounded queue protects the desktop when the Hub is down.
+        """
+        if max_pending <= 0:
+            raise ValueError("outcome queue bound must be positive")
+        with self._lock:
+            pending = self._connection.execute(
+                "SELECT COUNT(*) AS count FROM outcomes_queue WHERE status='pending'"
+            ).fetchone()
+            if pending is not None and int(pending["count"]) >= max_pending:
+                raise RuntimeError("OUTCOMES_QUEUE_FULL")
+            cur = self._connection.execute(
+                """INSERT OR IGNORE INTO outcomes_queue (
+                    event_id, strategy_key, recipe_revision, manifest_version,
+                    execution_semantics_version, primitives_version, asset, timeframe_s,
+                    product, account_environment, source, signal_group_id, ts, won,
+                    payout_pct, created_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                (
+                    event_id,
+                    strategy_key,
+                    recipe_revision,
+                    manifest_version,
+                    execution_semantics_version,
+                    primitives_version,
+                    asset,
+                    timeframe_s,
+                    product,
+                    account_environment,
+                    source,
+                    signal_group_id,
+                    ts,
+                    1 if won else 0,
+                    str(payout_pct),
+                    created_at,
+                ),
+            )
+            self._connection.commit()
+            return int(cur.lastrowid or 0)
+
     def fetch_pending_outcomes(self, limit: int = 500) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT id, strategy_key, ts, won, payout_pct, created_at
+                SELECT *
                 FROM outcomes_queue
                 WHERE status = 'pending'
                 ORDER BY id ASC
@@ -2376,6 +2449,17 @@ class SingleDatabaseWriter:
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def expire_outcomes(self, cutoff_ts: int) -> int:
+        """Remove only telemetry older than Hub's accepted seven-day window."""
+        with self._lock:
+            cur = self._connection.execute(
+                "DELETE FROM outcomes_queue WHERE status='pending' "
+                "AND event_id IS NOT NULL AND ts < ?",
+                (cutoff_ts,),
+            )
+            self._connection.commit()
+            return int(cur.rowcount)
 
     def ack_outcomes(self, ids: Sequence[int]) -> None:
         if not ids:

@@ -96,7 +96,7 @@ class HealthGate:
             global_reasons = set(self._blockers)
             if global_reasons:
                 return self._state_from_reasons(global_reasons)
-            normalized_broker = broker.upper()
+            normalized_broker = self.normalize_broker(broker)
             key = (normalized_broker, str(account_id))
             scoped_reasons = set(self._scoped_blockers.get(key, set()))
             # Broker-wide market-data readiness applies to every financial account.
@@ -115,6 +115,12 @@ class HealthGate:
         if not s_state.is_open:
             return False, s_state.reason_code
         return True, None
+
+    def contains_global(self, reason_code: str) -> bool:
+        """Return whether a blocker belongs to the global authority scope."""
+
+        with self._lock:
+            return reason_code in self._blockers
 
     def register_broker_health(
         self,
@@ -193,7 +199,7 @@ class HealthGate:
             return any(reason_code in reasons for reasons in self._scoped_blockers.values())
 
     def block_scope(self, broker: str, account_id: str, reason_code: str) -> None:
-        key = (broker.upper(), str(account_id))
+        key = (self.normalize_broker(broker), str(account_id))
         with self._lock:
             blockers = self._scoped_blockers.setdefault(key, set())
             changed = reason_code not in blockers
@@ -207,7 +213,7 @@ class HealthGate:
             )
 
     def clear_scope(self, broker: str, account_id: str, reason_code: str) -> None:
-        key = (broker.upper(), str(account_id))
+        key = (self.normalize_broker(broker), str(account_id))
         with self._lock:
             blockers = self._scoped_blockers.get(key)
             if blockers is None:
@@ -255,6 +261,18 @@ class HealthGate:
                 scoped_states=scoped,
                 active_blockers=tuple(sorted(all_blockers)),
             )
+
+    @staticmethod
+    def normalize_broker(broker: str) -> str:
+        """Map transport aliases to the canonical domain broker identifier.
+
+        The IQ worker historically advertises ``IQOPTION`` on the wire while the
+        domain enum is ``IQ_OPTION``.  Health ownership must not split those two
+        spellings into independent scopes.
+        """
+
+        normalized = str(broker).upper()
+        return "IQ_OPTION" if normalized == "IQOPTION" else normalized
 
 
 CoreHealthGate = HealthGate

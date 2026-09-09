@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, getcontext
-
-import numpy as np
 
 getcontext().prec = 28
 
@@ -136,10 +135,14 @@ def permutation_test(
     wins = sum(1 for won in trades_won if won)
     real_p_hat = Decimal(wins) / Decimal(n)
 
-    rng = np.random.default_rng(seed)
-    # Simulate null distribution of win counts under null_p
-    simulated_wins = rng.binomial(n=n, p=float(null_p), size=num_permutations)
-    simulated_p_hats = sorted(Decimal(int(w)) / Decimal(n) for w in simulated_wins)
+    rng = random.Random(seed)
+    scale = 10**12
+    threshold = int((null_p * Decimal(scale)).to_integral_value())
+    simulated_p_hats: list[Decimal] = []
+    for _ in range(num_permutations):
+        simulated_wins = sum(1 for _item in range(n) if rng.randrange(scale) < threshold)
+        simulated_p_hats.append(Decimal(simulated_wins) / Decimal(n))
+    simulated_p_hats.sort()
 
     # 99th percentile index
     p99_idx = int(0.99 * num_permutations)

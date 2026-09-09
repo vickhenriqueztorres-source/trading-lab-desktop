@@ -8,7 +8,8 @@ from decimal import Decimal
 
 from primitives import Candle
 
-from strategy_lab.collect.iq_client import LAB_ROOT, IQClientProtocol
+from strategy_lab.collect.iq_client import LAB_ROOT, FakeIQClient, IQClient, IQClientProtocol
+from strategy_lab.collect.recorded_canary import RecordedCanary, RecordedCanaryError
 
 CANARY = [
     ("EURUSD-OTC", 1700000040),
@@ -30,7 +31,15 @@ class CanaryMismatch(Exception):
         return "COL_CANARY_MISMATCH"
 
 
-def run_canary(client: IQClientProtocol) -> None:
+def run_canary(client: IQClientProtocol, *, reference: RecordedCanary | None = None) -> None:
+    if reference is not None:
+        for candle in reference.candles:
+            observed = client.fetch_candles(reference.asset, 60, 1, candle.ts + 60)
+            if observed != [candle]:
+                raise CanaryMismatch("different", reference.asset, candle.ts)
+        return
+    if isinstance(client, IQClient) and not isinstance(client, FakeIQClient):
+        raise RecordedCanaryError("COL_RECORDED_CANARY_REQUIRED")
     expected = _load_expected()
     for asset, ts in CANARY:
         observed = client.fetch_candles(asset, 60, 1, ts + 60)

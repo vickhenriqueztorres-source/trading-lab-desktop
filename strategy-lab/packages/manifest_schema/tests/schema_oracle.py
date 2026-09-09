@@ -4,12 +4,31 @@ Test-only jsonschema dependency. No Pydantic validation, production adapters or 
 Deno must independently implement these rules and pass the public vectors before deployment.
 """
 
+import hashlib
+import json
 import re
 from decimal import Decimal, localcontext
 
 from jsonschema import Draft202012Validator, ValidationError, validators
 
 POLICY_ID = "urn:strategy-lab:manifest-policy:v1"
+FAMILY_COMPONENTS = {
+    "F1": ("adx", "bb_close_outside", "rsi_extreme"),
+    "F2": ("ema_alignment", "ema_pullback", "candle_rejection"),
+    "F3": ("session_window", "level_touch", "candle_rejection"),
+    "F4": ("bb_width_ratio", "range_break", "tick_volume_ratio"),
+    "F5": ("session_window", "quadrant_majority", "rsi_extreme"),
+}
+RECIPE_FIELDS = (
+    "family",
+    "asset",
+    "timeframe",
+    "hours_utc",
+    "params",
+    "composition",
+    "capabilities",
+    "warmup_required",
+)
 
 
 def decimal_range(validator, spec, instance, schema):
@@ -94,8 +113,41 @@ def policy(validator, policy_id, instance, schema):
                     yield ValidationError("MANIFEST_PAYOUT_NOT_MINIMUM")
             if not 0 < _finite_decimal(entry["management"]["stake_pct"]) <= 100:
                 yield ValidationError("MANIFEST_STAKE_RANGE")
+            if instance.get("schema_revision") == "1.2":
+                composition = entry["composition"]
+                actual = (
+                    composition["regime"],
+                    composition["trigger"],
+                    composition["confirm"],
+                )
+                if actual != FAMILY_COMPONENTS[entry["family"]]:
+                    yield ValidationError("MANIFEST_COMPOSITION_MISMATCH")
+                needs_volume = "tick_volume_ratio" in FAMILY_COMPONENTS[entry["family"]]
+                if entry["capabilities"]["tick_volume"] != needs_volume:
+                    yield ValidationError("MANIFEST_VOLUME_CAPABILITY_MISMATCH")
+                payload = {name: entry[name] for name in RECIPE_FIELDS}
+                encoded = json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8")
+                expected = "sha256:" + hashlib.sha256(encoded).hexdigest()
+                if entry["recipe_fingerprint"] != expected:
+                    yield ValidationError("MANIFEST_RECIPE_FINGERPRINT")
         if len(keys) != len(set(keys)):
             yield ValidationError("MANIFEST_DUPLICATE_KEY")
+        dataset = instance.get("dataset_evidence")
+        if instance.get("schema_revision") == "1.2" and isinstance(dataset, dict):
+            if dataset["to_ts"] <= dataset["from_ts"]:
+                yield ValidationError("MANIFEST_DATASET_RANGE")
+            if not 0 <= _finite_decimal(dataset["coverage_pct"]) <= 100:
+                yield ValidationError("MANIFEST_COVERAGE_RANGE")
+            if dataset["kind"] == "synthetic" and any(
+                entry["status"] == "approved" for entry in instance["strategies"]
+            ):
+                yield ValidationError("MANIFEST_SYNTHETIC_APPROVAL")
     except (KeyError, ValueError, TypeError, ArithmeticError, IndexError):
         pass  # Let JSON Schema report malformed structure rather than throwing.
 

@@ -27,7 +27,16 @@ from uuid import uuid4
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect as websocket_connect
 
-from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot, MarketCandle
+from packages.domain.market import (
+    BrokerAccountBalance,
+    BrokerClockSnapshot,
+    BrokerInstrument,
+    BrokerInstrumentAvailability,
+    BrokerInstrumentCatalog,
+    BrokerInstrumentProduct,
+    BrokerMarketKind,
+    MarketCandle,
+)
 from packages.domain.models import Broker
 from packages.security import SecretValue
 
@@ -50,9 +59,13 @@ IQOPTION_WEBSOCKET_URLS: tuple[str, ...] = (
 )
 IQOPTION_WEBSOCKET_RECONNECT_LIMIT = 5
 IQOPTION_WEBSOCKET_RECONNECT_WINDOW_SECONDS = 15 * 60
+IQOPTION_DIGITAL_CATALOG_RETRY_SECONDS = 15 * 60.0
+IQOPTION_CLOCK_MAX_AGE_SECONDS = 30.0
+IQOPTION_CLOCK_PROBE_INTERVAL_SECONDS = 10.0
+IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS = 2.0
 
-# Active identifiers are broker protocol values, not trading preferences.  The
-# list is intentionally limited to assets exposed by the desktop IQ radar.
+# Legacy bootstrap only. The first successful session catalogue atomically
+# replaces this map; it is retained for old fixtures and initial compatibility.
 IQOPTION_ACTIVE_IDS: dict[str, int] = {
     "EURUSD": 1,
     "EURJPY": 4,
@@ -95,6 +108,8 @@ class IQOptionExternalError(RuntimeError):
 
 
 class IQOptionWebSocket(Protocol):
+    def ping(self) -> threading.Event: ...
+
     def send(self, message: str) -> None: ...
 
     def recv(self, timeout: float | None = None) -> str | bytes: ...
@@ -198,12 +213,18 @@ def _websocket_factory() -> IQOptionWebSocket:
                 close_timeout=3,
                 ping_interval=20,
                 ping_timeout=20,
-                max_size=1_048_576,
+                max_size=IQOPTION_MAX_MESSAGE_BYTES,
+                max_queue=4,
                 proxy=True,
             )
         except (OSError, TimeoutError, WebSocketException) as exc:
             last_error = exc
     raise IQOptionExternalError("IQOPTION_WEBSOCKET_UNAVAILABLE") from last_error
+
+
+# Initialization contains the entire broker catalogue, not one asset. Bound the
+# decoded message explicitly (including compressed frames); never disable limits.
+IQOPTION_MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
 class IQOptionCommunityReadOnlySession:
@@ -229,10 +250,16 @@ class IQOptionCommunityReadOnlySession:
         self._wall_time = wall_time
         self._lock = threading.Lock()
         self._connect_lock = threading.Lock()
+        self._clock_query_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._betinfo_query_lock = threading.Lock()
         self._options_query_lock = threading.Lock()
+        self._initialization_query_lock = threading.Lock()
+        self._initialization_pending: tuple[str, queue.Queue[dict[str, Any]]] | None = None
+        self._underlying_query_lock = threading.Lock()
+        self._underlying_pending: tuple[str, queue.Queue[dict[str, Any]]] | None = None
+        self._disconnect_reason = "IQOPTION_WEBSOCKET_UNAVAILABLE"
         self._stop = threading.Event()
         self._disconnected = threading.Event()
         self._websocket: IQOptionWebSocket | None = None
@@ -244,11 +271,12 @@ class IQOptionCommunityReadOnlySession:
         self._authenticated = False
         self._profile: dict[str, object] | None = None
         self._balances: list[dict[str, object]] | None = None
-        self._server_epoch: int | None = None
+        self._server_epoch: Decimal | None = None
         self._server_epoch_received_at = 0.0
         self._server_epoch_monotonic = 0.0
         self._connected_at_monotonic = 0.0
-        self._connect_round_trip = 0.0
+        self._clock_round_trip: float | None = None
+        self._clock_probe_at = float("-inf")
         self._pending: dict[str, queue.Queue[dict[str, Any]]] = {}
         self._contract_events: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
         # Legacy api_game_betinfo responses do not reliably echo request_id.
@@ -256,12 +284,24 @@ class IQOptionCommunityReadOnlySession:
         # broker option id before accepting any result.
         self._betinfo_responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
         self._options_responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
+        # Static ids are a bounded bootstrap for the first catalogue request.
+        # Once a catalogue is observed, only the broker's current session map
+        # is authoritative.
+        self._active_ids = dict(IQOPTION_ACTIVE_IDS)
+        self._catalog_refreshed = False
+        self._catalog_generation = 0
+        self._digital_catalog_response: dict[str, Any] | None = None
+        self._digital_catalog_retry_after_mono = 0.0
 
     @property
     def is_connected(self) -> bool:
         return (
             self._authenticated and self._websocket is not None and not self._disconnected.is_set()
         )
+
+    @property
+    def disconnect_reason(self) -> str:
+        return self._disconnect_reason
 
     def connect(self, timeout: float = 20.0) -> IQOptionConnectionSnapshot:
         if timeout <= 0:
@@ -315,7 +355,6 @@ class IQOptionCommunityReadOnlySession:
         session_cookie: SecretValue,
         timeout: float,
     ) -> IQOptionConnectionSnapshot:
-        started = self._monotonic()
         self._close_transport(clear_session=False)
         with self._lock:
             self._authenticated = False
@@ -324,10 +363,17 @@ class IQOptionCommunityReadOnlySession:
             self._server_epoch = None
             self._server_epoch_received_at = 0.0
             self._server_epoch_monotonic = 0.0
+            self._clock_round_trip = None
+            self._clock_probe_at = float("-inf")
+            self._active_ids = dict(IQOPTION_ACTIVE_IDS)
+            self._catalog_refreshed = False
+            self._digital_catalog_response = None
+            self._digital_catalog_retry_after_mono = 0.0
         websocket = self._websocket_factory()
         self._websocket = websocket
         self._stop.clear()
         self._disconnected.clear()
+        self._disconnect_reason = "IQOPTION_WEBSOCKET_UNAVAILABLE"
         try:
             self._send(
                 {
@@ -365,7 +411,6 @@ class IQOptionCommunityReadOnlySession:
             raise
 
         self._connected_at_monotonic = self._monotonic()
-        self._connect_round_trip = max(0.0, self._connected_at_monotonic - started)
         self._reader = threading.Thread(
             target=self._reader_loop,
             name="iqoption-read-only-receiver",
@@ -404,29 +449,55 @@ class IQOptionCommunityReadOnlySession:
         )
 
     def get_clock(self) -> BrokerClockSnapshot:
+        """Fresh broker push time + bounded, correlated WebSocket Ping/Pong RTT.
+
+        Connection setup is not an RTT measurement. A Pong proves transport
+        latency, not server time: both it and a fresh broker timestamp are required.
+        Cache only the probe for ten seconds; never substitute the PC's clock.
+        """
+        with self._clock_query_lock:
+            return self._get_clock_locked()
+
+    def _get_clock_locked(self) -> BrokerClockSnapshot:
+        websocket = self._websocket
+        if websocket is None or not self.is_connected:
+            raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
+        now = self._monotonic()
+        if now - self._clock_probe_at >= IQOPTION_CLOCK_PROBE_INTERVAL_SECONDS:
+            self._clock_round_trip = None
+            self._clock_probe_at = now
+            try:
+                pong = websocket.ping()
+                if not pong.wait(IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS):
+                    raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
+            except (WebSocketException, OSError, RuntimeError) as exc:
+                raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE") from exc
+            self._clock_round_trip = max(0.0, self._monotonic() - now)
+        if (
+            self._clock_round_trip is None
+            or websocket is not self._websocket
+            or not self.is_connected
+        ):
+            raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
         with self._lock:
             server_epoch = self._server_epoch
             received_at = self._server_epoch_received_at
             received_mono = self._server_epoch_monotonic
         now_mono = self._monotonic()
         now_wall = self._wall_time()
-        if server_epoch is not None and received_at > 0 and received_mono > 0:
-            elapsed = max(0.0, now_mono - received_mono)
-            current_epoch = int(Decimal(str(server_epoch)) + Decimal(str(elapsed)))
-            estimated_offset = Decimal(str(server_epoch)) - Decimal(str(received_at))
-        elif server_epoch is not None:
-            current_epoch = server_epoch
-            estimated_offset = Decimal(str(server_epoch)) - Decimal(str(now_wall))
-        elif self.is_connected:
-            current_epoch = int(now_wall)
-            estimated_offset = Decimal("0.0")
-        else:
+        elapsed = now_mono - received_mono
+        if (
+            server_epoch is None
+            or not 0 <= elapsed <= IQOPTION_CLOCK_MAX_AGE_SECONDS
+            or abs((now_wall - received_at) - elapsed) > 1.0
+        ):
             raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
-        local_received_at = datetime.now(UTC)
+        projected_epoch = server_epoch + Decimal(str(elapsed))
+        estimated_offset = projected_epoch - Decimal(str(now_wall))
         return BrokerClockSnapshot(
-            server_epoch=current_epoch,
-            local_received_at=local_received_at,
-            round_trip_seconds=self._connect_round_trip,
+            server_epoch=int(projected_epoch),
+            local_received_at=datetime.fromtimestamp(now_wall, UTC),
+            round_trip_seconds=self._clock_round_trip,
             estimated_offset_seconds=estimated_offset,
         )
 
@@ -523,29 +594,242 @@ class IQOptionCommunityReadOnlySession:
             raise IQOptionExternalError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
         if duration_minutes != 1:
             raise IQOptionExternalError("IQOPTION_OPERATION_UNSUPPORTED")
-        active_id = self._active_id(symbol)
-        response = self._request_message(
-            {
-                "name": "sendMessage",
-                "msg": {"name": "get-initialization-data", "version": "3.0", "body": {}},
-            },
-            expected_names=frozenset({"initialization-data"}),
-            timeout=timeout,
-        )
+        response = self._request_initialization(timeout)
         try:
-            active = response["msg"]["turbo"]["actives"][str(active_id)]
-            if (
-                active["name"].split(".")[-1] != symbol
-                or active["enabled"] is not True
-                or active["is_suspended"] is not False
-            ):
-                raise ValueError("unavailable exact asset")
+            actives = response["msg"]["turbo"]["actives"]
+            if not isinstance(actives, Mapping):
+                raise ValueError("invalid catalogue")
+            matches = [
+                (str(active_id), active)
+                for active_id, active in actives.items()
+                if isinstance(active, Mapping)
+                and self._catalog_symbol(active.get("name")) == symbol.upper()
+            ]
+            if not matches:
+                with self._lock:
+                    previous_id = self._active_ids.get(symbol.upper())
+                if previous_id is not None and str(previous_id) in actives:
+                    raise ValueError("catalogue id no longer matches exact asset")
+                raise IQOptionExternalError("IQOPTION_ACTIVE_UNAVAILABLE")
+            if len(matches) != 1:
+                raise ValueError("ambiguous exact asset")
+            raw_active_id, active = matches[0]
+            active_id = int(raw_active_id)
+            with self._lock:
+                self._active_ids[symbol.upper()] = active_id
+            if active["enabled"] is False:
+                raise IQOptionExternalError("IQOPTION_ACTIVE_UNAVAILABLE")
+            if active["is_suspended"] is True:
+                raise IQOptionExternalError("IQOPTION_ACTIVE_SUSPENDED")
+            if active["enabled"] is not True or active["is_suspended"] is not False:
+                raise ValueError("invalid availability flags")
             commission = Decimal(str(active["option"]["profit"]["commission"]))
             if not commission.is_finite() or not 0 <= commission < 100:
                 raise ValueError("invalid commission")
             return (Decimal(100) - commission) / Decimal(100)
         except (KeyError, TypeError, ValueError, InvalidOperation, AttributeError) as exc:
             raise IQOptionExternalError("IQOPTION_PAYOUT_UNAVAILABLE") from exc
+
+    def get_instrument_catalog(self, *, timeout: float = 8.0) -> BrokerInstrumentCatalog:
+        """Discover Binary/Turbo/Digital instruments from the current session.
+
+        The two broker catalogue routes are read-only. Binary/Turbo evidence is
+        mandatory; Digital is retained as detection-only because the financial
+        route implemented by this worker is Binary/Turbo-specific.
+        """
+
+        if timeout <= 0:
+            raise ValueError("IQ Option catalogue timeout must be positive")
+        initialization = self._request_initialization(timeout)
+        instruments = self._parse_binary_instruments(initialization)
+        unavailable_products: list[BrokerInstrumentProduct] = []
+        with self._lock:
+            underlying = self._digital_catalog_response
+            digital_retry_after = self._digital_catalog_retry_after_mono
+        if underlying is None and self._monotonic() >= digital_retry_after:
+            try:
+                # Each independent broker route receives its own bounded
+                # response window. Sharing one deadline could falsely report
+                # Digital unavailable after a slow initialization-data reply.
+                underlying = self._request_underlying(timeout)
+                with self._lock:
+                    self._digital_catalog_response = underlying
+                    self._digital_catalog_retry_after_mono = 0.0
+            except IQOptionExternalError as exc:
+                if exc.reason_code not in {
+                    "IQOPTION_REQUEST_TIMEOUT",
+                    "IQOPTION_CATALOG_INVALID",
+                    "IQOPTION_RESPONSE_UNEXPECTED",
+                }:
+                    raise
+                # A missing legacy route is product-scoped. Back off retries so
+                # its full timeout cannot stall M1 candle/payout traffic once
+                # per minute. A new authenticated connection resets this state.
+                with self._lock:
+                    self._digital_catalog_retry_after_mono = (
+                        self._monotonic() + IQOPTION_DIGITAL_CATALOG_RETRY_SECONDS
+                    )
+        if underlying is not None:
+            instruments.extend(self._parse_digital_instruments(underlying))
+        else:
+            unavailable_products.append(BrokerInstrumentProduct.DIGITAL)
+        instruments.sort(key=lambda item: (item.broker_symbol, item.product.value, item.broker_id))
+        active_ids: dict[str, int] = {}
+        for item in instruments:
+            if item.product is not BrokerInstrumentProduct.TURBO:
+                continue
+            try:
+                active_ids[item.broker_symbol] = int(item.broker_id)
+            except ValueError:
+                continue
+        with self._lock:
+            self._active_ids = active_ids
+            self._catalog_refreshed = True
+            self._catalog_generation += 1
+            generation = self._catalog_generation
+        return BrokerInstrumentCatalog(
+            generation=generation,
+            observed_at_utc=datetime.now(UTC),
+            instruments=tuple(instruments),
+            unavailable_products=tuple(unavailable_products),
+        )
+
+    def _parse_binary_instruments(self, response: Mapping[str, object]) -> list[BrokerInstrument]:
+        try:
+            msg = response["msg"]
+            if not isinstance(msg, Mapping):
+                raise ValueError("invalid initialization payload")
+        except KeyError as exc:
+            raise IQOptionExternalError("IQOPTION_CATALOG_INVALID") from exc
+        parsed: list[BrokerInstrument] = []
+        for section, product in (
+            ("turbo", BrokerInstrumentProduct.TURBO),
+            ("binary", BrokerInstrumentProduct.BINARY),
+        ):
+            raw_section = msg.get(section)
+            actives = raw_section.get("actives") if isinstance(raw_section, Mapping) else None
+            if actives is None:
+                continue
+            if not isinstance(actives, Mapping):
+                raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+            for raw_id, raw_active in actives.items():
+                if not isinstance(raw_active, Mapping):
+                    raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+                symbol = self._catalog_symbol(raw_active.get("name"))
+                if symbol is None:
+                    raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+                enabled = raw_active.get("enabled")
+                suspended = raw_active.get("is_suspended")
+                if type(enabled) is not bool or type(suspended) is not bool:
+                    availability = BrokerInstrumentAvailability.UNKNOWN
+                elif not enabled:
+                    availability = BrokerInstrumentAvailability.DISABLED
+                elif suspended:
+                    availability = BrokerInstrumentAvailability.SUSPENDED
+                else:
+                    availability = BrokerInstrumentAvailability.OPEN
+                turbo = product is BrokerInstrumentProduct.TURBO
+                executable = (
+                    turbo
+                    and availability is BrokerInstrumentAvailability.OPEN
+                    and self._account_mode is IQOptionAccountMode.PRACTICE
+                )
+                parsed.append(
+                    BrokerInstrument(
+                        broker=Broker.IQ_OPTION,
+                        broker_id=str(raw_id),
+                        broker_symbol=symbol,
+                        display_name=self._display_name(symbol),
+                        product=product,
+                        market_kind=self._market_kind(symbol),
+                        availability=availability,
+                        duration_seconds=(60,) if turbo else (),
+                        detectable=True,
+                        analyzable=turbo,
+                        quotable=executable,
+                        executable=executable,
+                    )
+                )
+        if not parsed:
+            raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+        return parsed
+
+    def _parse_digital_instruments(self, response: Mapping[str, object]) -> list[BrokerInstrument]:
+        msg = response.get("msg")
+        if not isinstance(msg, Mapping):
+            raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+        raw_underlying = msg.get("underlying")
+        if not isinstance(raw_underlying, list):
+            raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+        now = self.get_clock().server_epoch
+        parsed: list[BrokerInstrument] = []
+        for raw in raw_underlying:
+            if not isinstance(raw, Mapping):
+                raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+            symbol = self._catalog_symbol(raw.get("underlying"))
+            if symbol is None:
+                raise IQOptionExternalError("IQOPTION_CATALOG_INVALID")
+            schedule = raw.get("schedule")
+            is_open = False
+            schedule_valid = isinstance(schedule, list)
+            if isinstance(schedule, list):
+                for interval in schedule:
+                    if not isinstance(interval, Mapping):
+                        schedule_valid = False
+                        break
+                    opened = interval.get("open")
+                    closed = interval.get("close")
+                    if (
+                        isinstance(opened, (int, Decimal))
+                        and not isinstance(opened, bool)
+                        and isinstance(closed, (int, Decimal))
+                        and not isinstance(closed, bool)
+                        and int(opened) <= now < int(closed)
+                    ):
+                        is_open = True
+            availability = (
+                BrokerInstrumentAvailability.OPEN
+                if schedule_valid and is_open
+                else BrokerInstrumentAvailability.CLOSED
+                if schedule_valid
+                else BrokerInstrumentAvailability.UNKNOWN
+            )
+            raw_id = raw.get("active_id", raw.get("id", symbol))
+            parsed.append(
+                BrokerInstrument(
+                    broker=Broker.IQ_OPTION,
+                    broker_id=str(raw_id),
+                    broker_symbol=symbol,
+                    display_name=self._display_name(symbol),
+                    product=BrokerInstrumentProduct.DIGITAL,
+                    market_kind=self._market_kind(symbol),
+                    availability=availability,
+                    duration_seconds=(),
+                    detectable=True,
+                    analyzable=False,
+                    quotable=False,
+                    executable=False,
+                )
+            )
+        return parsed
+
+    @staticmethod
+    def _catalog_symbol(raw_name: object) -> str | None:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            return None
+        return raw_name.rsplit(".", 1)[-1].strip().upper()
+
+    @staticmethod
+    def _market_kind(symbol: str) -> BrokerMarketKind:
+        return BrokerMarketKind.OTC if symbol.endswith("-OTC") else BrokerMarketKind.REGULAR
+
+    @staticmethod
+    def _display_name(symbol: str) -> str:
+        suffix = " OTC" if symbol.endswith("-OTC") else ""
+        stem = symbol.removesuffix("-OTC")
+        if len(stem) == 6 and stem.isalpha():
+            return f"{stem[:3]}/{stem[3:]}{suffix}"
+        return f"{stem}{suffix}"
 
     def request(
         self,
@@ -619,16 +903,39 @@ class IQOptionCommunityReadOnlySession:
         if websocket is None:
             return
         try:
-            while not self._stop.is_set():
+            while not self._stop.is_set() and not self._disconnected.is_set():
                 try:
                     raw = websocket.recv(timeout=1.0)
                 except TimeoutError:
                     continue
                 self._handle_message(raw)
-        except (WebSocketException, OSError, RuntimeError, IQOptionExternalError):
-            self._disconnected.set()
+        except (WebSocketException, OSError, RuntimeError, IQOptionExternalError) as exc:
+            reason = "IQOPTION_WEBSOCKET_UNAVAILABLE"
+            if isinstance(exc, IQOptionExternalError):
+                reason = exc.reason_code
+            elif any(
+                getattr(getattr(exc, side, None), "code", None) == 1009 for side in ("sent", "rcvd")
+            ):
+                reason = "IQOPTION_RESPONSE_TOO_LARGE"
+            self._fail_transport(reason)
+
+    def _fail_transport(self, reason: str) -> None:
+        self._disconnect_reason = reason
+        self._disconnected.set()
+        # Wake read-only waiters with a sanitised cause, without retrying a buy.
+        with self._pending_lock:
+            waiters = list(self._pending.values())
+            if self._initialization_pending is not None:
+                waiters.append(self._initialization_pending[1])
+            if self._underlying_pending is not None:
+                waiters.append(self._underlying_pending[1])
+        for waiter in waiters:
+            with suppress(queue.Full):
+                waiter.put_nowait({"_transport_error": reason})
 
     def _handle_message(self, raw: str | bytes) -> None:
+        if len(raw if isinstance(raw, bytes) else raw.encode("utf-8")) > IQOPTION_MAX_MESSAGE_BYTES:
+            raise IQOptionExternalError("IQOPTION_RESPONSE_TOO_LARGE")
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="replace")
         try:
@@ -638,6 +945,24 @@ class IQOptionCommunityReadOnlySession:
         if not isinstance(message, Mapping):
             return
         name = message.get("name")
+        if name == "initialization-data":
+            # This legacy response may have no request_id. It gets a dedicated
+            # single-flight lane, never the financial request correlator.
+            with self._pending_lock:
+                pending = self._initialization_pending
+            if pending is not None and message.get("request_id") in (None, "", pending[0]):
+                with suppress(queue.Full):
+                    pending[1].put_nowait(dict(message))
+            return
+        if name == "underlying-list":
+            # Same legacy behaviour as initialization-data: some compatible
+            # servers omit request_id, so isolate it in its own single-flight lane.
+            with self._pending_lock:
+                pending = self._underlying_pending
+            if pending is not None and message.get("request_id") in (None, "", pending[0]):
+                with suppress(queue.Full):
+                    pending[1].put_nowait(dict(message))
+            return
         self._route_pending(message)
         if name == "api_game_betinfo_result":
             try:
@@ -659,16 +984,7 @@ class IQOptionCommunityReadOnlySession:
             return
         if name == "heartbeat":
             self._send({"name": "heartbeat", "msg": message.get("msg")})
-            raw_epoch = message.get("msg")
-            if isinstance(raw_epoch, (int, float, Decimal)) and not isinstance(raw_epoch, bool):
-                epoch = int(raw_epoch)
-                if epoch > 100_000_000_000:
-                    epoch //= 1_000
-                if epoch > 0:
-                    with self._lock:
-                        self._server_epoch = epoch
-                        self._server_epoch_received_at = self._wall_time()
-                        self._server_epoch_monotonic = self._monotonic()
+            self._record_server_time(message.get("msg"))
             return
         if name == "profile":
             profile = message.get("msg")
@@ -687,15 +1003,7 @@ class IQOptionCommunityReadOnlySession:
             raw_epoch = message.get("msg")
             if isinstance(raw_epoch, Mapping):
                 raw_epoch = raw_epoch.get("server_time") or raw_epoch.get("time")
-            if isinstance(raw_epoch, (int, float, Decimal)) and not isinstance(raw_epoch, bool):
-                epoch = int(raw_epoch)
-                if epoch > 100_000_000_000:
-                    epoch //= 1_000
-                if epoch > 0:
-                    with self._lock:
-                        self._server_epoch = epoch
-                        self._server_epoch_received_at = self._wall_time()
-                        self._server_epoch_monotonic = self._monotonic()
+            self._record_server_time(raw_epoch)
             return
         if name in {"option-opened", "option-closed"}:
             normalized = self._normalize_contract_event(name, message.get("msg"))
@@ -704,6 +1012,19 @@ class IQOptionCommunityReadOnlySession:
                     self._contract_events.put_nowait({"name": name, "msg": normalized})
                 except queue.Full:
                     self._disconnected.set()
+
+    def _record_server_time(self, raw_epoch: object) -> None:
+        if not isinstance(raw_epoch, (int, float, Decimal)) or isinstance(raw_epoch, bool):
+            return
+        epoch = Decimal(str(raw_epoch))
+        if not epoch.is_finite() or epoch <= 0:
+            return
+        if epoch > 100_000_000_000:
+            epoch /= 1_000
+        with self._lock:
+            self._server_epoch = epoch
+            self._server_epoch_received_at = self._wall_time()
+            self._server_epoch_monotonic = self._monotonic()
 
     def _send(self, payload: Mapping[str, object]) -> None:
         websocket = self._websocket
@@ -735,6 +1056,82 @@ class IQOptionCommunityReadOnlySession:
         with suppress(Exception):
             self._send({"name": "timesync", "msg": int(self._wall_time() * 1000)})
 
+    def _request_initialization(self, timeout: float) -> dict[str, Any]:
+        if timeout <= 0:
+            raise ValueError("IQ Option request timeout must be positive")
+        # Waiting for the lane consumes the same deadline, not an extra timeout.
+        started = self._monotonic()
+        if not self._initialization_query_lock.acquire(timeout=timeout):
+            raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT")
+        try:
+            if not self.is_connected:
+                raise IQOptionExternalError(self._disconnect_reason)
+            request_id = f"tl-{uuid4()}"
+            responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+            with self._pending_lock:
+                self._initialization_pending = (request_id, responses)
+            self._send(
+                {
+                    "name": "sendMessage",
+                    "request_id": request_id,
+                    "msg": {"name": "get-initialization-data", "version": "3.0", "body": {}},
+                }
+            )
+            try:
+                response = responses.get(timeout=max(0.0, timeout - (self._monotonic() - started)))
+            except queue.Empty as exc:
+                # Without a wire ID a late reply cannot be distinguished from a
+                # later request. Retire this generation; lifecycle owns recovery.
+                self._fail_transport("IQOPTION_WEBSOCKET_UNAVAILABLE")
+                raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
+            if "_transport_error" in response:
+                raise IQOptionExternalError(response["_transport_error"])
+            if not self.is_connected:
+                raise IQOptionExternalError(self._disconnect_reason)
+            return response
+        finally:
+            with self._pending_lock:
+                self._initialization_pending = None
+            self._initialization_query_lock.release()
+
+    def _request_underlying(self, timeout: float) -> dict[str, Any]:
+        if timeout <= 0:
+            raise ValueError("IQ Option request timeout must be positive")
+        started = self._monotonic()
+        if not self._underlying_query_lock.acquire(timeout=timeout):
+            raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT")
+        try:
+            if not self.is_connected:
+                raise IQOptionExternalError(self._disconnect_reason)
+            responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+            with self._pending_lock:
+                # This legacy endpoint is global in the community protocol and
+                # current IQ Option sessions may ignore a request carrying an
+                # application-generated request_id.  The dedicated lock makes
+                # an uncorrelated request safe: there can be only one waiter.
+                self._underlying_pending = ("", responses)
+            self._send(
+                {
+                    "name": "sendMessage",
+                    "msg": {
+                        "name": "get-underlying-list",
+                        "version": "2.0",
+                        "body": {"type": "digital-option"},
+                    },
+                }
+            )
+            try:
+                response = responses.get(timeout=max(0.0, timeout - (self._monotonic() - started)))
+            except queue.Empty as exc:
+                raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
+            if "_transport_error" in response:
+                raise IQOptionExternalError(response["_transport_error"])
+            return response
+        finally:
+            with self._pending_lock:
+                self._underlying_pending = None
+            self._underlying_query_lock.release()
+
     def _request_message(
         self,
         payload: Mapping[str, object],
@@ -760,6 +1157,8 @@ class IQOptionCommunityReadOnlySession:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
         if str(response.get("name")) not in expected_names:
+            if "_transport_error" in response:
+                raise IQOptionExternalError(response["_transport_error"])
             raise IQOptionExternalError("IQOPTION_RESPONSE_UNEXPECTED")
         return response
 
@@ -1033,9 +1432,9 @@ class IQOptionCommunityReadOnlySession:
             encoded = encoded.replace(json.dumps(marker), numeric)
         return encoded
 
-    @staticmethod
-    def _active_id(symbol: str) -> int:
-        active_id = IQOPTION_ACTIVE_IDS.get(symbol.upper())
+    def _active_id(self, symbol: str) -> int:
+        with self._lock:
+            active_id = self._active_ids.get(symbol.upper())
         if active_id is None:
             raise IQOptionExternalError("IQOPTION_SYMBOL_UNSUPPORTED")
         return active_id

@@ -6,9 +6,7 @@ import itertools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, getcontext
-from functools import lru_cache
 
-import numpy as np
 from primitives import Candle
 from primitives.base import Indicator
 from primitives.registry import REGISTRY
@@ -35,57 +33,60 @@ class PBOResult:
     reason: str = ""
 
 
-@lru_cache(maxsize=4)
-def _combination_matrix(num_blocks: int = DEFAULT_NUM_BLOCKS) -> np.ndarray:
-    """Precompute binary combination matrix C of shape (comb(S, S/2), S)."""
+def _combinations(num_blocks: int = DEFAULT_NUM_BLOCKS) -> list[tuple[int, ...]]:
+    """Return CSCV in-sample block combinations."""
     k = num_blocks // 2
-    combs = list(itertools.combinations(range(num_blocks), k))
-    c_mat = np.zeros((len(combs), num_blocks), dtype=np.float64)
-    for i, comb in enumerate(combs):
-        c_mat[i, comb] = 1.0
-    return c_mat
+    return list(itertools.combinations(range(num_blocks), k))
 
 
 def compute_pbo_from_matrix(
-    performance_matrix: np.ndarray,
+    performance_matrix: Sequence[Sequence[Decimal | int | str]],
     num_blocks: int = DEFAULT_NUM_BLOCKS,
     *,
     max_threshold: Decimal = MAX_PBO_THRESHOLD,
 ) -> PBOResult:
     """Compute PBO via CSCV across 16 blocks for a matrix of shape (16, K)."""
-    if performance_matrix.ndim != 2 or performance_matrix.shape[0] != num_blocks:
+    matrix = _decimal_matrix(performance_matrix)
+    if len(matrix) != num_blocks:
         raise ValueError(f"Expected matrix of shape ({num_blocks}, K)")
 
-    k_variants = performance_matrix.shape[1]
+    k_variants = len(matrix[0]) if matrix else 0
+    if any(len(row) != k_variants for row in matrix):
+        raise ValueError("Performance matrix rows must have the same width")
     if k_variants <= 1:
-        # With single variant, compare against zero / break-even column
-        zero_col = np.zeros((num_blocks, 1), dtype=np.float64)
-        performance_matrix = np.hstack([performance_matrix, zero_col])
+        matrix = [row + [Decimal("0")] for row in matrix]
         k_variants = 2
 
-    c_mat = _combination_matrix(num_blocks)
-    num_combs = c_mat.shape[0]
+    combinations = _combinations(num_blocks)
+    overfit_events = 0
+    block_indexes = tuple(range(num_blocks))
+    for in_sample_blocks in combinations:
+        in_sample = set(in_sample_blocks)
+        out_sample_blocks = tuple(index for index in block_indexes if index not in in_sample)
+        in_returns = [
+            sum((matrix[block][variant] for block in in_sample_blocks), Decimal("0"))
+            for variant in range(k_variants)
+        ]
+        out_returns = [
+            sum((matrix[block][variant] for block in out_sample_blocks), Decimal("0"))
+            for variant in range(k_variants)
+        ]
+        best_variant = max(range(k_variants), key=lambda variant: in_returns[variant])
+        best_oos = out_returns[best_variant]
+        relative_rank = Decimal(sum(1 for value in out_returns if value <= best_oos)) / Decimal(
+            k_variants
+        )
+        if relative_rank <= Decimal("0.5"):
+            overfit_events += 1
 
-    # In-sample and out-of-sample total returns for each combination
-    r_is = c_mat @ performance_matrix  # (num_combs, K)
-    r_oos = (1.0 - c_mat) @ performance_matrix  # (num_combs, K)
-
-    best_is = np.argmax(r_is, axis=1)  # Best strategy index in-sample
-    best_oos_vals = r_oos[np.arange(num_combs), best_is, None]  # (num_combs, 1)
-
-    # Relative rank in OOS: fraction of strategies with return <= best_is OOS return
-    oos_ranks = np.mean(r_oos <= best_oos_vals, axis=1)
-
-    # Overfitting event: IS-optimal strategy falls in the bottom half OOS (relative rank <= 0.5)
-    pbo_val = float(np.mean(oos_ranks <= 0.5))
-    pbo_dec = Decimal(str(round(pbo_val, 6)))
+    pbo_dec = (Decimal(overfit_events) / Decimal(len(combinations))).quantize(Decimal("0.000001"))
 
     passed = pbo_dec < max_threshold
     return PBOResult(
         passed=passed,
         pbo=pbo_dec,
         num_blocks=num_blocks,
-        num_combinations=num_combs,
+        num_combinations=len(combinations),
         num_variants=k_variants,
         max_threshold=max_threshold,
         reason="" if passed else "PBO_EXCEEDS_20_PCT",
@@ -124,12 +125,21 @@ def evaluate_pbo(
     span = max_ts - min_ts + 1
     block_duration = max(span // num_blocks, 60)
 
-    perf_matrix = np.zeros((num_blocks, len(all_candidates)), dtype=np.float64)
+    perf_matrix = [[Decimal("0") for _candidate in all_candidates] for _block in range(num_blocks)]
 
     for col_idx, cand in enumerate(all_candidates):
         log = replay_candidate(cand, ordered_candles, payout_lookup, registry=registry)
         for trade in log.trades:
             block_idx = min(int((trade.ts - min_ts) // block_duration), num_blocks - 1)
-            perf_matrix[block_idx, col_idx] += float(trade.profit_ratio)
+            perf_matrix[block_idx][col_idx] += trade.profit_ratio
 
     return compute_pbo_from_matrix(perf_matrix, num_blocks=num_blocks, max_threshold=max_threshold)
+
+
+def _decimal_matrix(
+    performance_matrix: Sequence[Sequence[Decimal | int | str]],
+) -> list[list[Decimal]]:
+    return [
+        [item if isinstance(item, Decimal) else Decimal(str(item)) for item in row]
+        for row in performance_matrix
+    ]

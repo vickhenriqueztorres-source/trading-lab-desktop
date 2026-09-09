@@ -124,8 +124,18 @@ def test_health_gate_snapshot() -> None:
     assert ("DERIV", "VRTC1001") in snapshot.scoped_states
     assert snapshot.scoped_states[("DERIV", "VRTC1001")].is_open is False
     assert snapshot.scoped_states[("DERIV", "VRTC1001")].reason_code == "HG_ORDER_UNKNOWN"
-    iq_scope_state = snapshot.scoped_states[("IQOPTION", "PRACTICE_01")]
+    iq_scope_state = snapshot.scoped_states[("IQ_OPTION", "PRACTICE_01")]
     assert iq_scope_state.is_open is False
     assert iq_scope_state.reason_code == "HG_WORKER_DISCONNECTED"
     assert "HG_ORDER_UNKNOWN" in snapshot.active_blockers
     assert "HG_WORKER_DISCONNECTED" in snapshot.active_blockers
+
+
+def test_iq_transport_aliases_share_one_canonical_scope() -> None:
+    gate = HealthGate()
+
+    gate.block_scope("IQOPTION", "PRACTICE_01", "HG_WORKER_DISCONNECTED")
+
+    assert gate.state_for("IQ_OPTION", "PRACTICE_01").reason_code == ("HG_WORKER_DISCONNECTED")
+    gate.clear_scope("IQ_OPTION", "PRACTICE_01", "HG_WORKER_DISCONNECTED")
+    assert gate.state_for("IQOPTION", "PRACTICE_01").is_open is True

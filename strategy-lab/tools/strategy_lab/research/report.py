@@ -24,6 +24,7 @@ class EvaluatedCandidateReport:
     timeframe: str
     hours_utc: list[int]
     params: dict[str, str]
+    holdout_passed: bool | None = None
 
 
 def _format_decimal(val: Decimal, places: int = 4) -> str:
@@ -34,6 +35,9 @@ def generate_ranking_markdown(
     candidates: list[EvaluatedCandidateReport],
     run_id: str,
     active_manifest_keys: set[str] | Sequence[str] | None = None,
+    *,
+    dataset_evidence: dict[str, object] | None = None,
+    production_eligible: bool = False,
 ) -> str:
     """R-RES-11, R-PUB-5: ranking.md table sorted by score descending, with 5 numbers and gates.
     Includes 'Novas oportunidades' section for approved candidates absent from active manifest.
@@ -50,8 +54,14 @@ def generate_ranking_markdown(
         ":---: | :---: | :---: | :---: | :--- |"
     )
 
+    dataset_fingerprint = (
+        str(dataset_evidence.get("fingerprint", "missing")) if dataset_evidence else "missing"
+    )
     lines: list[str] = [
         f"# Research Ranking — Run {run_id}",
+        "",
+        f"Dataset: `{dataset_fingerprint}`",
+        f"Elegível para publicação de produção: {'sim' if production_eligible else 'não'}",
         "",
         f"Total de candidatos avaliados: {len(candidates)}",
         "",
@@ -66,7 +76,10 @@ def generate_ranking_markdown(
         s = rep.score
         app = rep.approval
 
-        gates_summary = "Aprovado (5/5)" if app.approved else f"Reprovado ({app.reason})"
+        gate_summary = _gate_summary(app)
+        gates_summary = (
+            f"Aprovado ({gate_summary})" if app.approved else f"Reprovado ({app.reason})"
+        )
         status = "approved" if app.approved else "rejected"
 
         key = c.asset + ":" + c.family + ":" + c.hash()[:8]
@@ -112,7 +125,13 @@ def generate_ranking_markdown(
     return "\n".join(lines)
 
 
-def generate_candidates_json(candidates: list[EvaluatedCandidateReport], run_id: str) -> str:
+def generate_candidates_json(
+    candidates: list[EvaluatedCandidateReport],
+    run_id: str,
+    *,
+    dataset_evidence: dict[str, object] | None = None,
+    production_eligible: bool = False,
+) -> str:
     """R-RES-11: candidates.json machine-readable schema for builder ingestion."""
     items: list[dict[str, Any]] = []
 
@@ -149,8 +168,9 @@ def generate_candidates_json(candidates: list[EvaluatedCandidateReport], run_id:
                 "ops_per_day": _format_decimal(s.ops_per_day, 1),
                 "worst_streak": s.worst_streak,
                 "result_1000_ops_stake10": _format_decimal(s.result_1000_ops_stake10, 2),
-                "windows_passed": "8/8",
-                "holdout_passed": app.approved,
+                "windows_passed": _windows_summary(app),
+                "gates_passed": _gate_summary(app),
+                "holdout_passed": rep.holdout_passed,
             },
             "management": {
                 "stake_pct": "1.0",
@@ -169,24 +189,67 @@ def generate_candidates_json(candidates: list[EvaluatedCandidateReport], run_id:
 
     data = {
         "research_run_id": run_id,
+        "dataset_evidence": dataset_evidence,
+        "production_eligible": production_eligible,
         "total_candidates": len(candidates),
         "candidates": items,
     }
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+def _gate_summary(app: ApprovalResult) -> str:
+    if not app.gate_results:
+        return "0/0"
+    passed = sum(1 for gate in app.gate_results if gate.passed)
+    return f"{passed}/{len(app.gate_results)}"
+
+
+def _windows_summary(app: ApprovalResult) -> str:
+    walk_forward = next(
+        (gate for gate in app.gate_results if gate.gate_name == "walk_forward"),
+        None,
+    )
+    if walk_forward is None:
+        return "0/1"
+    raw = str(walk_forward.metrics.get("window_p_hats", ""))
+    values = [Decimal(item) for item in raw.split(",") if item]
+    if not values:
+        return f"{1 if walk_forward.passed else 0}/1"
+    passed = sum(1 for value in values if value >= app.p_min)
+    return f"{passed}/{len(values)}"
+
+
 def save_reports(
     candidates: list[EvaluatedCandidateReport],
     run_id: str,
     output_dir: Path,
+    *,
+    dataset_evidence: dict[str, object] | None = None,
+    production_eligible: bool = False,
 ) -> tuple[Path, Path]:
     """Write ranking.md and candidates.json into output_dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
     ranking_path = output_dir / "ranking.md"
     candidates_path = output_dir / "candidates.json"
 
-    ranking_path.write_text(generate_ranking_markdown(candidates, run_id), encoding="utf-8")
-    candidates_path.write_text(generate_candidates_json(candidates, run_id), encoding="utf-8")
+    ranking_path.write_text(
+        generate_ranking_markdown(
+            candidates,
+            run_id,
+            dataset_evidence=dataset_evidence,
+            production_eligible=production_eligible,
+        ),
+        encoding="utf-8",
+    )
+    candidates_path.write_text(
+        generate_candidates_json(
+            candidates,
+            run_id,
+            dataset_evidence=dataset_evidence,
+            production_eligible=production_eligible,
+        ),
+        encoding="utf-8",
+    )
     return ranking_path, candidates_path
 
 
@@ -253,6 +316,7 @@ def run_synthetic_research(run_id: str, output_dir: Path) -> tuple[Path, Path]:
             "rsi_lo": "20",
             "rsi_hi": "80",
         },
+        holdout_passed=True,
     )
 
     c2 = Candidate(
@@ -312,6 +376,7 @@ def run_synthetic_research(run_id: str, output_dir: Path) -> tuple[Path, Path]:
             "body_max": "0.30",
             "wick_min": "0.50",
         },
+        holdout_passed=True,
     )
 
     return save_reports([rep1, rep2], run_id, output_dir)

@@ -4,6 +4,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -198,29 +199,35 @@ class ProcessTreeSupervisor:
                 return True
             self._state = LauncherLifecycleState.STOPPING
         controller = self._controller
-        graceful = True
+        terminated = True
         deadline = self._monotonic() + timeout_seconds
         try:
             if controller is not None:
-                graceful &= self._attempt(controller.safe_stop)
+                self._attempt(controller.safe_stop)
                 drain_timeout = min(2.0, self._remaining(deadline))
-                try:
-                    graceful &= controller.drain(drain_timeout).drained
-                except (CoreLifecycleIpcError, OSError, RuntimeError, ValueError):
-                    graceful = False
+                with suppress(CoreLifecycleIpcError, OSError, RuntimeError, ValueError):
+                    controller.drain(drain_timeout)
                 worker_timeout = min(2.0, self._remaining(deadline))
-                graceful &= self._attempt(lambda: controller.shutdown_workers(worker_timeout))
+                self._attempt(lambda: controller.shutdown_workers(worker_timeout))
                 auth_timeout = min(2.0, self._remaining(deadline))
-                graceful &= self._attempt(lambda: controller.shutdown_auth(auth_timeout))
+                self._attempt(lambda: controller.shutdown_auth(auth_timeout))
                 core_timeout = min(2.0, self._remaining(deadline))
-                graceful &= self._attempt(lambda: controller.shutdown_core(core_timeout))
+                self._attempt(lambda: controller.shutdown_core(core_timeout))
                 if not controller.wait(self._remaining(deadline)):
-                    graceful = False
-                    controller.terminate(min(1.0, self._remaining(deadline)))
-                process = controller.process
-                if process is not None and process.poll() is None:
-                    graceful = False
-                    controller.terminate_tree()
+                    # A launcher can be hosted by an executable/bootstrapper
+                    # which keeps the Popen root alive after the Core has
+                    # handled SHUTDOWN_CORE.  Do not mistake termination of
+                    # that root for containment cleanup: descendants remain
+                    # inside the still-open Job Object until it is explicitly
+                    # terminated or closed.
+                    try:
+                        controller.terminate(min(1.0, self._remaining(deadline)))
+                    finally:
+                        # This is intentionally unconditional after an
+                        # escalation.  The Job Object is the only authority
+                        # that can prove every descendant was told to stop.
+                        controller.terminate_tree()
+                    terminated = controller.wait(self._remaining(deadline))
         finally:
             if controller is not None:
                 controller.close()
@@ -228,7 +235,11 @@ class ProcessTreeSupervisor:
             self._guard.release()
             self._last_processes = self._empty_processes("STOPPED")
             self._state = LauncherLifecycleState.STOPPED
-        return graceful
+        # The public result reports whether shutdown completed, not whether
+        # every graceful IPC step acknowledged.  A successful containment
+        # escalation is a valid, safe shutdown; failure means the Core root
+        # could not be observed as terminated before the caller's deadline.
+        return terminated
 
     def snapshot(self) -> LauncherSnapshot:
         started = self._started_at

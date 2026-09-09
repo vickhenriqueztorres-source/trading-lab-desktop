@@ -6,7 +6,14 @@ from types import SimpleNamespace
 
 from apps.core.iqoption_auto_trader import IQOPTION_RADAR_SYMBOLS, IqOptionAutoTrader
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
-from packages.domain.market import MarketCandle
+from packages.domain.market import (
+    BrokerInstrument,
+    BrokerInstrumentAvailability,
+    BrokerInstrumentCatalog,
+    BrokerInstrumentProduct,
+    BrokerMarketKind,
+    MarketCandle,
+)
 from packages.domain.models import Broker, Direction, OrderState
 from packages.protocol.ui_messages import (
     UiIqOptionAssetRank,
@@ -133,3 +140,153 @@ def test_ui_iqoption_asset_rank_roundtrip():
     payload = rank.to_payload()
     recovered = UiIqOptionAssetRank.from_payload(payload)
     assert recovered == rank
+
+
+def test_dynamic_radar_executes_only_open_turbo_and_exposes_digital_read_only():
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: None,
+        runtime_provider=lambda: None,
+        risk_config_provider=IqOptionRiskConfig,
+        operator_armed=lambda: False,
+        catalog_provider=lambda: explicit_signal_catalog(("EURUSD", "GBPUSD-OTC")),
+    )
+    catalog = BrokerInstrumentCatalog(
+        generation=1,
+        observed_at_utc=datetime.now(UTC),
+        instruments=(
+            BrokerInstrument(
+                Broker.IQ_OPTION,
+                "777",
+                "EURUSD",
+                "EUR/USD",
+                BrokerInstrumentProduct.TURBO,
+                BrokerMarketKind.REGULAR,
+                BrokerInstrumentAvailability.OPEN,
+                (60,),
+                True,
+                True,
+                True,
+                True,
+            ),
+            BrokerInstrument(
+                Broker.IQ_OPTION,
+                "778",
+                "GBPUSD-OTC",
+                "GBP/USD OTC",
+                BrokerInstrumentProduct.TURBO,
+                BrokerMarketKind.OTC,
+                BrokerInstrumentAvailability.SUSPENDED,
+                (60,),
+                True,
+                True,
+                False,
+                False,
+            ),
+            BrokerInstrument(
+                Broker.IQ_OPTION,
+                "901",
+                "EURUSD",
+                "EUR/USD",
+                BrokerInstrumentProduct.DIGITAL,
+                BrokerMarketKind.REGULAR,
+                BrokerInstrumentAvailability.OPEN,
+                (),
+                True,
+                False,
+                False,
+                False,
+            ),
+        ),
+    )
+    trader._instrument_catalog = catalog
+    trader._sync_catalog_ranking(catalog)
+
+    assert trader._symbols_for_cycle("AUTO") == (("EURUSD", "EUR/USD · DIGITAL/TURBO"),)
+    assert trader._symbols_for_cycle("GBPUSD-OTC") == ()
+    eur = next(item for item in trader.asset_ranking if item.symbol == "EURUSD")
+    assert "DIGITAL: OPEN · somente detecção" in eur.candidate_details
+
+
+def test_dynamic_radar_hides_broker_assets_without_signed_strategy():
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: None,
+        runtime_provider=lambda: None,
+        risk_config_provider=IqOptionRiskConfig,
+        operator_armed=lambda: False,
+        catalog_provider=lambda: explicit_signal_catalog(("EURUSD",)),
+    )
+    catalog = BrokerInstrumentCatalog(
+        generation=1,
+        observed_at_utc=datetime.now(UTC),
+        instruments=(
+            BrokerInstrument(
+                Broker.IQ_OPTION,
+                "1",
+                "EURUSD",
+                "EUR/USD",
+                BrokerInstrumentProduct.TURBO,
+                BrokerMarketKind.REGULAR,
+                BrokerInstrumentAvailability.OPEN,
+                (60,),
+                True,
+                True,
+                True,
+                True,
+            ),
+            BrokerInstrument(
+                Broker.IQ_OPTION,
+                "41",
+                "AIG-OP",
+                "AIG-OP",
+                BrokerInstrumentProduct.BINARY,
+                BrokerMarketKind.REGULAR,
+                BrokerInstrumentAvailability.OPEN,
+                (),
+                True,
+                False,
+                False,
+                False,
+            ),
+        ),
+    )
+
+    trader._sync_catalog_ranking(catalog)
+
+    assert tuple(item.symbol for item in trader.asset_ranking) == ("EURUSD",)
+
+
+def test_dynamic_radar_with_empty_manifest_fails_closed_instead_of_showing_all_assets():
+    empty_manifest = SimpleNamespace(active_strategies={})
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: None,
+        runtime_provider=lambda: None,
+        risk_config_provider=IqOptionRiskConfig,
+        operator_armed=lambda: False,
+        catalog_provider=lambda: empty_manifest,
+    )
+    catalog = BrokerInstrumentCatalog(
+        generation=1,
+        observed_at_utc=datetime.now(UTC),
+        instruments=(
+            BrokerInstrument(
+                Broker.IQ_OPTION,
+                "1",
+                "EURUSD",
+                "EUR/USD",
+                BrokerInstrumentProduct.TURBO,
+                BrokerMarketKind.REGULAR,
+                BrokerInstrumentAvailability.OPEN,
+                (60,),
+                True,
+                True,
+                True,
+                True,
+            ),
+        ),
+    )
+
+    trader._instrument_catalog = catalog
+    trader._sync_catalog_ranking(catalog)
+
+    assert trader.asset_ranking == ()
+    assert trader._executable_symbols() == ()

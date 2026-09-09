@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from primitives import Candle
 from strategy_lab import cli
-from strategy_lab.collect.backfill import backfill_asset, closed_candle_exclusive
+from strategy_lab.collect.backfill import _validate_batch, backfill_asset, closed_candle_exclusive
 from strategy_lab.collect.canary import CANARY_FIXTURE, CanaryMismatch, run_canary
 from strategy_lab.collect.clock import Clock, ClockError
 from strategy_lab.collect.gaps import classify_gaps
@@ -20,6 +20,7 @@ from strategy_lab.collect.iq_client import FakeIQClient, IQClientError
 from strategy_lab.collect.payout_sampler import sample_payout
 from strategy_lab.collect.repository import FakeRepository
 from strategy_lab.collect.runner import run_collect
+from strategy_lab.collect.sessions import in_session
 
 START = 1700000040
 NOW = 1700000400
@@ -166,6 +167,14 @@ def test_invalid_candle_aborts_run_zero_writes() -> None:
     assert repository.candles == {}
 
 
+def test_valid_leading_broker_padding_is_excluded_but_future_still_fails() -> None:
+    """R-COL-3/5: sparse grids may be padded only before the requested window."""
+    rows = [candle(START - 120), candle(START - 60), candle(START), candle(START + 60)]
+    assert _validate_batch(rows, START, START + 120) == rows[2:]
+    with pytest.raises(IQClientError, match="COL_CANDLE_BATCH_INVALID"):
+        _validate_batch(rows + [candle(START + 120)], START, START + 120)
+
+
 def test_gaps_classified_by_session() -> None:
     """R-COL-7: expected M1 gaps carry the in_session flag from the calendar."""
     monday = int(datetime(2026, 9, 7, 0, 0, tzinfo=UTC).timestamp())
@@ -175,6 +184,15 @@ def test_gaps_classified_by_session() -> None:
     assert forex_gaps[0].in_session
     assert otc_gaps[0].in_session
     assert not classify_gaps("EURUSD", range(saturday, saturday + 120, 60), [], NOW)[0].in_session
+
+
+def test_observed_eurusd_otc_schedule_includes_weekdays_and_daily_break() -> None:
+    """R-COL-7: use the broker-observed calendar without generalizing other OTC assets."""
+    tuesday = int(datetime(2026, 9, 8, 0, 0, tzinfo=UTC).timestamp())
+    assert in_session("EURUSD-OTC", tuesday + 7 * 3600 + 59 * 60)
+    assert not in_session("EURUSD-OTC", tuesday + 8 * 3600 + 5 * 60)
+    assert in_session("EURUSD-OTC", tuesday + 8 * 3600 + 30 * 60)
+    assert not in_session("GBPUSD-OTC", tuesday + 9 * 3600)
 
 
 def test_payout_hours_without_run_stay_zero_samples() -> None:

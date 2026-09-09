@@ -79,13 +79,26 @@ def _validate_batch(candles: object, start_ts: int, end_ts: int) -> list[Candle]
         raise IQClientError("COL_CANDLE_BATCH_INVALID")
     result: list[Candle] = []
     seen: set[int] = set()
+    previous_ts: int | None = None
     for item in candles:
         if not isinstance(item, Candle):
             raise IQClientError("COL_CANDLE_BATCH_INVALID")
-        if item.ts < start_ts or item.ts >= end_ts or item.ts in seen:
+        try:
+            # Revalidate protocol fakes and model_construct/model_copy inputs too.
+            item = Candle.model_validate(item.model_dump())
+        except ValueError:
+            raise IQClientError("COL_CANDLE_BATCH_INVALID") from None
+        if any(not value.is_finite() or value <= 0 for value in (item.o, item.h, item.l, item.c)):
+            raise IQClientError("COL_CANDLE_BATCH_INVALID")
+        if item.ts >= end_ts or item.ts in seen:
+            raise IQClientError("COL_CANDLE_BATCH_INVALID")
+        if previous_ts is not None and previous_ts >= item.ts:
             raise IQClientError("COL_CANDLE_BATCH_INVALID")
         seen.add(item.ts)
-        result.append(item)
-    if any(left.ts >= right.ts for left, right in zip(result, result[1:], strict=False)):
-        raise IQClientError("COL_CANDLE_BATCH_INVALID")
+        previous_ts = item.ts
+        # The broker returns the last N available candles and may pad a grid
+        # containing gaps with older valid rows.  They are validated above but
+        # intentionally excluded from this [start, end) batch.
+        if item.ts >= start_ts:
+            result.append(item)
     return result

@@ -35,7 +35,8 @@ def test_grammar_never_generates_two_of_same_category() -> None:
 
 def test_grammar_excludes_declared_incompatible_pairs() -> None:
     """R-RES-3: pares declarados em INCOMPATIBLE são excluídos."""
-    assert is_compatible("session_window", "quadrant_majority", "rsi_extreme") is False
+    assert is_compatible("session_window", "quadrant_majority", "rsi_extreme") is True
+    assert is_compatible("adx", "quadrant_majority", "rsi_extreme") is False
     assert is_compatible("adx", "bb_close_outside", "rsi_extreme") is True
 
     res = enumerate_candidates(
@@ -49,6 +50,9 @@ def test_grammar_excludes_declared_incompatible_pairs() -> None:
 
     for cand in res.candidates:
         trio = {cand.regime, cand.trigger, cand.confirm}
+        if cand.family == "F5":
+            assert trio == {"session_window", "quadrant_majority", "rsi_extreme"}
+            continue
         for inc_pair in INCOMPATIBLE:
             msg = f"Candidate {cand} contains incompatible pair {inc_pair}"
             assert not inc_pair.issubset(trio), msg

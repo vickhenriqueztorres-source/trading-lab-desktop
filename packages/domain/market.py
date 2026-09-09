@@ -30,6 +30,152 @@ class BrokerClockHealth(StrEnum):
     STALE = "STALE"
 
 
+class BrokerInstrumentProduct(StrEnum):
+    """Broker-native option product; never inferred from a symbol name."""
+
+    BINARY = "BINARY"
+    TURBO = "TURBO"
+    DIGITAL = "DIGITAL"
+
+
+class BrokerMarketKind(StrEnum):
+    REGULAR = "REGULAR"
+    OTC = "OTC"
+
+
+class BrokerInstrumentAvailability(StrEnum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+    SUSPENDED = "SUSPENDED"
+    DISABLED = "DISABLED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerInstrument:
+    """Exact, session-scoped IQ Option instrument evidence.
+
+    ``detectable`` and ``analyzable`` describe read-only support. ``quotable``
+    and ``executable`` are separate on purpose: discovering a Digital market
+    must never silently authorize the Binary financial route to trade it.
+    """
+
+    broker: Broker
+    broker_id: str
+    broker_symbol: str
+    display_name: str
+    product: BrokerInstrumentProduct
+    market_kind: BrokerMarketKind
+    availability: BrokerInstrumentAvailability
+    duration_seconds: tuple[int, ...]
+    detectable: bool
+    analyzable: bool
+    quotable: bool
+    executable: bool
+
+    def __post_init__(self) -> None:
+        for value in (self.broker_id, self.broker_symbol, self.display_name):
+            if not value.strip():
+                raise ValueError("broker instrument identity is required")
+        if tuple(sorted(set(self.duration_seconds))) != self.duration_seconds or any(
+            value <= 0 for value in self.duration_seconds
+        ):
+            raise ValueError("instrument durations must be positive, sorted and unique")
+        for flag in (self.detectable, self.analyzable, self.quotable, self.executable):
+            if type(flag) is not bool:
+                raise TypeError("instrument capabilities must be booleans")
+        if self.executable and (
+            not self.quotable or self.availability is not BrokerInstrumentAvailability.OPEN
+        ):
+            raise ValueError("executable instrument must be open and quotable")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "broker": self.broker.value,
+            "broker_id": self.broker_id,
+            "broker_symbol": self.broker_symbol,
+            "display_name": self.display_name,
+            "product": self.product.value,
+            "market_kind": self.market_kind.value,
+            "availability": self.availability.value,
+            "duration_seconds": list(self.duration_seconds),
+            "detectable": self.detectable,
+            "analyzable": self.analyzable,
+            "quotable": self.quotable,
+            "executable": self.executable,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> BrokerInstrument:
+        durations = payload.get("duration_seconds")
+        flags = ("detectable", "analyzable", "quotable", "executable")
+        if not isinstance(durations, list) or any(
+            isinstance(value, bool) or not isinstance(value, int) for value in durations
+        ):
+            raise ValueError("duration_seconds must be an integer list")
+        if any(type(payload.get(name)) is not bool for name in flags):
+            raise ValueError("instrument capability flags must be booleans")
+        return cls(
+            broker=Broker(_required_str(payload, "broker")),
+            broker_id=_required_str(payload, "broker_id"),
+            broker_symbol=_required_str(payload, "broker_symbol"),
+            display_name=_required_str(payload, "display_name"),
+            product=BrokerInstrumentProduct(_required_str(payload, "product")),
+            market_kind=BrokerMarketKind(_required_str(payload, "market_kind")),
+            availability=BrokerInstrumentAvailability(_required_str(payload, "availability")),
+            duration_seconds=tuple(durations),
+            detectable=bool(payload["detectable"]),
+            analyzable=bool(payload["analyzable"]),
+            quotable=bool(payload["quotable"]),
+            executable=bool(payload["executable"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerInstrumentCatalog:
+    generation: int
+    observed_at_utc: datetime
+    instruments: tuple[BrokerInstrument, ...]
+    unavailable_products: tuple[BrokerInstrumentProduct, ...] = ()
+
+    def __post_init__(self) -> None:
+        require_aware_utc(self.observed_at_utc, "observed_at_utc")
+        if self.generation <= 0:
+            raise ValueError("catalog generation must be positive")
+        identities = tuple(
+            (item.product, item.broker_id, item.broker_symbol) for item in self.instruments
+        )
+        if len(set(identities)) != len(identities):
+            raise ValueError("catalog contains duplicate instrument identity")
+        if tuple(sorted(set(self.unavailable_products), key=str)) != self.unavailable_products:
+            raise ValueError("unavailable products must be sorted and unique")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "generation": self.generation,
+            "observed_at_utc": self.observed_at_utc.isoformat(),
+            "instruments": [item.to_payload() for item in self.instruments],
+            "unavailable_products": [item.value for item in self.unavailable_products],
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> BrokerInstrumentCatalog:
+        raw = payload.get("instruments")
+        unavailable = payload.get("unavailable_products", [])
+        if not isinstance(raw, list) or any(not isinstance(item, Mapping) for item in raw):
+            raise ValueError("catalog instruments must be an object list")
+        if not isinstance(unavailable, list) or any(
+            not isinstance(item, str) for item in unavailable
+        ):
+            raise ValueError("unavailable_products must be a string list")
+        return cls(
+            generation=_required_int(payload, "generation"),
+            observed_at_utc=datetime.fromisoformat(_required_str(payload, "observed_at_utc")),
+            instruments=tuple(BrokerInstrument.from_payload(item) for item in raw),
+            unavailable_products=tuple(BrokerInstrumentProduct(item) for item in unavailable),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class BrokerProposalQuote:
     """Immutable, redacted broker proposal evidence.

@@ -13,6 +13,7 @@ from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSpec
 from apps.core.worker_supervisor import WorkerHealthState
 from apps.ui.ipc_client import UiIpcClient
 from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
+from packages.domain.models import Broker
 from packages.protocol import ProtocolError, ProtocolErrorCode, UiAccountMode
 from packages.security import SecretValue
 
@@ -103,6 +104,9 @@ def test_iqoption_connection_projects_verified_balance_and_never_enables_submiss
     )
     service.start()
     try:
+        # This fixture implements account reads only, not market-history. The
+        # real trader correctly treats that missing method as a session fault.
+        monkeypatch.setattr(service._iqoption_auto_trader, "start", lambda: None)
         accepted, connected, reason = service.connect_iqoption_selected_account(mode)
         assert (accepted, connected, reason) == (True, True, reason_code)
         assert captured_specs
@@ -279,11 +283,13 @@ def test_pending_practice_order_starts_saved_recovery_without_ui(
 
     monkeypatch.setattr("apps.core.lifecycle_service.IQOptionCredentialVault", FakeVault)
     service = CoreLifecycleService(tmp_path, ("simulated",), force_auth_simulation=True)
-    monkeypatch.setattr(
-        service,
-        "connect_iqoption_selected_account",
-        lambda mode: (calls.append(mode) is None, True, "IQOPTION_PRACTICE_CONNECTED"),
-    )
+
+    def connect_saved(mode: str) -> tuple[bool, bool, str]:
+        calls.append(mode)
+        service._iqoption_session_invalidated = False
+        return True, True, "IQOPTION_PRACTICE_CONNECTED"
+
+    monkeypatch.setattr(service, "connect_iqoption_selected_account", connect_saved)
     service.start()
     try:
         service._schedule_saved_iqoption_recovery(has_iqoption_recovery=True)
@@ -336,6 +342,42 @@ def test_saved_recovery_stops_after_five_bounded_attempts(
         service.emergency_shutdown()
 
     assert calls == ["saved"] * 5
+
+
+def test_iq_recovery_preserves_deriv_entry_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS",
+        (0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    service = CoreLifecycleService(tmp_path, ("simulated",), force_auth_simulation=True)
+    service.start()
+    try:
+        runtime = service._require_runtime()
+        service._deriv_account_id = "deriv-demo"
+        runtime.stop_new_entries_for(Broker.DERIV, "deriv-demo")
+        assert runtime.resume_new_entries_for(Broker.DERIV, "deriv-demo") is True
+        service._safe_stop = False
+
+        def reconnect(_mode: str) -> tuple[bool, bool, str]:
+            service._iqoption_session_invalidated = False
+            return True, True, "IQOPTION_PRACTICE_CONNECTED"
+
+        monkeypatch.setattr(service, "connect_iqoption_selected_account", reconnect)
+
+        service._request_iqoption_recovery("IQOPTION_BROKER_SESSION_UNAVAILABLE")
+        thread = service._iqoption_startup_recovery_thread
+        assert thread is not None
+        thread.join(timeout=2.0)
+
+        assert runtime.health_gate.state_for("DERIV", "deriv-demo").is_open is True
+        assert service._safe_stop is False
+        assert service._iqoption_bot_armed is False
+        assert service._iqoption_bot_reason == "IQOPTION_CONNECTED_REARM_REQUIRED"
+    finally:
+        service.emergency_shutdown()
 
 
 def test_core_connection_guard_blocks_fourth_external_session_start(

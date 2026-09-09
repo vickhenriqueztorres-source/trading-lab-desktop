@@ -9,7 +9,8 @@ from decimal import Decimal
 import pytest
 from primitives import Candle
 from strategy_lab.collect.pg_repository import PostgresRepository
-from strategy_lab.collect.repository import source_for_asset
+from strategy_lab.collect.repository import RepositoryError, source_for_asset
+from strategy_lab.research.dataset import ResearchDataset
 
 
 def closed_candle(ts: int) -> Candle:
@@ -27,14 +28,17 @@ def closed_candle(ts: int) -> Candle:
 def test_staging_upsert_is_idempotent_real() -> None:
     """R-COL-6/R-HUB-8: repeated UPSERT writes no new candles on the second run."""
     repository = PostgresRepository(os.environ["SUPABASE_STAGING_DB_URL"])
-    asset = "EURUSD-OTC"
+    asset = f"TEST-{uuid.uuid4().hex[:12].upper()}"
     ts = 1700000040
     source = source_for_asset(asset, "test-p05")
-    first = repository.upsert_candles([closed_candle(ts)], source)
-    second = repository.upsert_candles([closed_candle(ts)], source)
-    assert first in {0, 1}
-    assert second == 0
-    assert repository.watermark(asset) is not None
+    # Always force driver rollback so a staging test can never become research data.
+    with pytest.raises(RepositoryError, match="TEST_ROLLBACK"), repository.transaction():
+        first = repository.upsert_candles([closed_candle(ts)], source)
+        second = repository.upsert_candles([closed_candle(ts)], source)
+        assert first == 1
+        assert second == 0
+        assert repository.watermark(asset) == ts
+        raise RepositoryError("TEST_ROLLBACK")
 
 
 @pytest.mark.staging
@@ -58,6 +62,20 @@ def test_staging_check_rejects_invalid_candle_real() -> None:
                 )
                 """
         )
+
+
+@pytest.mark.staging
+def test_staging_research_queries_accept_parameterized_modulo() -> None:
+    """R-RES-1: psycopg must not parse SQL modulo as a placeholder."""
+    asset = f"TEST-{uuid.uuid4().hex[:12].upper()}"
+    dataset = ResearchDataset.from_supabase(
+        os.environ["SUPABASE_STAGING_DB_URL"],
+        [asset],
+        1700000040,
+        1700000100,
+    )
+    assert dataset.candles.is_empty()
+    assert dataset.payouts.is_empty()
 
 
 @pytest.mark.staging

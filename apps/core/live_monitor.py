@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 from dataclasses import asdict
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -134,11 +135,53 @@ class LiveMonitor:
                         )
             for row in rows:
                 key, order_id = str(row["strategy_key"]), str(row["order_id"])
+                if self._uploader is not None and row["state"] == "SETTLED":
+                    self._enqueue_terminal_evidence(row, key, order_id)
                 if row["state"] in {"SETTLED", "REJECTED", "SEND_BLOCKED", "CANCELLED", "EXPIRED"}:
                     self._catalog.notify_order_settled(key, order_id)
                 else:
                     self._catalog.notify_order_opened(key, order_id)
             self._last_success = time.monotonic()
+
+    def _enqueue_terminal_evidence(self, row: dict[str, Any], key: str, order_id: str) -> None:
+        """Copy only durable, terminal order evidence to the opt-in uploader."""
+        uploader = self._uploader
+        writer = self._writer
+        if uploader is None or writer is None:
+            return
+        try:
+            context = json.loads(str(row["context"]))
+            order = writer.order_for_id(order_id)
+            if order is None or order.get("realized_pnl_minor") is None:
+                return
+            timeframe = {"M1": 60, "M5": 300, "M15": 900}.get(str(context.get("timeframe")))
+            manifest_version = self._catalog.manifest_version
+            if timeframe is None or manifest_version is None:
+                return
+            amount = Decimal(str(order.get("amount_minor", 0)))
+            pnl = Decimal(str(order["realized_pnl_minor"]))
+            payout_pct = "0" if pnl <= 0 or amount <= 0 else str((pnl / amount) * Decimal(100))
+            updated = datetime.fromisoformat(str(row["updated_at"]))
+            ts = int(updated.timestamp()) // 60 * 60
+            revision = str(context.get("revision", ""))
+            recipe_revision = int(revision[:8], 16) % 2_147_483_647 or 1
+            uploader.enqueue_terminal_v2(
+                order_id=order_id,
+                strategy_key=key,
+                recipe_revision=recipe_revision,
+                manifest_version=int(manifest_version),
+                execution_semantics_version="exec-v1",
+                primitives_version="1.0.0",
+                asset=str(context["asset"]),
+                timeframe_s=timeframe,
+                product="binary",
+                account_environment="practice",
+                ts=ts,
+                won=pnl > 0,
+                payout_pct=payout_pct,
+            )
+        except Exception as exc:
+            logger.warning("Terminal telemetry enrichment failed: %s", type(exc).__name__)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():

@@ -198,7 +198,11 @@ class StrategyCardWidget(QFrame):
         broker = str(_get(entry, "broker", ""))
         if not broker:
             family = str(_get(entry, "family", ""))
-            if family == "DERIV_DIGIT" or "1HZ" in asset or self.strategy_key.startswith(("tail", "selective", "parity")):
+            if (
+                family == "DERIV_DIGIT"
+                or "1HZ" in asset
+                or self.strategy_key.startswith(("tail", "selective", "parity"))
+            ):
                 broker = "Deriv"
             else:
                 broker = "IQ Option"
@@ -257,9 +261,7 @@ class StrategyCardWidget(QFrame):
         p_min = _get(val, "p_min_at_validation", Decimal("0.54")) if val else Decimal("0.54")
         ops_per_day = _get(val, "ops_per_day", Decimal("10")) if val else Decimal("10")
         worst_streak = _get(val, "worst_streak", 3) if val else 3
-        res_1000 = (
-            _get(val, "result_1000_ops_stake10", Decimal("1000")) if val else Decimal("1000")
-        )
+        res_1000 = _get(val, "result_1000_ops_stake10", Decimal("1000")) if val else Decimal("1000")
         n_samples = _get(val, "n", 1000) if val else 1000
 
         p_hat_str = _format_percentage(p_hat)
@@ -564,13 +566,17 @@ class ManifestStrategyPanelWidget(QWidget):
 
         # Broker Filter
         filter_lbl = QLabel("Corretora:")
-        filter_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-weight: 600; font-size: 12px; margin-left: 16px;")
+        filter_lbl.setStyleSheet(
+            f"color: {TEXT_SECONDARY}; font-weight: 600; font-size: 12px; margin-left: 16px;"
+        )
         row.addWidget(filter_lbl)
 
         btn_style = (
             f"QPushButton {{ background-color: {BG_CARD}; color: {TEXT_SECONDARY}; "
-            f"border: 1px solid {BORDER_COLOR}; border-radius: 4px; padding: 3px 10px; font-size: 11px; }}"
-            f"QPushButton:checked {{ background-color: {ACCENT_CYAN}; color: #000; font-weight: bold; border-color: {ACCENT_CYAN}; }}"
+            f"border: 1px solid {BORDER_COLOR}; border-radius: 4px; "
+            "padding: 3px 10px; font-size: 11px; }}"
+            f"QPushButton:checked {{ background-color: {ACCENT_CYAN}; color: #000; "
+            f"font-weight: bold; border-color: {ACCENT_CYAN}; }}"
         )
         self._filter_all = QPushButton("Todas")
         self._filter_all.setCheckable(True)
@@ -597,13 +603,16 @@ class ManifestStrategyPanelWidget(QWidget):
 
         # Bulk Actions
         actions_lbl = QLabel("Ações:")
-        actions_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-weight: 600; font-size: 12px; margin-left: 16px;")
+        actions_lbl.setStyleSheet(
+            f"color: {TEXT_SECONDARY}; font-weight: 600; font-size: 12px; margin-left: 16px;"
+        )
         row.addWidget(actions_lbl)
 
         self._btn_turn_on_all = QPushButton("⚡ Ligar Todas")
         self._btn_turn_on_all.setStyleSheet(
             f"QPushButton {{ background-color: rgba(0, 209, 255, 0.15); color: {ACCENT_CYAN}; "
-            f"border: 1px solid {ACCENT_CYAN}; border-radius: 4px; padding: 4px 12px; font-weight: bold; font-size: 11px; }}"
+            f"border: 1px solid {ACCENT_CYAN}; border-radius: 4px; "
+            "padding: 4px 12px; font-weight: bold; font-size: 11px; }}"
             f"QPushButton:hover {{ background-color: {ACCENT_CYAN}; color: #000; }}"
         )
         self._btn_turn_on_all.clicked.connect(self.turn_on_all)
@@ -611,7 +620,8 @@ class ManifestStrategyPanelWidget(QWidget):
         self._btn_turn_off_all = QPushButton("⏹ Desligar Todas")
         self._btn_turn_off_all.setStyleSheet(
             f"QPushButton {{ background-color: rgba(255, 77, 77, 0.12); color: {ACCENT_RED}; "
-            f"border: 1px solid rgba(255, 77, 77, 0.4); border-radius: 4px; padding: 4px 12px; font-weight: bold; font-size: 11px; }}"
+            "border: 1px solid rgba(255, 77, 77, 0.4); border-radius: 4px; "
+            "padding: 4px 12px; font-weight: bold; font-size: 11px; }}"
             f"QPushButton:hover {{ background-color: {ACCENT_RED}; color: #fff; }}"
         )
         self._btn_turn_off_all.clicked.connect(self.turn_off_all)

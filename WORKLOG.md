@@ -5053,3 +5053,728 @@ Validação:
 - `compileall` aprovado em todos os pacotes de `apps` e `packages`.
 - Nenhuma ordem aberta, nenhuma alteração em modo real, nenhum segredo exposto.
 
+## 2026-09-05 — Planejamento de catálogo amplo e execução incremental (sem implementação)
+
+- Criado `docs/PLANO_CATALOGO_INCREMENTAL_SUPABASE_PROMPTS.md`, com 22 tarefas CAT-00…CAT-21
+  para BOT, Strategy Lab e Hub; contratos, dependências, testes, rollout e rollback.
+- Planejados dados/indicadores compartilhados no cliente, pesquisa/seleção offline no Lab
+  e Supabase para controle, dados recentes, histórico compacto e manifesto assinado.
+- Requisitos relacionados, apenas analisados/planejados: R-PRIM, R-MAN, R-COL, R-RES,
+  R-HUB e R-OPS; nenhum requisito novo declarado implementado por esta entrada.
+- Encontrado, não corrigido: diferenças de composição replay/bot e procedência estatística;
+  caminhos permissivos de pesquisa/holdout; integração dos clientes remotos a confirmar;
+  arquivamento ainda stub e publicação suscetível a falha parcial. Evidências no plano.
+- Consultadas referências oficiais Supabase para capacidade, limites de Edge Functions,
+  deleção de objetos e tamanho do banco. Quota/consumo do projeto remoto não medidos.
+- Nesta elaboração: somente inspeção e documentação. Nenhum código operacional alterado,
+  nenhuma migração/deploy, exclusão, build, conexão financeira ou ordem. Suítes completas
+  e benchmark não executados; validações anteriores acima permanecem históricas.
+
+## 2026-09-05 — CAT-00: baseline, auditoria do catálogo e ADR de execução
+
+- Requisitos analisados: R-DATA-001..005, R-STR-001..008, R-CAT-001..016 e contratos
+  R-ISO/R-PRIM/R-RES/R-BOT do Strategy Lab. Mudança apenas documental.
+- Criados `docs/CAT00_BASELINE_AND_CATALOG_AUDIT.md` e
+  `docs/ADR_EXECUTION_SEMANTICS_AND_BOOTSTRAP.md`; índice e plano atualizados.
+- Definidas, sem implementação, as identidades `legacy.bot.window-replay.v1`,
+  `legacy.lab.incremental.v1` e o contrato-alvo `tl.candle-close.v2`.
+- BOT: segunda suíte integral isolada = 1.230 passed, 3 failed, 4 skipped. As três falhas
+  foram reproduzidas isoladamente: submissão E2E IQ ausente, política de fallback após cache
+  sem assinatura divergente do teste e painel conjunto sem a estratégia Deriv esperada.
+- A primeira execução, concorrente com o Lab, teve 1.222 passed, 5 failed, 6 errors e 4 skipped;
+  o arquivo de worker isolado passou 14/14, classificando os erros adicionais como pressão
+  concorrente a investigar, não como defeito confirmado nem como sucesso da suíte.
+- BOT: mypy (304 arquivos), compileall, pip check, scanner de segredos e diff-check passaram.
+  Ruff scoped falhou com 24 diagnósticos; format scoped falhou em 7 arquivos.
+- LAB: 312 passed, 3 staging skipped; Ruff check, mypy strict (79 arquivos) e pip check
+  passaram; format check falhou em 1 arquivo. Deno e testes Supabase staging não executados.
+- Manifesto local: assinatura de produção aceita, 16 entradas F1/M1 com mesmos parâmetros e
+  estatísticas. O run `run_complete_catalog` não foi localizado. Wilson declarado 0.557
+  diverge do cálculo atual do Lab para 578/1000: 0.5471483340786791358059675999.
+- Divergência ambiental registrada: BOT declara Python >=3.13, mas o ambiente usado é 3.12.14;
+  LAB declara/usa Python 3.12. Nenhuma versão foi alterada.
+- Não executado: broker, ordem, Supabase remoto, migração, exclusão, build, commit ou push.
+
+## 2026-09-05 — CAT-01: inventário e orçamento do Supabase
+
+- Criado `docs/CAT01_SUPABASE_INVENTORY_AND_CAPACITY_BUDGET.md` com timestamp, commit,
+  inventário estático, fórmulas para 16/30 ativos e 100/1.000 clientes, budgets 70%/85%,
+  consultas somente leitura e gates de retenção.
+- CLI pinada localizada e verificada em `strategy-lab/state/tools`, versão 2.116.0.
+  `projects list` foi recusado porque não há `SUPABASE_ACCESS_TOKEN`; também estão ausentes
+  `SUPABASE_STAGING_DB_URL`, `SUPABASE_PROD_REF` e um ref de staging confirmável.
+- Inventário remoto ficou **BLOCKED**: plano, quota, capacidade restante, relação/índices,
+  extensions, migrations aplicadas, cron, grants, functions implantadas, buckets, objetos,
+  egress e invocações não foram inferidos nem marcados como zero.
+- Auditoria local encontrou archive HTTP 501, prova de arquivo limitada a contagem,
+  `SECURITY DEFINER` sem revoke explícito, publicação Storage/DB não atômica, seed de sessões
+  incompleto para 16 símbolos, token de cliente sem prova de posse e dois índices candidatos a
+  redundância. Nenhuma correção foi aplicada fora do escopo diagnóstico.
+- Zero DDL/DML/deploy/exclusão remoto. Nenhuma credencial histórica exposta foi reutilizada;
+  nenhuma corretora ou ordem foi acessada.
+- Validação documental: `git diff --check` e scanner de segredos executados no fechamento.
+
+## 2026-09-05 — CAT-02: contrato público de receita, evidência e capacidades
+
+- Criada a revisão aditiva `schema_revision=1.2` / pacote `tl-manifest-schema 1.2.0`, com
+  `execution_semantics_version=tl.candle-close.v2`, identidade estável de revisão/fingerprint,
+  composição allowlisted F1..F5, evidência de dataset e capabilities de produto, timeframe,
+  warmup e tick volume.
+- Criado o vetor público independente
+  `strategy-lab/contracts/strategy_contract_vectors.v2.json`, com hashes próprios e casos de
+  composição, outputs, bootstrap, elegibilidade, empate, recursos, canonicalização, assinatura,
+  telemetria e entradas hostis. Artefatos históricos assinados não foram reescritos.
+- O Desktop ganhou um leitor independente do contrato 1.2. Sua capability operacional padrão
+  continua `legacy.bot.window-replay.v1`; portanto o runtime recusa receita v2 com
+  `MANIFEST_EXECUTION_SEMANTICS_UNSUPPORTED` até CAT-08/CAT-09. O builder permanece emitindo 1.1
+  e o Hub/publicador 1.2 fica deliberadamente para CAT-13: leitor antes do produtor.
+- Manifesto sintético não pode assumir `approved`; `demo_only` permanece local; telemetria é
+  opt-in e sem PII, credencial, conta ou comando financeiro. Nenhuma família, fórmula, parâmetro,
+  limiar, gestão de risco, ID persistido ou paridade numérica foi alterado.
+- Contratos: Lab **140 passed**; Desktop focado **83 passed**; vetor CAT-02 isolado **16 passed**.
+  Lab integral: **328 passed, 3 skipped**. Desktop integral: **1246 passed, 3 failed, 4 skipped**;
+  as três falhas são as mesmas do baseline CAT-00, sem regressão nova do CAT-02.
+- Qualidade: Lab Ruff check, mypy strict (81 arquivos) e pip check aprovados; seu format-check
+  mantém 1 arquivo anterior. Desktop mypy (304 arquivos), compileall e pip check aprovados;
+  Ruff mantém 24 diagnósticos e format-check 7 arquivos anteriores. Scanner de segredos e
+  `git diff --check` aprovados.
+- Nenhum Supabase remoto, migration, deploy, publicação, broker ou ordem foi acessado. As
+  credenciais coladas na conversa não foram usadas nem persistidas e precisam ser rotacionadas.
+
+## 2026-09-05 — CAT-03: dataset real, identidade, tempo e payout sem vazamento
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT03_DATASET_IDENTITY_AND_ASOF.md`.
+- Implementados snapshots de dataset com origem/fonte/ativo/timeframe/intervalo/qualidade e
+  fingerprint; pesquisa real exige fonte explícita e sintético somente via `--synthetic`.
+- Corrigida a fronteira de dados: `EURUSD` e `EURUSD-OTC` são ativos distintos; M5/M15 exigem
+  buckets M1 completos em UTC; vela corrente é recusada; cobertura respeita sessões e gaps
+  `in_session`.
+- Payout agora é point-in-time por `observed_at`; agregado horário legado sem as-of fica
+  inelegível. Migration local `0007_payout_observations.sql` criada, mas não aplicada remoto.
+- Volume ausente não é fabricado; família com `tick_volume_ratio` bloqueia com
+  `RES_TICK_VOLUME_UNAVAILABLE`. Relatórios de pesquisa carregam fingerprint/elegibilidade.
+- Validação do Lab: **336 passed, 3 skipped**; Ruff check/format, mypy, compileall, scanner de
+  segredos e `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, deploy, coleta real, publicação, corretora, ordem,
+  build do EXE ou alteração do bot operacional. Skips staging seguem por falta de
+  `SUPABASE_STAGING_DB_URL`.
+
+## 2026-09-05 — CAT-04: contrato público de replay Lab ↔ Bot
+
+- Produto alterado: Strategy Lab e teste contratual do Desktop Bot. Relatório criado em
+  `docs/CAT04_REPLAY_CONTRACT_EQUIVALENCE.md`.
+- O replay de referência agora aplica gates de composição F1/F4, respeita timeframe e janela
+  horária da receita, diferencia close-to-close de execução broker e recusa liquidação quando a
+  próxima linha é posterior ao bucket esperado.
+- Criado `strategy-lab/contracts/replay_contract_vectors.v1.json`, SHA-256
+  `1059d58db4ead251e9be720218427b5dcb883437142d1af76a07ce43782acdde`, cobrindo F1..F5, M1/M5/M15,
+  ativos spot/OTC distintos, volume ausente, horário fechado, empate, gap e reavaliação por
+  prefixo.
+- O bot valida o contrato sem importar código do Lab em
+  `tests/contract/test_replay_contract_vectors_v1.py`.
+- Validação executada: Lab focado **27 passed**; Lab Ruff check/format e mypy aprovados; Bot
+  contrato **7 passed**; Bot Ruff check/format e mypy scoped aprovados.
+- Não executado: Supabase remoto/staging, deploy, coleta real, publicação, broker, ordem,
+  aprovação de estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-05: evidência durável e holdout protegido
+
+- Produto alterado: Strategy Lab/Hub local. Relatório criado em
+  `docs/CAT05_DURABLE_EVIDENCE_AND_HOLDOUT.md`.
+- Criada migration local `strategy-lab/apps/hub/supabase/migrations/0008_research_evidence.sql`
+  para snapshots de dataset, reservas de holdout, tentativas de pesquisa e artefatos de evidência.
+  A migration não foi aplicada em Supabase remoto/staging.
+- `run_research_pipeline` passou a exigir evidência durável para dataset elegível à produção,
+  reservar holdout antes da avaliação, bloquear holdout queimado, registrar tentativas e gravar
+  artefatos hash-addressed quando store é fornecido.
+- `HoldoutManager` deixou de engolir erro de banco e carrega ranges queimados no startup quando
+  uma conexão é fornecida.
+- Validação do Lab: **345 passed, 3 skipped**; Ruff check/format, mypy, compileall, scanner de
+  segredos raiz e `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, Storage real, deploy, publicação, broker, ordem,
+  aprovação de estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-06: aprovação estatística sem atalhos
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT06_STATISTICAL_APPROVAL_NO_SHORTCUTS.md`.
+- Implementados gates preliminares auditáveis, FDR/BH por rodada real, separação entre
+  `windows_passed`, `gates_passed` e `holdout_passed`, bloqueio de holdout curto para produção,
+  rejeição de família desconhecida e remoção de `float` em permutação/PBO.
+- Falta de payout observado reprova com `RES_PAYOUT_MISSING`; não vira zero operações aprovado.
+- Validação do Lab: suíte integral **351 passed, 3 skipped**; Ruff check/format, mypy, compileall,
+  scanner de segredos raiz e `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, coleta real, publicação, corretora, ordem, aprovação de
+  estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-08: hub local de séries IQ Option
+
+- Produto alterado: BOT. Relatório criado em
+  `docs/CAT08_LOCAL_SERIES_HUB_AND_MARKET_SCHEDULING.md`.
+- Criado `apps/core/iqoption_series_hub.py`, componente data-only para séries de candles IQ Option,
+  sem API financeira e sem submissão de ordem.
+- O `IqOptionAutoTrader` passou a buscar candles pelo hub, com chave por broker, conta, produto,
+  geração/sessão, ativo exato e timeframe. `EURUSD` e `EURUSD-OTC` permanecem distintos.
+- Removido o corte silencioso de histórico em 120 candles: o hub solicita `warmup + 3` até
+  capacidade explícita de 1000 e rejeita previamente com `WARMUP_CAPACITY_EXCEEDED` se não couber.
+- Mantido o guarda local de mensagens: 60/min para market data dentro do teto interno de 90/min,
+  reservando orçamento operacional para ordem/recovery/reconciliação.
+- Adicionadas validações de candle fechado, compatibilidade de broker/símbolo/TF, dedup por
+  fechamento, detecção de parcial, duplicado, out-of-order, gap e correção histórica.
+- Scheduler puro criado com prioridade `RECOVERY > BOOTSTRAP > STEADY`, deadline de fechamento,
+  dedup e fila limitada.
+- Contratos auxiliares preservados durante regressão: RSI local demo sem probe de payout permanece
+  compatível, mas com probe disponível continua fail-closed; cache de manifesto inválido no profile
+  não cai para fallback embarcado; cards locais Deriv seguem visíveis no painel agregado sem virar
+  receitas IQ Option.
+- Validação final do BOT: **1266 passed, 4 skipped**; Ruff check/format, mypy, compileall e
+  `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, corretora, login, ordem, build do EXE ou benchmark no EXE.
+
+## 2026-09-05 — CAT-07: pesquisa ampla, limitada e compatível com executor
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT07_EXECUTOR_COMPATIBLE_RESEARCH_GRAMMAR.md`.
+- A gramática agora poda por capacidade do executor, usa budget nomeado de 500 trials, amostragem
+  determinística por seed/hash, deduplicação e relatório de universo/elegíveis/amostrados.
+- Corrigida F5 como exceção canônica do contrato público, sem liberar combinações não canônicas.
+- F3/`level_touch` exige níveis por ativo; defaults sintéticos 99/101 não entram no catálogo de
+  Forex automaticamente.
+- Audit padrão com seed 7: 116.640 elegíveis, 500 amostrados, diversidade F1=123, F2=152,
+  F4=119, F5=106.
+- Validação do Lab: suíte integral **357 passed, 3 skipped**; Ruff check/format e mypy aprovados;
+  smoke CLI sintético concluído com `status=ok`.
+- Não executado: Supabase remoto/staging, coleta real, publicação, corretora, ordem, aprovação de
+  estratégia nova ou build do EXE.
+
+## 2026-09-05 — CAT-09: cache incremental de indicadores compartilhados
+
+- Produto alterado: BOT. Relatório criado em
+  `docs/CAT09_INCREMENTAL_INDICATOR_CACHE.md`.
+- Criado `apps/core/indicator_cache.py`, componente data-only para a camada `series -> indicator`,
+  sem API financeira, sem submit/buy e sem alteração do pipeline de ordens.
+- A chave do indicador inclui identidade exata da série CAT-08, nome, parâmetros canônicos,
+  `primitives_version`, `execution_semantics_version`, `bootstrap_identity` e identidade auxiliar.
+- Implementados estados `WARMING_UP`, `READY` e `INVALID`, com validação de warmup, continuidade,
+  timeframe, origem, candle fechado, correção histórica e volume exigido pelo indicador.
+- Reference counting permite múltiplas receitas compartilharem um único nó RSI14 e liberar uma
+  receita sem destruir as demais.
+- O `IqOptionAutoTrader` passou a manter o cache e executar shadow diagnóstico para o RSI local
+  explícito; discordância/invalidez emite motivo, mas não aciona fallback financeiro, não bloqueia
+  o caminho legado nesta etapa e não muda stake/ordem/risco.
+- Testes adicionados em `tests/unit/test_indicator_cache.py`, incluindo comparação com os vetores
+  públicos CAT-04 para outputs RSI de confirmação.
+- Validação final do BOT: **1275 passed, 4 skipped**; Ruff check/format no escopo canônico
+  `apps packages tests`, mypy `apps packages`, compileall e `git diff --check` aprovados.
+- Observação: `ruff check .` segue bloqueado por arquivos legados fora do escopo canônico,
+  especialmente `docs/##  Arquitetura.py` contendo Markdown com extensão `.py` e avisos antigos em
+  `scripts/scrub_secrets.py`.
+- Não executado: Supabase remoto/staging, corretora, login, ordem, build do EXE, benchmark no EXE
+  ou troca do engine financeiro para outputs incrementais.
+
+## 2026-09-05 — CAT-10: flags seguras para engine incremental IQ Option
+
+- Produto alterado: BOT. Relatório criado em
+  `docs/CAT10_SAFE_INCREMENTAL_ENGINE_FLAGS.md`.
+- Criado `IqOptionExecutionFlags`, separando caminho legado, shadow de indicadores e engine
+  incremental de entrada.
+- Default preservado: legado ativo, shadow ativo e engine incremental desligado.
+- Quando legado e incremental estão desligados, o trader restaura estado local e bloqueia novas
+  entradas com `IQOPTION_ENTRY_ENGINE_DISABLED`, sem buscar candles e sem submeter ordem.
+- O RSI local explícito `iqoption-rsi-demo` pode usar o cache incremental CAT-09 quando
+  `incremental_entries_enabled=True`; ainda passa por candidatura, armado manual, uma ordem em voo,
+  candle pós-arm, risco, payout/ticket, validação final sob lock e `CoreRuntime.submit`.
+- Famílias/manifestos continuam no caminho legado até existir compilador completo para DAG
+  incremental; com legado desligado, não caem para fallback e retornam
+  `INCREMENTAL_ENGINE_UNSUPPORTED`.
+- Validação focada: **60 passed** em auto trader/failure/cache; **54 passed** em manifesto,
+  candidatura e replay 24h; Ruff check/format e mypy focados aprovados.
+- Não executado: suíte integral pós-CAT-10, Supabase remoto/staging, corretora, login, ordem,
+  build do EXE, benchmark no EXE ou engine incremental completo para F1..F5.
+
+## 2026-09-05 — CAT-11: replay executável de portfólio no Strategy Lab
+
+- Produto alterado: Strategy Lab. Relatório criado em
+  `docs/CAT11_PORTFOLIO_EXECUTABLE_REPLAY.md`.
+- Criado `strategy-lab/tools/strategy_lab/research/portfolio_replay.py` para medir oportunidades
+  realmente executáveis a partir de sinais brutos do catálogo, sem import cruzado com o bot.
+- O simulador aplica contrato público de arbitragem, uma ordem em voo, payout observado, TTL,
+  atraso, risco, cooldown, capital e falhas simuladas, registrando motivo por oportunidade.
+- Adicionado teste CAT-11 cobrindo separação entre sinais/dia e operações executáveis/dia,
+  conflitos, duplicatas, payout ausente, prazo expirado, risco/cooldown, vetores públicos CAT-04 e
+  comparação 10/20/30/50 receitas.
+- Evidência: 50 receitas duplicando o mesmo fechamento geraram 50 sinais brutos, porém só 1
+  operação executável; as outras 49 ficaram `CONFLICT`.
+- Validação no `.venv` do Lab: CAT-11 **8 passed**; regressão research/contrato **33 passed**;
+  suíte completa **365 passed, 3 skipped**; Ruff check/format, mypy, compileall e
+  `git diff --check` aprovados.
+- Não executado: Supabase remoto/staging, corretora, ordem, publicação, benchmark do EXE, build do
+  EXE ou seleção de portfólio CAT-12.
+
+## 2026-09-05 — Supabase Hub apply remoto preparado, bloqueado por credenciais seguras
+
+- Produto alterado: Strategy Lab/Hub. Criado
+  `strategy-lab/scripts/supabase_apply_remote.ps1`.
+- A CLI Supabase pinada foi localizada e validada; Edge Functions locais passaram em Deno:
+  fmt/lint/check/test com **13 passed**.
+- O script seguro aplica migrations, buckets, secrets e Edge Functions usando apenas variáveis de
+  ambiente. Secrets de function são passados por arquivo temporário em `strategy-lab/state/` e
+  removidos no `finally`.
+- Tentativa remota não prosseguiu: ambiente não possui `SUPABASE_STAGING_DB_URL`,
+  `SUPABASE_PROJECT_REF` nem `SUPABASE_ACCESS_TOKEN`. O script falhou fechado antes de qualquer
+  alteração remota.
+- Nenhuma credencial colada no chat foi gravada no repositório; `rg` não encontrou os marcadores
+  sensíveis nos arquivos rastreados/não ignorados.
+
+## 2026-09-05 — Strategy Lab Hub aplicado no Supabase staging
+
+- Produto afetado: somente `strategy-lab/`; nenhuma integração privada, IPC ou banco foi
+  compartilhado com o Desktop Bot.
+- Projeto Supabase autorizado foi vinculado pela CLI; migrations `0001`–`0008`, RLS, buckets e as
+  cinco Edge Functions foram aplicados e verificados remotamente.
+- Smokes remotos comprovaram `client_token=201`, `outcomes=202`, `publish=201`, regressão de versão
+  `409` e ETag. Todos os registros e objetos sintéticos foram removidos após a comprovação.
+- Corrigido no Hub um 500 causado por outcome com timestamp fora da grade M1; a fronteira agora
+  responde 422 e possui teste de regressão.
+- O metadado de Storage contém `max-age=900`, mas o endpoint público Supabase responde `no-cache`
+  por limitação externa conhecida. R2 e arquivamento frio continuam bloqueados por ausência de
+  configuração e não foram declarados validados.
+- Validação do Lab: **365 passed, 3 skipped**; Deno **15 passed**; Ruff, mypy, compileall, scanner
+  de segredos e `git diff --check` aprovados. Nenhuma corretora ou ordem foi acionada.
+
+## 2026-09-06 — CAT-12: seleção offline de portfólio no Strategy Lab
+
+- Produto alterado: somente o núcleo offline `strategy-lab/tools/strategy_lab/research/`; o
+  Desktop Bot não recebeu lógica de ranking, otimização ou sinal.
+- Implementada seleção reproduzível entre receitas individualmente aprovadas por contribuição
+  marginal no simulador CAT-11, com limites predefinidos de sobreposição e concentração.
+- Configuração/seleção são congeladas por hash antes do holdout; evidência sintética e real não se
+  misturam; cada snapshot de holdout só pode ser aberto uma vez no processo.
+- Relatório mede frequência executável, Wilson, payout de equilíbrio, EV/sensibilidade,
+  drawdown/streak e custo. O rascunho de manifesto é local, não assinado e não publicável
+  automaticamente.
+- Ensaio de capacidade com 100 receitas: **9 passed**, 100 operações, 141,61 s. Regressão diária
+  usa 12 receitas e mantém os alvos 10/20/30/50/100 explícitos.
+- Validação: CAT-11/CAT-12 **19 passed**; Lab completo **376 passed, 3 skipped**; Ruff, formatação,
+  mypy strict e compileall aprovados; isolamento no projeto principal **4 passed**.
+- Nenhum dataset/holdout real, Supabase remoto, corretora ou ordem foi usado nesta etapa.
+
+## 2026-09-06 — Strategy Lab CAT-13 publicado no Supabase staging
+
+- Produto afetado: `strategy-lab/` e documentação do projeto principal. O Desktop Bot não recebeu
+  mudança de execução, corretora, ordem, credencial ou integração privada.
+- Implementado pipeline recuperável de publicação do manifesto: journal durável, objetos
+  imutáveis `vN.json`, ponteiro autoritativo em banco, projeção legada `current.json` reparável,
+  endpoint público `manifest_current` e outbox durável para mirror.
+- A migration `0009_publication_pipeline.sql` foi aplicada no projeto Supabase staging autorizado;
+  as Edge Functions `archive`, `mirror`, `publish`, `client_token`, `outcomes` e
+  `manifest_current` foram redeployadas via CLI.
+- Smoke remoto controlado confirmou `publish=201`, `manifest_current=200`, reenvio idempotente
+  `publish=200`, versão `14` e `x-manifest-fallback=false`. Dados e objetos sintéticos do smoke
+  foram removidos; contagens finais de publicação voltaram a zero.
+- Validação: Deno fmt/lint/check e **20 passed**; Lab completo **382 passed, 3 skipped**; teste
+  CAT-13 Python **6 passed**; Ruff, formatação, mypy strict, compileall, parse PowerShell,
+  scanner de segredos, `git diff --check` e isolamento do projeto principal **4 passed**.
+- Limitações: R2 continua sem credenciais/configuração, então o mirror foi validado localmente com
+  fake e implantado, mas não espelhado remotamente. Os três skips do Lab dependem de
+  `SUPABASE_STAGING_DB_URL` explícita no pytest. Nenhuma corretora, conta financeira, ordem ou
+  ambiente Real foi acessado.
+
+## 2026-09-06 — CAT-14: consumo do manifesto ligado ao runtime do Desktop Bot
+
+- Produto alterado: Desktop Bot. O `ManifestClient` existente foi conectado ao lifecycle normal
+  do Core e recebe atualizações em background, fora dos ciclos de sinal e ordem.
+- Configurados canal público `manifest_current` e fallback compatível `manifests/current.json`,
+  ambos HTTPS, com ETag por origem, jitter de ±10%, backoff limitado e orçamento de 4 ciclos/hora
+  (máximo de 8 GETs/hora).
+- Assinatura, schema, tamanho, relógio, versão monotônica, engine, primitives, semântica, parâmetros
+  e recursos são validados antes da preparação. Instâncias são preparadas fora do lock e a nova
+  geração só fica visível por commit atômico.
+- Estratégias removidas ou alteradas com ordem em andamento permanecem em `retiring` até o
+  settlement. A troca invalida a autoridade e desarma somente IQ Option; Deriv permanece isolado
+  e nenhum catálogo rearma trading automaticamente.
+- Cache local continua assinado e é substituído atomicamente. Arquivo truncado, assinatura
+  inválida, rollback ou versão incompatível falham fechados, preservando o último estado válido.
+- Testes novos cobrem endpoints sem placeholder, `304`, timeout, divergência canal/fallback,
+  relógio inválido, falha de preparação, swap concorrente, budget e retirada com ordem aberta.
+- Validação: suíte completa **1287 passed, 4 skipped**; após o ajuste defensivo final do backoff,
+  regressão focada **59 passed**. Ruff check/format, mypy (**306 arquivos**), compileall,
+  scanner de padrões de segredo e `git diff --check` aprovados. Os skips são integrações
+  opcionais/condições de plataforma. O pytest retornou código 0; houve apenas aviso de limpeza do
+  link temporário `pytest-current` no encerramento do Windows.
+- Verificação externa read-only: os endpoints reais estavam alcançáveis, porém sem manifesto após
+  a limpeza do smoke CAT-13 (`manifest_current=503`, objeto compatível=400). Por isso não se declara
+  atualização remota bem-sucedida. R2 independente segue sem configuração.
+- Nenhuma corretora, conta, ordem, submissão financeira, ambiente Real ou build de EXE foi usado.
+
+## 2026-09-06 — CAT-15: telemetria de outcomes endurecida no Strategy Lab Hub
+
+- Produto alterado: Hub/Supabase do subprojeto autônomo `strategy-lab/`; o pipeline financeiro do
+  Desktop Bot não foi alterado nesta etapa.
+- Implementado contrato v2 mínimo, idempotência transacional, agrupamento de relatos dependentes,
+  retenção e quotas globais/por cliente. O payload legado continua aceito pela Edge Function.
+- Removido o bypass por Data API: anon não insere diretamente em v1/v2, não lê agregados e não
+  executa RPCs internas. Outcomes nunca promovem receita ou alteram manifesto/pesquisa.
+- Migrations `0010`/`0011` e functions foram aplicadas no Supabase staging. Smoke Practice provou
+  insert único e retry duplicado; registros sintéticos foram removidos.
+- Documento: `docs/CAT15_OUTCOMES_PRIVACY_AND_BUDGETS.md`.
+- Validação: Lab **382 passed, 3 skipped**; Deno **25 passed**; Ruff check/format, mypy strict
+  (**85 arquivos**) e compileall aprovados. Checks finais de isolamento, segredos e diff foram
+  executados no fechamento.
+- Nenhuma corretora, conta financeira, ordem, ambiente Real ou build de EXE foi usado.
+
+## 2026-09-06 — CAT-16: UI verdadeira e telemetria local da execução
+
+- IDs cobertos: CAT-16; contratos de projeção/IPC, SeriesHub/cache incremental e outcomes v2.
+- O radar IQ Option deixou de criar linhas sintéticas: inicia sem evidência e só exibe valores após
+  snapshot do Core. Sinal observado, envio e aceite agora são estados independentes e explícitos.
+- A projeção inclui fonte/modo/revisão, readiness, séries, nós de indicadores, reuso, latência,
+  fila, motivo de espera e evidência estatística. O parser mantém compatibilidade com snapshots
+  anteriores.
+- Outcomes v2 recebem contexto mínimo e `event_id` determinístico após settlement, com fila de
+  10.000 itens e retenção de sete dias. O uploader só é criado com opt-in explícito
+  (`DUALTRADE_OUTCOMES_OPT_IN=1` + endpoint HTTPS), usa token sob demanda e não persiste segredos.
+- A migration 0010 foi adicionada sem modificar checksums históricos. O teste de upgrade foi
+  ajustado para aplicar v1–v8 antes do writer e validar a cauda v9–v10.
+- Validação executada: CAT-16 **4 passed**; regressão focada UI/IPC/outcomes **23 passed**;
+  suíte completa **1.291 passed, 4 skipped**. Ruff nos arquivos alterados, mypy em 306 arquivos,
+  compileall e `git diff --check` foram executados. O `ruff check .` global ainda encontra o
+  arquivo legado `docs/##  Arquitetura.py` (Markdown com extensão `.py`) e avisos preexistentes em
+  `scripts/scrub_secrets.py`; não são alterações da CAT-16.
+  O cenário de supervisor que apresentou falha transitória na
+  execução paralela passou isoladamente.
+- Nenhum login de corretora, conta financeira, ordem, ambiente Real, Supabase/R2 ou build de EXE
+  foi usado. Fora do escopo: telemetria remota sem opt-in, publicação de manifesto e execução
+  financeira externa.
+
+## 2026-09-06 — CAT-19: baseline local de capacidade do catálogo
+
+- Criado `apps/core/catalog_benchmark.py` e CLI local. O harness usa as identidades de série e
+  nós incrementais reais, mas gera candles fechados localmente; não expõe worker, socket, ordem,
+  risco, persistência, credencial ou API financeira.
+- Mede CPU do processo, working set Windows, latência local p50/p95/p99/máxima, receitas, séries,
+  nós, reuso e atualizações sintéticas de série. A saída declara `network_calls=0` e
+  `financial_actions=0` como prova da fronteira.
+- Baseline desta máquina (Windows 10, 4 CPUs lógicas, 8.070 MiB, Python 3.12.14, 64 épocas):
+  10 e 30 receitas com reuso 10x foram admitidas; 50 receitas sem reuso teve p95 116,7712 ms e
+  100 com múltiplos TFs teve p95 331,8323 ms, ambas recusadas pelo teto local de 100 ms.
+- Testes CAT-19 iniciais: 4 aprovados. Ruff, mypy e formatação dos novos arquivos aprovados.
+  A regressão focada SeriesHub/cache/benchmark: 23 aprovados. A suíte integral registrou
+  1.290 aprovados, 4 skips e 5 falhas de `test_launcher_process_tree` (parada/árvore de processos);
+  o mesmo módulo rodado isoladamente passou 9/9 em 51,24 s, portanto a falha é de interação/ordem
+  de suíte ainda a reproduzir, não foi atribuída ao harness. O benchmark de EXE, falhas, soak de
+  2 h e build canônico permanecem pendentes desta CAT.
+- Nenhuma corretora, rede, credencial, ordem, conta Real, alteração financeira ou build foi usado.
+
+## 2026-09-07 — Correção da contenção após escalonamento do launcher
+
+- Corrigido `ProcessTreeSupervisor.stop_all`: quando o Core não pode ser confirmado como encerrado
+  após o protocolo de desligamento, o launcher agora termina o Job Object inteiro e volta a
+  verificar o processo raiz antes de liberar o perfil. Isso cobre bootstrapper/empacotador que
+  mantém o processo raiz de `Popen` distinto do processo que executa o Core.
+- O retorno de `stop_all` passou a representar a confirmação do encerramento dentro do deadline;
+  falhas de ACK nas etapas graciosas não são tratadas como falha se a contenção concluiu o
+  desligamento verificável. O caminho de timeout possui regressão unitária que exige
+  `terminate_tree`.
+- Validação: unidade do supervisor **6 passed**; árvore real do launcher **9 passed**; suíte
+  Desktop completa **1.295 passed, 4 skipped, 0 failed** em 422,19 s. Não restou processo Python
+  do teste após o encerramento. Ruff/formatação e mypy do código alterado aprovaram.
+- Limitação de tooling registrada: `ruff check .` global ainda é bloqueado por artefatos legados
+  fora deste escopo (`docs/##  Arquitetura.py`, que contém Markdown sob extensão `.py`, e avisos
+  preexistentes em `scripts/scrub_secrets.py`).
+- Nenhuma corretora, credencial, rede financeira, conta, ordem ou build de EXE foi usado.
+
+## 2026-09-07 — CAT-19: benchmark do artefato Windows onedir
+
+- Gerado o artefato canônico isolado `artifacts/cat19-exe-20260907/TradingLab/` com PyInstaller
+  6.22.2, scanner de distribuição, manifesto de integridade e autoverificação do pipeline.
+- `TradingLab.exe --post-update-health-check` retornou `0`. O smoke do launcher congelado, com
+  perfil temporário isolado, somente worker `simulated`, UI headless e desligamento automático,
+  retornou `0` e não deixou processos vivos.
+- O benchmark foi executado pelo EXE congelado, com 64 épocas: 10 e 30 receitas com reuso foram
+  admitidas; 50 e 100 foram recusadas pelo gate de p95/p99. A execução declarou
+  `network_calls=0` e `financial_actions=0`; não houve UI, corretora, credencial, conta ou ordem.
+- SHA-256 de `TradingLab.exe`:
+  `1C8ED9A84195B158F90918337345BFA5E8358EC77789847C046D64259F63E3EB`.
+- Evidência numérica e pendências remanescentes foram atualizadas em
+  `docs/CAT19_CATALOG_BENCHMARK_BASELINE.md`.
+
+## 2026-09-07 — CAT-19: harness local de replay e falhas, validação congelada
+
+- Adicionados `catalog_soak.py`, CLI e cinco testes. Helpers de grafo/candles do benchmark
+  passaram a ser reutilizáveis; não houve alteração em matemática ou pipeline financeiro.
+- Replay de 1.440 minutos sobre três nós RSI / 30 referências: 4.320 outputs distintos,
+  4.380 cálculos com warmup, três matches shadow finais, zero mismatch. Executado em Python
+  (10,5393 s) e EXE (16,1406 s), exclusivamente com candles sintéticos.
+- Matriz de seis componentes aprovada: invalidação por geração, gap, release após troca de
+  referências, deduplicação de notificações, fila limitada e limpeza durante warmup. O ensaio
+  não comprova swap concorrente, suspensão real, recuperação automática do lifecycle nem
+  cancelamento de fetch em voo; os limites de cada prova foram registrados no relatório CAT-19.
+- Lotes repetidos com cache novo: Python 30,0407 s / 111 lotes / pico 91,6172 MiB; EXE 10,2392 s /
+  38 lotes / pico 66,8125 MiB. Nenhuma recusa de admissão. Não equivalem ao soak contínuo de 2 h.
+- Regressão focada: 30 passed; Ruff/formatação nos cinco arquivos, mypy nos três módulos e
+  compileall aprovados. Pytest emitiu aviso de permissão na limpeza de temporário após concluir.
+  A suíte integral anterior (1.295 passed) não foi reexecutada para esse novo harness.
+- Build canônico em `artifacts/c19/TradingLab/`: scanner zero segredos, manifesto 441 arquivos,
+  health exit 0. Smoke com perfil temporário, simulated e UI headless: exit 0, stderr vazio e
+  nenhum processo TradingLab residual. SHA-256 do EXE:
+  `2FFAF200ED3A324798051439E2C35C7F80EB6F0CE0BAC896AC576ED347648188`.
+- Registradas duas tentativas sem sucesso antes do resultado: COLLECT no destino longo falhou
+  ao copiar `.pyc`; chamada de soak com caminho não cotado foi recusada pelo argparse. Build
+  em caminho curto e saída relativa concluíram. Não houve remoção de dados do usuário.
+- CAT-19 permanece parcial: estratégias completas, mesmo grafo em soak 2 h, faults no runtime,
+  UI responsiva, portable/installer e hardware adicional pendentes. Nenhuma corretora, ordem,
+  credencial ou alteração remota de Supabase foi usada. Capacidade de 30 estratégias completas
+  não foi declarada a partir de 30 referências a nós RSI.
+- Fechamento: restart do mesmo perfil temporário retornou 0 com stderr vazio; mypy global
+  aprovou 310 arquivos; Ruff/format focados reconfirmados; diff-check com tolerância CRLF
+  aprovado. Nenhum processo TradingLab residual após a verificação final.
+
+## 2026-09-08 — Strategy Lab: primeira coleta real IQ/Supabase
+
+- O subprojeto isolado Strategy Lab autenticou em modo somente leitura, validou um canário real
+  e persistiu atomicamente 995 velas M1 de `EURUSD-OTC` e uma observação de payout `0.82` no
+  Supabase vinculado. Não houve ordem, compra, conta Real ou ação financeira.
+- A grade elegível apresentou cobertura 970/970, sem gap em sessão. O calendário observado do
+  ativo e as correções de limite temporal, padding, UPSERT em lote, consulta SQL e orçamento
+  diário de login foram testados sem alterar a matemática nem o pipeline do Desktop Bot.
+- A amostra de payout é posterior ao histórico coletado e não foi usada retroativamente.
+  Portanto, nenhuma estratégia foi ranqueada, aprovada ou publicada nesta etapa.
+- Evidência detalhada e limitações estão no `strategy-lab/WORKLOG.md` e em
+  `strategy-lab/docs/REAL_COLLECTION_BOOTSTRAP.md`. Validação do Lab: 454 passed, 4 skipped;
+  Ruff, formato, mypy strict de produção, compileall, lint remoto do banco e diff-check com
+  `cr-at-eol` para o checkout Windows aprovados.
+
+## 2026-09-08 — Build Windows atualizado após integração do catálogo
+
+- Executado o pipeline canônico PyInstaller 6.22.2 em pasta nova, sem encerrar ou reutilizar a
+  instância do operador. A distribuição onedir passou scanner de segredos com zero achados,
+  manifesto de integridade com 441 arquivos e health check pós-build com exit code 0.
+- O smoke do `TradingLab.exe` congelado usou perfil novo, UI headless e workers simulados; terminou
+  com exit code 0 e deixou zero processos associados ao perfil. Nenhuma corretora, credencial,
+  conta ou ordem foi acessada.
+- Gerados `TradingLab.payload.zip` e o portátil
+  `TradingLab-Desktop-v1.9.11-UPDATED.exe`. O ZIP contém a raiz `TradingLab/TradingLab.exe`; o
+  assembly portátil contém exatamente o recurso `TradingLab.payload.zip` e reporta ProductVersion
+  `1.9.11`.
+- SHA-256 do portátil:
+  `FCD2E53C17CD72103AA1F0236B356ADD5D1D73F6F50F4722B9F2558373882639`.
+  SHA-256 do executável onedir:
+  `5F2D4E5E910B5CEB9231ADF91126FB2622BBEA5F1C5EE67AFE8694CA5E85C535`.
+- A primeira regressão integral encontrou um falso positivo do SecretScanner: uma variável UUID
+  chamada `password` em teste isolado do Strategy Lab. Ela foi renomeada para `opaque_secret`,
+  sem alterar produção ou o conteúdo do pacote; 4 testes do scanner e 11 testes de credencial
+  passaram depois da correção.
+- Regressão final do Desktop: **1.300 passed, 4 skipped, 0 failed**. Mypy aprovou 310 fontes,
+  compileall e diff-check com `cr-at-eol` passaram. Ruff check/format aprovou o escopo executável
+  (`apps`, `packages`, `tests`, `build_scripts`; 513 arquivos).
+- O comando Ruff global sobre `.` permanece impróprio porque tenta interpretar o documento legado
+  `docs/##  Arquitetura.py`, que contém Markdown apesar da extensão, e também inclui scripts
+  históricos fora do pacote. Esse arquivo não foi renomeado ou removido nesta etapa.
+- O pytest retornou sucesso e depois emitiu apenas o aviso conhecido de permissão ao limpar
+  `pytest-current` no Windows. O portátil não foi iniciado visualmente porque a instância do
+  operador estava aberta e o launcher aplica mutex único; payload, assembly, onedir e smoke
+  isolado foram verificados.
+
+## 2026-09-08 — Diagnóstico da sessão IQ sem ordens e com desconexões
+
+- Criado `docs/IQ_SESSION_ERRORS_20260908.md` a pedido do operador. Janela das contagens:
+  20:37:20–21:13:20 BRT. Inspeção somente leitura, sem intervenção no aplicativo.
+- SQLite operacional: zero intenções e zero ordens IQ na janela. Journal: seis avaliações OK,
+  duas transições de desconexão do supervisor IQ e Safe Stop global durante recovery Deriv às
+  20:50:10, sem liberação global posterior até o corte.
+- Confirmados no código: recovery Deriv usa parada global; supervisor IQ abandona monitoramento
+  após falha de heartbeat; escopos IQOPTION/IQ_OPTION divergentes; deduplicação do diagnóstico
+  descarta motivo posterior ao sinal na mesma época. Cópias extraídas dos três módulos principais
+  coincidem com o fonte inspecionado e o hash do onedir entregue.
+- Registrados HTTP 503 na origem e 400 no espelho do catálogo, pressão do orçamento e limites
+  da evidência. A causa de rede das quedas e o gate final de cada sinal não são demonstráveis
+  retrospectivamente com a telemetria atual; nenhuma causa externa foi inventada.
+- Nenhuma correção de produção, ordem, login, alteração financeira, configuração ou build foi
+  executado neste diagnóstico. As prioridades e reproduções necessárias estão no relatório.
+
+## 2026-09-08 — Plano verificável de resolução da sessão IQ
+
+- Criado `docs/IQ_RESOLUTION_PLAN_20260908.md`, conforme pedido de relatório de resolução,
+  baseado no diagnóstico anterior, no anexo e em revisão complementar do código atual.
+- Definidas seis etapas para R1–R7: trilha de decisão, escopo/ownership dos gates, recovery
+  coordenado, orçamento de chamadas, catálogo Hub e projeção verdadeira da UI.
+- A revisão confirmou também que `resume_new_entries_for` limpa Safe Stop de todos os escopos,
+  e que a reconciliação recalcula dispatcher pela saúde agregada. O plano cobre parada,
+  rearme e conclusão da reconciliação para evitar interferência entre brokers.
+- Incluídos 25 cenários propostos de regressão, critérios de aceite, replay/soak no EXE,
+  prova Practice externa, limitações, condições de liberação e rollback.
+- Códigos 503 possíveis do Hub foram identificados no handler, sem atribuir causa ao incidente
+  sem corpo da resposta. Orçamento de 90/60/30 é política interna, não quota oficial do broker.
+- Esta entrega altera somente documentação. Não houve implementação das correções, novas
+  consultas à conta/banco remoto, login, operação financeira, migração, publicação ou build.
+  Testes listados são plano de validação, não resultados de testes executados nesta etapa.
+
+## 2026-09-08 — Resolução local da sessão IQ: gates, recovery, orçamento e UI
+
+- Implementados R1–R7 de `docs/IQ_RESOLUTION_PLAN_20260908.md`: trilha terminal por decisão,
+  escopo independente Deriv/IQ, alias canônico `IQOPTION` → `IQ_OPTION`, revalidação antes do
+  dispatch, recovery IQ com owner único/generation fence, orçamento coordenado, causas estáveis
+  do Hub e projeção verdadeira de conexão/sincronização/armamento/autorização na UI.
+- PING do worker IQ passou a provar somente liveness IPC, sem login, reconnect ou buy. Falha de
+  sessão solicita recovery ao lifecycle; recovery usa supervisor/cliente novos, é limitado e
+  nunca rearma trading. UNKNOWN e acompanhamento de exposição mantêm a semântica fail-closed.
+- Saldo e relógio passaram a TTL de 10 s e à faixa operacional; mercado usa até 60 das 90
+  mensagens/minuto locais, preservando 30. Exaustão operacional bloqueia antes da criação da
+  intenção financeira. Nenhum limite financeiro, fórmula, payout mínimo ou guard Real foi reduzido.
+- Diagnóstico remoto somente leitura distinguiu 503 `HUB_MANIFEST_LAST_GOOD_UNAVAILABLE` na
+  origem e objeto ausente no espelho. Nenhum manifesto, estratégia ou aprovação foi fabricado.
+- Regressão final: **1.318 passed, 4 skipped, 0 failed**; replay IQ 24 h com 48 aceitações e
+  24 rejeições simuladas, 1.368 épocas sem envio e zero correlações duplicadas. Ruff check,
+  Ruff format (515 arquivos), mypy (310 fontes), compileall, secret scan e diff-check aprovados.
+- Uma condição intermitente do teste de crash foi reproduzida: `wait()` não colhia os pipes do
+  processo morto antes do novo byte-lock Windows. O helper agora usa `communicate()` após kill;
+  passou 10 repetições e a suíte integral, sem aumento de timeout. O aviso posterior do pytest
+  sobre limpeza de `pytest-current` permanece não fatal e conhecido.
+- Build canônico final: onedir com 441 arquivos, scanner e health aprovados; portátil validado
+  com payload de 855 entradas e recurso único. Smoke onedir e portátil em perfil isolado/headless
+  terminaram com exit 0, stderr vazio, banco íntegro/sem efeitos financeiros e zero processos
+  residuais. SHA-256 portátil:
+  `DB60D2F57A189E960B8293E147755D8204EE96BE524DA7C0434BD67FA94A5A75`.
+- O build em caminho longo falhou no `COLLECT` por limite de path do Windows; a repetição do mesmo
+  pipeline em caminho curto passou. `ISCC.exe` não está instalado, portanto não houve instalador.
+- Classificação: `LOCAL_FIX_VALIDATED`. Não houve login externo, conta Real, ordem externa, soak
+  contínuo de duas horas ou validação Practice nesta execução. Detalhes e hashes estão em
+  `docs/IQ_RESOLUTION_IMPLEMENTATION_20260908.md`.
+
+## 2026-09-09 — Payout global IQ, geração externa e UI sem reconstruções repetidas
+
+- Via single-flight exclusiva de initialization-data aceita resposta global/correlacionada,
+  mantém Decimal e identidade exata do ativo. Timeout invalida a geração para que resposta
+  atrasada não satisfaça consulta futura; nenhuma correlação ou repetição financeira foi liberada.
+- WebSocket possui limite explícito de 8 MiB e fila 4; loopback real comprovou catálogo de
+  2 MiB aceito e oversize recusado com causa estável. Mantido prazo conservador de 2 s do
+  ticket/payout; os limites e a diferença entre reprodução e evidência externa estão no relatório.
+- Recovery deixa de aceitar IPC READY/saldo antigo como sessão externa válida. Limpa caches,
+  revoga entrada, substitui supervisor e exige rearme. Cliente IPC tem geração UUID; callbacks
+  antigos não recuperam a geração atual. Erros externos desconhecidos são sanitizados sem
+  serem confundidos com envelope inválido.
+- AUTO resume ASSET_MISMATCH por símbolo/época com rejected_count. Radar e livros de ordens
+  não reconstroem células quando a projeção não muda, preservando atualização de resultados/idioma.
+- Validação: **1.335 passed, 4 skipped**; 17 regressões novas; Ruff check/format (517),
+  mypy (310), compileall e diff-check aprovados. Replay 24 h: 48 aceitações e 24 rejeições
+  simuladas, 1.368 épocas sem envio e zero correlações duplicadas.
+- Build canônico e scanner aprovados. Portátil em
+  `dist/iq-session-release-20260909/TradingLab-Desktop-v1.9.11-IQ-SESSION-FIX.exe`,
+  SHA-256 `C21B869826E9E1EECE51AB2D1FFCA79AAEE83582207CB9FAB6A05096D1F7919E`.
+  Smoke isolado terminou com exit 0, quick_check=ok, zero intenção/reserva/outbox/ordem e
+  nenhum processo residual. Artefatos anteriores preservados; nenhum commit/push foi realizado.
+- Classificação LOCAL_FIX_VALIDATED. Nenhum login externo, ordem externa, modificação de
+  estratégia/limiar, banco remoto ou Strategy Lab. A API externa e o aceite financeiro ainda
+  precisam de validação Practice; não há promessa de operação, estabilidade contínua ou lucro.
+  Relatório completo: `docs/IQ_SESSION_FIXES_20260909.md`.
+
+## 2026-09-09 — Disponibilidade turbo medida na corretora e correção por ativo
+
+- Pedido: resolver ausência de entradas; operador autorizou teste, inclusive ordens. Primeiro
+  reproduzido somente leitura com app fechado, profile.lock adquirido, login via DPAPI e
+  orçamento de login persistente. Sem ordem externa e sem remover salvaguardas.
+- Evidência: GBPUSD-OTC devolveu initialization-data em 750 ms com is_suspended=true.
+  Catálogo dos 17 IDs conhecidos: 7 suspensos, 9 ausentes, somente NZDUSD-OTC disponível.
+  Após expiração natural da quarentena, NZDUSD-OTC cotou payout 0.82 em 797 ms.
+- Receita publicada NZDUSD exige payout 0.85 e Wilson 0.557; em 0.82 o limiar do gate é
+  aproximadamente 0.564451. Portanto, corrigir transporte/disponibilidade não autoriza
+  essa receita; nenhum parâmetro assinado foi rebaixado para fabricar elegibilidade.
+- Implementados motivos ACTIVE_SUSPENDED/ACTIVE_UNAVAILABLE no conector/IPC/UI e cache
+  negativo por símbolo de 60 s. Mantém aquecimento; retira temporariamente da arbitragem;
+  outro ativo pode seguir; retorno exige nova cotação. Não constitui rejeição financeira.
+- Sonda opt-in `scripts/iqoption_payout_probe.py` não aceita mensagens financeiras e
+  reporta somente forma/tipos/flags de disponibilidade, nunca payload de conta ou segredo.
+- R-BRK-002/004/005, R-RISK-007, R-UI-003, R-SEC-001, R-TEST-001 cobertos. Sem alteração
+  na Deriv, Strategy Lab, matemática, limites financeiros ou proveniência do catálogo.
+- Validação integral: 1.345 passed, 4 skipped; rodada final disponibilidade/UI 16 passed
+  incluindo os dois testes acrescentados após coleta da suíte. Ruff/format (519), mypy
+  (311), compileall, diff-check aprovados. Smoke portátil exit 0, banco íntegro, zero
+  intenção/reserva/outbox/ordem e nenhum processo residual.
+- EXE: `dist/iq-availability-release-20260909/TradingLab-Desktop-v1.9.11-IQ-AVAILABILITY-FIX.exe`.
+  SHA-256: `FE3013073567411DB05E69E743321D4477E8800C0B1C6970D25EAB605951C050`.
+- Limite explícito: payout externo confirmado, aceite/settlement externos ainda não
+  comprovados. Relatório: `docs/IQ_MARKET_AVAILABILITY_20260909.md`.
+
+## 2026-09-09 — Catálogo dinâmico IQ Option por produto e mercado
+
+- Removida a autoridade operacional da lista curta de IDs/símbolos. O worker reconstrói o mapa
+  da sessão com `get-initialization-data` (Binary/Turbo) e `get-underlying-list` (Digital), sem
+  mensagem financeira. Símbolos regulares e `-OTC` mantêm identidade exata.
+- Criado contrato imutável/serializável com produto, broker id, disponibilidade e capacidades
+  independentes. Catálogo renova a cada 60 s, expira em 180 s e consome duas reservas do orçamento
+  operacional. Cliente de produção falha fechado sem catálogo fresco; bootstrap fixo permanece
+  apenas para compatibilidade de doubles antigos de teste.
+- AUTO avalia somente Turbo aberto, executável e coberto pelo manifesto assinado. Binary e Digital
+  são detectados; Digital permanece explicitamente read-only e não reutiliza a rota financeira
+  Binary. Nenhum gate de payout, evidência, risco, persist-before-act ou reconciliação foi reduzido.
+- Radar e seletor passam a vir da projeção do Core. Digital aparece como `SOMENTE DETECÇÃO` e não
+  pode ser selecionado para entrada. Refresh preserva RSI/sinal existente. IPC local continua
+  bounded em 1 MiB, dimensionado e testado com 510 instrumentos sanitizados.
+- Testes focados iniciais: 122 do engine/worker/protocolo e 41 da UI passaram. A última rodada
+  focada, incluindo catálogo parcial por falha Digital, passou 46/46.
+- Requisitos cobertos: R-BRK-002/004/005, R-MD-001/006/007, R-STRAT-003, R-UI-003, R-SEC-001,
+  R-TEST-001. Detalhes: `docs/IQ_DYNAMIC_INSTRUMENT_CATALOG_20260909.md`.
+- Validação integral final: 1.354 passed, 4 skipped; replay IQ 24 h com zero correlações
+  duplicadas. Ruff check/format no escopo canônico (521 arquivos), mypy (310), compileall,
+  diff-check e secret scan aprovados. O Markdown legado `docs/##  Arquitetura.py` foi preservado
+  e explica por que o comando não canônico `ruff .` não é utilizável.
+- Build final: onedir com 547 arquivos, scanner/integridade/health aprovados. Portátil com recurso
+  único, 961 entradas, ProductVersion 1.9.11, health exit 0 e nenhum processo residual:
+  `dist/iq-dynamic-catalog-release-20260909-final/TradingLab-Desktop-v1.9.11-IQ-DYNAMIC-CATALOG.exe`.
+  SHA-256: `DB867300529E94B8AEA33DED3F7201F0F7AF344855933E2BF16B035858A735B4`.
+- Nenhum login externo, ordem externa, alteração de limiar/estratégia assinada, commit ou push
+  ocorreu nesta entrega. Digital foi detectado, não autorizado financeiramente.
+
+## 2026-09-09 — Hotfix do catálogo Digital e radar operacional IQ
+
+- O smoke do primeiro portátil mostrou `digital_count=0` em todas as atualizações e um radar
+  poluído por mais de 500 registros brutos, incluindo ações sem receita assinada. O journal
+  comprovou 263 Binary, 240 Turbo, Digital indisponível e somente um Turbo aberto na sessão.
+- `get-underlying-list` passou a seguir a forma global do conector comunitário, sem `request_id`,
+  protegida por lane single-flight. Binary/Turbo e Digital recebem prazos bounded independentes.
+- A resposta Digital é reutilizada durante a mesma sessão. Falha recebe backoff de 15 minutos,
+  evitando bloquear candles e payout por oito segundos a cada refresh de um minuto. Nova conexão
+  autenticada invalida cache/backoff e tenta novamente.
+- Radar/seletor agora exibem somente a interseção exata catálogo × manifesto assinado; ativos do
+  broker sem estratégia não viram candidatos. OTC e regular permanecem identidades distintas.
+- `IQOPTION_CONNECTED_REARM_REQUIRED` ganhou texto acionável. O rearme continua manual, conforme
+  R-SCOPE-004/005; nenhum Health Gate, payout gate ou Risk Ledger foi removido.
+- Validação focada: 29 testes do hotfix e 251 testes IQ/manifest aprovados. Suíte completa:
+  1.357 passed, 4 skipped. Ruff/format (521), mypy (310), compileall e diff-check aprovados.
+- Onedir final: 547 arquivos, scanner/integridade/health aprovados. Portátil:
+  `dist/iq-dynamic-catalog-hotfix-20260909-final/TradingLab-Desktop-v1.9.11-IQ-CATALOG-HOTFIX.exe`,
+  SHA-256 `CC7646DA89801BC8D7758BA5F1D5177CFDA9D905EE497B36D9BEE10E784DFB47`.
+- Nenhuma ordem externa, conta Real, segredo ou alteração de estratégia foi usada. O portátil
+  não foi iniciado enquanto a instância antiga permanecia aberta, para não disputar o mutex nem
+  interferir na sessão; o executável interno empacotado passou o health-check canônico.
+- Revisão R2 fechou o caso manifesto vazio: nenhum asset é mostrado/executado, em vez de liberar
+  todo o catálogo. Teste focado final 27/27. Novo onedir passou o pipeline com 547 arquivos e
+  manifesto `21ad066c87a8b8d1cf505917b553d734cfbc181dec49986bce998a373b51d733`.
+- Portátil R2: `dist/iq-catalog-hotfix-r2-20260909/TradingLab-Desktop-v1.9.11-IQ-CATALOG-HOTFIX-R2.exe`,
+  SHA-256 `C0AEF935CCD9D4A85C50AEB909BB58DE78CD07000992E0D5D9167F0FFF505AD3`.
+  Ele substitui o primeiro hotfix empacotado desta sessão.
+
+## 2026-09-09 — Clock sync IQ: RTT real, validade e recuperação sem login
+
+- Captura mostra MD_CLOCK_UNTRUSTED. Defeito no código: tempo total de abertura WebSocket
+  era usado como RTT permanente. Risco alto (dados/deadline); autoridade de gates no Core,
+  medição isolada no worker IQ. R-DATA-001/002/003/004/007, R-BRK-007, R-UI-003,
+  R-TEST-001 e AG-INV-005 preservados. Nenhuma ampliação de limiar de confiança.
+- Ping/Pong correlacionado, bounded 2 s, cache/cadência de 10 s. Timestamp broker Decimal,
+  validade 30 s e detecção de salto wall/monotonic; sem fallback local nem cache pós-reconexão.
+- Core invalida relógio indisponível, bloqueia somente IQ e verifica novamente sem relogar.
+  Amostra válida limpa só MD_CLOCK_UNTRUSTED. Projeção não retorna relógio antigo do lifecycle.
+- Testes focados iniciais 83/83; rodada nova clock/Core/UI 16/16. Ruff/format (522), mypy
+  (310), compileall e diff-check aprovados. Suíte completa: 1372 passed, 4 skipped,
+  435,76 s, exit 0. Aviso não fatal do pytest ao limpar pytest-current (WinError 5),
+  posterior ao término dos testes; não houve alteração/apagamento dessa pasta.
+- Sem ordem externa, acesso a credenciais, retirada de proteção, mudança na Deriv/Strategy Lab
+  ou alteração de parâmetros assinados. Limites documentados em docs/IQ_CLOCK_SYNC_FIX_20260909.md.
+- Build canônico: 547 arquivos, scanner zero segredos, integridade e health-check aprovados.
+  Portátil: dist/iq-clock-release-20260909/TradingLab-Desktop-v1.9.11-IQ-CLOCK-FIX.exe.
+  SHA-256: 3C88177948EABC448E0B44AB491EF9121C2510DA7223962A325CA08C21531701.
+- Smoke portátil headless com perfil novo e worker simulado: exit 0, nenhum processo residual,
+  SQLite quick_check=ok; trade_intents, risk_reservations, outbox_messages e orders todos zero.
+  O smoke não conectou à IQ Option nem validou a aceitação de uma operação externa.

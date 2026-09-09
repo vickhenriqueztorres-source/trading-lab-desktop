@@ -20,24 +20,6 @@ from PySide6.QtWidgets import (
 from apps.ui.theme import ACCENT_AMBER, ACCENT_CYAN, ACCENT_GREEN, ACCENT_RED, TEXT_MUTED
 from packages.protocol import UiIqOptionAssetRank
 
-DEFAULT_RADAR_ITEMS: tuple[UiIqOptionAssetRank, ...] = (
-    UiIqOptionAssetRank("EURUSD-OTC", "EUR/USD OTC", "48.2", None, "NEUTRAL", True, "MONITORING"),
-    UiIqOptionAssetRank("GBPUSD-OTC", "GBP/USD OTC", "52.1", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("USDJPY-OTC", "USD/JPY OTC", "49.5", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("AUDUSD-OTC", "AUD/USD OTC", "45.0", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("EURJPY-OTC", "EUR/JPY OTC", "54.3", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("GBPJPY-OTC", "GBP/JPY OTC", "51.8", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("AUDCAD-OTC", "AUD/CAD OTC", "47.6", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("NZDUSD-OTC", "NZD/USD OTC", "50.2", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("USDCAD-OTC", "USD/CAD OTC", "48.9", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("USDCHF-OTC", "USD/CHF OTC", "51.1", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("EURUSD", "EUR/USD", "49.0", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("GBPUSD", "GBP/USD", "50.5", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("USDJPY", "USD/JPY", "51.2", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("AUDUSD", "AUD/USD", "46.8", None, "NEUTRAL", False, "MONITORING"),
-    UiIqOptionAssetRank("EURJPY", "EUR/JPY", "53.4", None, "NEUTRAL", False, "MONITORING"),
-)
-
 
 class IqOptionAssetRadarWidget(QWidget):
     """Real-time Multi-Asset Scanner & Radar for IQ Option RSI strategy."""
@@ -60,8 +42,8 @@ class IqOptionAssetRadarWidget(QWidget):
         titles.addWidget(self._title)
 
         self._subtitle = QLabel(
-            "Varredura em tempo real de todas as paridades OTC e Forex "
-            "com execução instantânea no primeiro sinal."
+            "Descoberta da sessão para Binary/Turbo/Digital, separando "
+            "mercados regulares e OTC e sua disponibilidade atual."
         )
         self._subtitle.setObjectName("Subtitle")
         self._subtitle.setWordWrap(True)
@@ -109,19 +91,35 @@ class IqOptionAssetRadarWidget(QWidget):
         self._notice.setWordWrap(True)
         self._notice.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         root.addWidget(self._notice)
-        self.update_ranking(DEFAULT_RADAR_ITEMS)
+        # Do not invent market values before the Core publishes an authoritative
+        # snapshot. An empty table is materially different from neutral data.
+        self.update_ranking(())
 
     def update_ranking(self, ranking: Sequence[UiIqOptionAssetRank]) -> None:
+        if ranking and tuple(ranking) == self._ranking:
+            return
         if not ranking:
+            self._ranking = ()
+            self._table.setRowCount(0)
+            self._state.setText("SEM EVIDÊNCIA DO CORE")
             return
         self._ranking = tuple(ranking)
         self._table.setRowCount(len(self._ranking))
 
         triggered = next((item for item in self._ranking if item.status == "TRIGGERED"), None)
         selected = next((item for item in self._ranking if item.selected), None)
+        no_evidence = all(
+            item.rsi == "--" and item.status in {"WAITING_DATA", "NO_EVIDENCE", "MONITORING"}
+            for item in self._ranking
+        )
+        catalog_evidence = all(item.source == "IQOPTION_SESSION_CATALOG" for item in self._ranking)
 
-        if triggered is not None:
-            self._state.setText(f"⚡ SINAL: {triggered.display_name}")
+        if catalog_evidence:
+            self._state.setText(f"CATÁLOGO SINCRONIZADO · {len(self._ranking)} ATIVOS")
+        elif no_evidence:
+            self._state.setText("SEM EVIDÊNCIA DO CORE")
+        elif triggered is not None:
+            self._state.setText(f"SINAL OBSERVADO · NÃO ENVIADO · {triggered.display_name}")
             self._state.setObjectName("StatusPillOnline")
         elif selected is not None and selected.symbol != "AUTO":
             self._state.setText(f"FOCO: {selected.display_name}")
@@ -156,6 +154,9 @@ class IqOptionAssetRadarWidget(QWidget):
             if item.status == "WARMING_UP":
                 sig_text = "… AQUECENDO"
                 sig_color = ACCENT_AMBER
+            elif item.status == "DISCOVERY_ONLY":
+                sig_text = "◌ DETECTADO"
+                sig_color = TEXT_MUTED
             elif item.status == "TICK_VOLUME_UNAVAILABLE":
                 sig_text = "— SEM VOLUME"
                 sig_color = ACCENT_AMBER
@@ -197,9 +198,22 @@ class IqOptionAssetRadarWidget(QWidget):
             elif item.condition.startswith("AQUECENDO "):
                 cond_text = item.condition.replace("AQUECENDO", "Aquecendo", 1)
                 cond_color = ACCENT_AMBER
+            elif item.condition in {"IQOPTION_ACTIVE_SUSPENDED", "IQOPTION_ACTIVE_UNAVAILABLE"}:
+                cond_text = (
+                    "Suspenso pela corretora · opções turbo"
+                    if item.condition == "IQOPTION_ACTIVE_SUSPENDED"
+                    else "Ausente ou desativado no catálogo turbo"
+                )
+                cond_color = ACCENT_AMBER
             elif item.condition == "VOLUME_INDISPONIVEL":
                 cond_text = "Volume de ticks indisponível"
                 cond_color = ACCENT_AMBER
+            elif item.condition == "OPEN_READ_ONLY":
+                cond_text = "Aberto · produto sem execução habilitada"
+                cond_color = ACCENT_AMBER
+            elif item.condition == "MARKET_CLOSED":
+                cond_text = "Fechado nesta sessão da corretora"
+                cond_color = TEXT_MUTED
             elif item.condition in {
                 "REGIME",
                 "TRIGGER",
@@ -237,6 +251,12 @@ class IqOptionAssetRadarWidget(QWidget):
             }:
                 status_text = item.status
                 status_color = ACCENT_AMBER
+            elif item.status == "MARKET_UNAVAILABLE":
+                status_text = "MERCADO INDISPONÍVEL"
+                status_color = ACCENT_AMBER
+            elif item.status == "DISCOVERY_ONLY":
+                status_text = "SOMENTE DETECÇÃO"
+                status_color = TEXT_MUTED
             elif item.status == "WARMING_UP":
                 status_text = "AQUECENDO"
                 status_color = ACCENT_AMBER
@@ -244,7 +264,7 @@ class IqOptionAssetRadarWidget(QWidget):
                 status_text = "AGUARDANDO VOLUME"
                 status_color = ACCENT_AMBER
             elif item.status == "TRIGGERED":
-                status_text = "⚡ SINAL DISPARADO"
+                status_text = "SINAL OBSERVADO · NÃO ENVIADO"
                 status_color = ACCENT_AMBER
             elif item.selected:
                 status_text = "EM FOCO"

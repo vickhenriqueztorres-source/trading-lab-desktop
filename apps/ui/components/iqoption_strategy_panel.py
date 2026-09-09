@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from PySide6.QtCore import Signal
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from apps.ui.i18n import t
-from packages.protocol import UiIqOptionRiskConfig
+from packages.protocol import UiIqOptionAssetRank, UiIqOptionRiskConfig
 
 
 class IqOptionStrategyConfigWidget(QFrame):
@@ -30,6 +31,7 @@ class IqOptionStrategyConfigWidget(QFrame):
         self._projected_config: UiIqOptionRiskConfig | None = None
         self._entries: dict[str, dict[str, Any]] = {}
         self._practice = True
+        self._available_asset_signature: tuple[tuple[str, str, str, str], ...] = ()
         self.setObjectName("Surface")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -52,21 +54,6 @@ class IqOptionStrategyConfigWidget(QFrame):
         form.addRow(t("iq.risk.strategy"), self._strategy)
         self._symbol = QComboBox()
         self._symbol.addItem("⚡ SELEÇÃO AUTOMÁTICA (Todos os Ativos)", "AUTO")
-        self._symbol.addItem("EUR/USD OTC", "EURUSD-OTC")
-        self._symbol.addItem("GBP/USD OTC", "GBPUSD-OTC")
-        self._symbol.addItem("USD/JPY OTC", "USDJPY-OTC")
-        self._symbol.addItem("AUD/USD OTC", "AUDUSD-OTC")
-        self._symbol.addItem("EUR/JPY OTC", "EURJPY-OTC")
-        self._symbol.addItem("GBP/JPY OTC", "GBPJPY-OTC")
-        self._symbol.addItem("AUD/CAD OTC", "AUDCAD-OTC")
-        self._symbol.addItem("NZD/USD OTC", "NZDUSD-OTC")
-        self._symbol.addItem("USD/CAD OTC", "USDCAD-OTC")
-        self._symbol.addItem("USD/CHF OTC", "USDCHF-OTC")
-        self._symbol.addItem("EUR/USD", "EURUSD")
-        self._symbol.addItem("GBP/USD", "GBPUSD")
-        self._symbol.addItem("USD/JPY", "USDJPY")
-        self._symbol.addItem("AUD/USD", "AUDUSD")
-        self._symbol.addItem("EUR/JPY", "EURJPY")
         form.addRow(t("iq.risk.asset"), self._symbol)
         self._timeframe = QLabel("M1")
         form.addRow("Timeframe (manifesto · somente leitura)", self._timeframe)
@@ -100,6 +87,42 @@ class IqOptionStrategyConfigWidget(QFrame):
         layout.addWidget(self._status)
         self.set_config(UiIqOptionRiskConfig())
         self.retranslate()
+
+    def set_available_assets(self, ranking: Sequence[UiIqOptionAssetRank]) -> None:
+        """Replace the selector with the broker catalogue projected by Core."""
+
+        signature = tuple(
+            (item.symbol, item.display_name, item.status, item.readiness) for item in ranking
+        )
+        if signature == self._available_asset_signature:
+            return
+        self._available_asset_signature = signature
+        selected = str(self._symbol.currentData() or "AUTO")
+        projected = None if self._projected_config is None else self._projected_config.symbol
+        wanted = projected if projected not in {None, "AUTO"} else selected
+        self._symbol.blockSignals(True)
+        self._symbol.clear()
+        self._symbol.addItem("⚡ SELEÇÃO AUTOMÁTICA (Ativos elegíveis)", "AUTO")
+        model = self._symbol.model()
+        for item in ranking:
+            self._symbol.addItem(item.display_name, item.symbol)
+            row = self._symbol.count() - 1
+            if isinstance(model, QStandardItemModel):
+                option = model.item(row)
+                if option is not None:
+                    executable = item.readiness == "READY" and item.status != "DISCOVERY_ONLY"
+                    option.setEnabled(executable)
+                    option.setToolTip(item.candidate_details)
+        if wanted and self._symbol.findData(wanted) < 0:
+            self._symbol.addItem(f"{wanted} · não disponível nesta sessão", wanted)
+            if isinstance(model, QStandardItemModel):
+                option = model.item(self._symbol.count() - 1)
+                if option is not None:
+                    option.setEnabled(False)
+        target = "AUTO" if selected == "AUTO" else wanted
+        self._symbol.setCurrentIndex(max(0, self._symbol.findData(target)))
+        self._symbol.blockSignals(False)
+        self._sync_selection()
 
     def set_manifest(self, manifest: dict[str, Any]) -> None:
         selected = self._strategy.currentData()
@@ -174,6 +197,8 @@ class IqOptionStrategyConfigWidget(QFrame):
         self._mode.setCurrentText("AUTO" if config.symbol == "AUTO" else "SINGLE")
         if self._strategy.findData(config.strategy_id) < 0:
             self._strategy.addItem(config.strategy_id, config.strategy_id)
+        if config.symbol != "AUTO" and self._symbol.findData(config.symbol) < 0:
+            self._symbol.addItem(f"{config.symbol} · aguardando catálogo", config.symbol)
         self._strategy.setCurrentIndex(max(0, self._strategy.findData(config.strategy_id)))
         self._symbol.setCurrentIndex(max(0, self._symbol.findData(config.symbol)))
         self._stake.setValue(config.stake_minor_units / 100)

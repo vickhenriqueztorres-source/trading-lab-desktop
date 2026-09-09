@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from apps.ui.formatting import format_minor_units
 from apps.ui.theme import ACCENT_CYAN, ACCENT_GREEN, ACCENT_RED, TEXT_MUTED
-from packages.protocol import OrderSummary, UiIqOptionRiskConfig
+from packages.protocol import OrderSummary, UiIqOptionExecutionMetrics, UiIqOptionRiskConfig
 
 
 class IqOptionStrategySummaryWidget(QWidget):
@@ -72,6 +72,11 @@ class IqOptionStrategySummaryWidget(QWidget):
         banner_layout.addWidget(self._mode_pill)
 
         root.addWidget(banner)
+
+        self._evidence = QLabel("Evidência local: aguardando snapshot do Core")
+        self._evidence.setObjectName("GuidanceText")
+        self._evidence.setWordWrap(True)
+        root.addWidget(self._evidence)
 
     @staticmethod
     def _create_kpi_card(
@@ -146,6 +151,34 @@ class IqOptionStrategySummaryWidget(QWidget):
             self._mode_pill.setObjectName("StatusPillOnline")
         self._mode_pill.style().unpolish(self._mode_pill)
         self._mode_pill.style().polish(self._mode_pill)
+
+    def update_metrics(self, metrics: UiIqOptionExecutionMetrics | None) -> None:
+        if metrics is None:
+            self._evidence.setText("Evidência local: indisponível")
+            return
+        wait = (
+            f" · aguardando {metrics.waiting_reason} ({metrics.waiting_seconds}s)"
+            if metrics.waiting_reason
+            else ""
+        )
+        revision = metrics.manifest_revision or "n/a"
+        self._evidence.setText(
+            "Fonte: {source} · modo: {mode} · catálogo: {catalog} · revisão: {revision} · "
+            "séries: {series} · nós: {nodes} · reuso: {reuse} · decisões p95: {p95} ms · "
+            "evidência n/OOS: {n}/{oos}{wait}".format(
+                source=metrics.source,
+                mode=metrics.mode,
+                catalog=metrics.catalog_status,
+                revision=revision[:16],
+                series=metrics.series_count,
+                nodes=metrics.unique_indicator_nodes,
+                reuse=metrics.cache_reuse_hits,
+                p95=metrics.decision_p95_ms,
+                n=metrics.evidence_n if metrics.evidence_n is not None else "—",
+                oos=metrics.evidence_oos if metrics.evidence_oos is not None else "—",
+                wait=wait,
+            )
+        )
 
 
 __all__ = ["IqOptionStrategySummaryWidget"]

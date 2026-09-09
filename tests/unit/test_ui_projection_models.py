@@ -96,6 +96,8 @@ def _snapshot() -> UiProjectionSnapshot:
             8,
             900,
         ),
+        iqoption_entry_ready=False,
+        iqoption_entry_blocker="PAYOUT_UNAVAILABLE",
     )
 
 
@@ -118,6 +120,8 @@ def test_ui_projection_round_trip_and_view_model_use_minor_units() -> None:
     assert snapshot.multi_strategy_metrics is not None
     assert snapshot.multi_strategy_metrics.active_engines == 5
     assert snapshot.deriv_bot_armed is False
+    assert snapshot.iqoption_entry_ready is False
+    assert snapshot.iqoption_entry_blocker == "PAYOUT_UNAVAILABLE"
 
 
 def test_legacy_projection_infers_deriv_state_only_when_explicit_field_is_absent() -> None:

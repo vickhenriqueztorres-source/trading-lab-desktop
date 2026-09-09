@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -390,12 +391,12 @@ def test_decimal_json_decoding_preserves_commission_digits(monkeypatch):
     session = IQOptionCommunityReadOnlySession(
         "test@example.invalid", SecretValue("fixture-only"), IQOptionAccountMode.PRACTICE
     )
-    received = []
-    monkeypatch.setattr(session, "_route_pending", received.append)
+    received = queue.Queue(maxsize=1)
+    session._initialization_pending = ("fixture-request", received)
     session._handle_message(
         '{"name":"initialization-data","msg":{"commission":15.123456789123456789}}'
     )
-    assert received[0]["msg"]["commission"] == Decimal("15.123456789123456789")
+    assert received.get_nowait()["msg"]["commission"] == Decimal("15.123456789123456789")
 
 
 def test_concurrent_monitor_consumers_do_not_duplicate(tmp_path, order_request):
@@ -463,8 +464,8 @@ def test_payout_adapter_only_reads_exact_turbo_asset(mode, monkeypatch):
     )
     calls = []
 
-    def request(payload, **kwargs):
-        calls.append(payload)
+    def request(timeout):
+        calls.append(timeout)
         return {
             "name": "initialization-data",
             "msg": {
@@ -481,7 +482,7 @@ def test_payout_adapter_only_reads_exact_turbo_asset(mode, monkeypatch):
             },
         }
 
-    monkeypatch.setattr(session, "_request_message", request)
+    monkeypatch.setattr(session, "_request_initialization", request)
     if mode is IQOptionAccountMode.REAL:
         with pytest.raises(IQOptionExternalError, match="REAL_ACCOUNT_FORBIDDEN"):
             session.get_binary_payout("EURUSD-OTC")
@@ -489,4 +490,4 @@ def test_payout_adapter_only_reads_exact_turbo_asset(mode, monkeypatch):
     else:
         assert session.get_binary_payout("EURUSD-OTC") == Decimal("0.85")
         assert len(calls) == 1
-        assert calls[0]["msg"]["name"] == "get-initialization-data"
+        assert calls[0] == 2.0

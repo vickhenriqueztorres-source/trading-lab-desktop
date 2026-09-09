@@ -51,6 +51,84 @@ def manifest_schema() -> dict[str, Any]:
             },
         }
     ]
+    result["allOf"].extend(
+        [
+            {
+                "if": {
+                    "properties": {"schema_revision": {"const": "1.2"}},
+                    "required": ["schema_revision"],
+                },
+                "then": {
+                    "required": [
+                        "execution_semantics_version",
+                        "dataset_evidence",
+                        "telemetry",
+                    ],
+                    "properties": {
+                        "strategies": {
+                            "items": {
+                                "required": [
+                                    "warmup_required",
+                                    "recipe_revision",
+                                    "recipe_fingerprint",
+                                    "composition",
+                                    "capabilities",
+                                ]
+                            }
+                        }
+                    },
+                },
+                "else": {
+                    "not": {
+                        "anyOf": [
+                            {"required": ["execution_semantics_version"]},
+                            {"required": ["dataset_evidence"]},
+                            {"required": ["telemetry"]},
+                            {
+                                "properties": {
+                                    "strategies": {
+                                        "contains": {
+                                            "anyOf": [
+                                                {"required": ["recipe_revision"]},
+                                                {"required": ["recipe_fingerprint"]},
+                                                {"required": ["composition"]},
+                                                {"required": ["capabilities"]},
+                                            ]
+                                        }
+                                    }
+                                },
+                                "required": ["strategies"],
+                            },
+                        ]
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {
+                        "schema_revision": {"const": "1.2"},
+                        "dataset_evidence": {
+                            "properties": {"kind": {"const": "synthetic"}},
+                            "required": ["kind"],
+                        },
+                    },
+                    "required": ["schema_revision", "dataset_evidence"],
+                },
+                "then": {
+                    "properties": {
+                        "strategies": {
+                            "not": {
+                                "contains": {
+                                    "properties": {"status": {"const": "approved"}},
+                                    "required": ["status"],
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+        ]
+    )
     entry = result["$defs"]["StrategyEntry"]
     entry["allOf"] = []
     for family, specs in FAMILY_SPECS.items():

@@ -67,6 +67,75 @@ def _window_title(mode: str) -> str:
     return f"{t('app.title')} v{APP_VERSION} — {mode}"
 
 
+def _local_deriv_strategy_cards() -> tuple[dict[str, object], ...]:
+    """UI-only entries for the built-in Deriv strategies.
+
+    These cards do not come from the IQ Option manifest and do not grant any
+    financial authority.  They only expose the already-existing Deriv strategy
+    selection controls in the combined catalog panel.
+    """
+
+    validated = {
+        "p_hat": "0.00",
+        "wilson_lower": "0.00",
+        "p_min_at_validation": "0.00",
+        "payout_min": "0.00",
+        "ops_per_day": "0",
+        "worst_streak": 0,
+        "result_1000_ops_stake10": "0",
+        "n": 0,
+    }
+    return (
+        {
+            "key": "tail-probability-edge",
+            "family": "DERIV_DIGIT",
+            "broker": "Deriv",
+            "display_name_pt": "Tail Probability Edge",
+            "asset": "1HZ100V",
+            "timeframe": "tick",
+            "hours_utc": (0, 24),
+            "status": "approved",
+            "validated": validated,
+        },
+        {
+            "key": "selective-differs-edge",
+            "family": "DERIV_DIGIT",
+            "broker": "Deriv",
+            "display_name_pt": "Selective Differs Edge",
+            "asset": "1HZ100V",
+            "timeframe": "tick",
+            "hours_utc": (0, 24),
+            "status": "approved",
+            "validated": validated,
+        },
+        {
+            "key": "parity-regime-edge",
+            "family": "DERIV_DIGIT",
+            "broker": "Deriv",
+            "display_name_pt": "Parity Regime Edge",
+            "asset": "1HZ100V",
+            "timeframe": "tick",
+            "hours_utc": (0, 24),
+            "status": "approved",
+            "validated": validated,
+        },
+    )
+
+
+def _manifest_with_local_deriv_cards(data: dict[str, object]) -> dict[str, object]:
+    raw_strategies = data.get("strategies")
+    if not isinstance(raw_strategies, list | tuple):
+        return data
+    existing = {str(item.get("key", "")) for item in raw_strategies if isinstance(item, dict)}
+    merged = list(raw_strategies)
+    for entry in _local_deriv_strategy_cards():
+        if str(entry["key"]) not in existing:
+            merged.append(entry)
+    updated = dict(data)
+    updated["strategies"] = merged
+    return updated
+
+
 class TradingLabMainWindow(QMainWindow):
     """Professional Trading Lab Desktop UI (PySide6 / Qt 6)."""
 
@@ -529,10 +598,14 @@ class TradingLabMainWindow(QMainWindow):
         )
         self._iqoption_workspace.update_orders(snapshot.active_orders)
         self._iqoption_workspace.update_iqoption_radar(snapshot.iqoption_asset_ranking)
+        self._iqoption_config_panel.set_available_assets(snapshot.iqoption_asset_ranking)
         self._iqoption_workspace.update_iqoption_risk(snapshot.iqoption_risk_config)
+        self._iqoption_workspace.update_iqoption_metrics(snapshot.iqoption_execution_metrics)
         self._iqoption_workspace.update_bot_state(
             snapshot.iqoption_bot_armed,
             snapshot.iqoption_bot_reason,
+            entry_ready=snapshot.iqoption_entry_ready,
+            entry_blocker=snapshot.iqoption_entry_blocker,
         )
         self._settings_workspace.update_risk_projection(
             snapshot.global_exposure_minor_units,
@@ -553,7 +626,10 @@ class TradingLabMainWindow(QMainWindow):
         self._synthetic_config_panel.set_cooldown_remaining(snapshot.cooldown_remaining_seconds)
         if snapshot.iqoption_risk_config is not None:
             self._iqoption_config_panel.set_config(snapshot.iqoption_risk_config)
-        iq_card = next((c for c in snapshot.broker_cards if c.broker == "IQ_OPTION"), None)
+        iq_card = next(
+            (c for c in snapshot.broker_cards if c.broker in {"IQ_OPTION", "IQOPTION"}),
+            None,
+        )
         self._iqoption_config_panel.set_account_type(
             "UNKNOWN" if iq_card is None else iq_card.account_mode.value
         )
@@ -563,7 +639,9 @@ class TradingLabMainWindow(QMainWindow):
         self._iqoption_bot_enabled = snapshot.iqoption_bot_armed
         self._btn_deriv_bot.setEnabled(connected)
         self._btn_iqoption_bot.setEnabled(connected)
-        self._btn_iqoption_bot.setToolTip(snapshot.iqoption_bot_reason)
+        self._btn_iqoption_bot.setToolTip(
+            snapshot.iqoption_entry_blocker or snapshot.iqoption_bot_reason
+        )
         self._update_bot_buttons()
         deriv_connected = any(
             card.broker == "DERIV" and card.is_connected for card in snapshot.broker_cards
@@ -596,6 +674,9 @@ class TradingLabMainWindow(QMainWindow):
             if path.is_file():
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        continue
+                    data = _manifest_with_local_deriv_cards(data)
                     account_type = "real" if self._deriv_real_selected else "practice"
                     self._manifest_strategy_panel.set_manifest(data, account_type=account_type)
                     self._iqoption_config_panel.set_manifest(data)
@@ -1079,6 +1160,16 @@ class TradingLabMainWindow(QMainWindow):
             ),
             "IQOPTION_WEBSOCKET_UNAVAILABLE": "A sessão da IQ Option não pôde ser aberta.",
             "IQOPTION_AUTH_TIMEOUT": "A IQ Option não confirmou a sessão dentro do prazo.",
+            "IQOPTION_PAYOUT_UNAVAILABLE": (
+                "A IQ Option não forneceu payout válido para este ativo."
+            ),
+            "IQOPTION_REQUEST_TIMEOUT": (
+                "A consulta à IQ Option não recebeu resposta dentro do prazo."
+            ),
+            "IQOPTION_RESPONSE_TOO_LARGE": "A resposta da IQ Option excedeu o limite de tamanho.",
+            "IQOPTION_EXTERNAL_ERROR": (
+                "A IQ Option retornou uma falha não reconhecida pelo conector."
+            ),
             "IQOPTION_CONNECTION_IN_PROGRESS": (
                 "Já existe uma recuperação da IQ Option em andamento. "
                 "Aguarde a conclusão indicada nesta tela."

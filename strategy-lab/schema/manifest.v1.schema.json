@@ -1,10 +1,94 @@
 {
   "$comment": "REQUIRES manifest-policy-v1 in addition to Draft 2020-12 and Ed25519 verification. Reject if this semantic policy is unavailable; plain JSON Schema is NOT acceptance.",
   "$defs": {
+    "Composition": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "enum": [
+            "candle_rejection",
+            "rsi_extreme",
+            "tick_volume_ratio"
+          ],
+          "title": "Confirm",
+          "type": "string"
+        },
+        "regime": {
+          "enum": [
+            "adx",
+            "ema_alignment",
+            "session_window",
+            "bb_width_ratio"
+          ],
+          "title": "Regime",
+          "type": "string"
+        },
+        "trigger": {
+          "enum": [
+            "bb_close_outside",
+            "ema_pullback",
+            "level_touch",
+            "range_break",
+            "quadrant_majority"
+          ],
+          "title": "Trigger",
+          "type": "string"
+        }
+      },
+      "required": [
+        "regime",
+        "trigger",
+        "confirm"
+      ],
+      "title": "Composition",
+      "type": "object"
+    },
     "Count": {
       "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
+    },
+    "DatasetEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_pct": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "dataset_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$(?![\\s\\S])",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/HashString"
+        },
+        "from_ts": {
+          "$ref": "#/$defs/Epoch"
+        },
+        "kind": {
+          "enum": [
+            "real_market",
+            "synthetic"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "to_ts": {
+          "$ref": "#/$defs/Epoch"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "fingerprint",
+        "kind",
+        "from_ts",
+        "to_ts",
+        "coverage_pct"
+      ],
+      "title": "DatasetEvidence",
+      "type": "object"
     },
     "DecimalString": {
       "maxLength": 24,
@@ -73,6 +157,26 @@
         "paroli"
       ],
       "title": "Management",
+      "type": "object"
+    },
+    "RequiredCapabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "const": "binary_option",
+          "title": "Product",
+          "type": "string"
+        },
+        "tick_volume": {
+          "title": "Tick Volume",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "product",
+        "tick_volume"
+      ],
+      "title": "RequiredCapabilities",
       "type": "object"
     },
     "StrategyEntry": {
@@ -666,6 +770,28 @@
           "title": "Asset",
           "type": "string"
         },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequiredCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "composition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Composition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "display_name_pt": {
           "$ref": "#/$defs/Label"
         },
@@ -708,6 +834,31 @@
             }
           ],
           "default": null
+        },
+        "recipe_fingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HashString"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "recipe_revision": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recipe Revision"
         },
         "status": {
           "enum": [
@@ -758,6 +909,32 @@
         "management"
       ],
       "title": "StrategyEntry",
+      "type": "object"
+    },
+    "TelemetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "opt_in_required": {
+          "const": true,
+          "title": "Opt In Required",
+          "type": "boolean"
+        },
+        "outcomes_supported": {
+          "title": "Outcomes Supported",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcomes_supported",
+        "opt_in_required",
+        "schema_version"
+      ],
+      "title": "TelemetryPolicy",
       "type": "object"
     },
     "Validated": {
@@ -843,9 +1020,160 @@
           }
         }
       }
+    },
+    {
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "execution_semantics_version"
+              ]
+            },
+            {
+              "required": [
+                "dataset_evidence"
+              ]
+            },
+            {
+              "required": [
+                "telemetry"
+              ]
+            },
+            {
+              "properties": {
+                "strategies": {
+                  "contains": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "recipe_revision"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "recipe_fingerprint"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "composition"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "capabilities"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "strategies"
+              ]
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_revision": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_revision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "strategies": {
+            "items": {
+              "required": [
+                "warmup_required",
+                "recipe_revision",
+                "recipe_fingerprint",
+                "composition",
+                "capabilities"
+              ]
+            }
+          }
+        },
+        "required": [
+          "execution_semantics_version",
+          "dataset_evidence",
+          "telemetry"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dataset_evidence": {
+            "properties": {
+              "kind": {
+                "const": "synthetic"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "schema_revision": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_revision",
+          "dataset_evidence"
+        ]
+      },
+      "then": {
+        "properties": {
+          "strategies": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "status": {
+                    "const": "approved"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "properties": {
+    "dataset_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DatasetEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "execution_semantics_version": {
+      "anyOf": [
+        {
+          "const": "tl.candle-close.v2",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Execution Semantics Version"
+    },
     "expires_at": {
       "$ref": "#/$defs/Epoch"
     },
@@ -878,8 +1206,11 @@
       "type": "string"
     },
     "schema_revision": {
-      "const": "1.1",
       "default": "1.1",
+      "enum": [
+        "1.1",
+        "1.2"
+      ],
       "title": "Schema Revision",
       "type": "string"
     },
@@ -902,6 +1233,17 @@
       "maxItems": 5000,
       "title": "Strategies",
       "type": "array"
+    },
+    "telemetry": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TelemetryPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

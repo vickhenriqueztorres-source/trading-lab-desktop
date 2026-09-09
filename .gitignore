@@ -98,3 +98,7 @@ $RECYCLE.BIN/
 data/manifest.json
 !data/
 cache/
+
+# Local Supabase CLI state accidentally created outside the canonical
+# strategy-lab/apps/hub/supabase project directory.
+/strategy-lab/supabase/

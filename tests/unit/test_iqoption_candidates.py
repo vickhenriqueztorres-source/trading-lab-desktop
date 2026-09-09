@@ -234,6 +234,85 @@ def test_decision_deduplicated_and_radar_details_roundtrip():
     assert UiIqOptionAssetRank.from_payload(rank.to_payload()) == rank
 
 
+def test_signal_ok_then_payout_block_is_recorded_without_intent():
+    cat = catalog(
+        entry(
+            validated={
+                "wilson_lower": "0.60",
+                "p_min_at_validation": "0.55",
+                "payout_min": "0.55",
+            }
+        )
+    )
+    cat.active_strategies["f5:a"].instance.evaluate_detailed = lambda candles, ctx: EvalResult(
+        Direction.CALL, "OK", 20, 15, None, None, None
+    )
+    trader, client, runtime, _ = trader_for(
+        cat,
+        IqOptionRiskConfig(strategy_id="f5:a"),
+        armed=True,
+    )
+    client.iqoption_binary_payout = lambda _symbol: Decimal("0.50")
+
+    trader._evaluate_cycle()
+
+    decisions = [fields for name, fields in runtime.events if name == "iqoption_decision"]
+    evaluation = next(fields for fields in decisions if fields["phase"] == "EVALUATION")
+    payout_gate = next(fields for fields in decisions if fields["phase"] == "PAYOUT_GATE")
+    assert evaluation["stage_rejected"] == "OK"
+    assert payout_gate["stage_rejected"] == "PAYOUT_BELOW_VALIDATED_EDGE"
+    assert payout_gate["payout"] == "0.50"
+    assert payout_gate["payout_min"] == "0.55"
+    assert payout_gate["payout_allowed"] is False
+    assert evaluation["decision_id"] == payout_gate["decision_id"]
+    assert runtime.requests == []
+
+
+def test_signal_while_disarmed_has_terminal_admission_reason():
+    cat = catalog(entry())
+    cat.active_strategies["f5:a"].instance.evaluate_detailed = lambda candles, ctx: EvalResult(
+        Direction.CALL, "OK", 20, 15, None, None, None
+    )
+    trader, _, runtime, _ = trader_for(
+        cat,
+        IqOptionRiskConfig(strategy_id="f5:a"),
+        armed=False,
+    )
+
+    trader._evaluate_cycle()
+
+    decisions = [fields for name, fields in runtime.events if name == "iqoption_decision"]
+    assert any(
+        fields["phase"] == "ADMISSION" and fields["stage_rejected"] == "IQOPTION_BOT_DISARMED"
+        for fields in decisions
+    )
+    assert runtime.requests == []
+
+
+def test_operational_budget_blocks_before_financial_intent():
+    cat = catalog(entry())
+    cat.active_strategies["f5:a"].instance.evaluate_detailed = lambda candles, ctx: EvalResult(
+        Direction.CALL, "OK", 20, 15, None, None, None
+    )
+    budget = IQOptionMessageBudget(limit=2, total_limit=2)
+    trader, _, runtime, _ = trader_for(
+        cat,
+        IqOptionRiskConfig(strategy_id="f5:a"),
+        armed=True,
+        budget=budget,
+    )
+
+    trader._evaluate_cycle()
+
+    assert runtime.requests == []
+    decisions = [fields for name, fields in runtime.events if name == "iqoption_decision"]
+    assert any(
+        fields["phase"] == "ADMISSION"
+        and fields["stage_rejected"] == "IQOPTION_OPERATIONAL_MESSAGE_BUDGET_EXHAUSTED"
+        for fields in decisions
+    )
+
+
 def test_auto_arbitrates_all_signals_not_catalog_insertion_order():
     cat = catalog(entry("f5:b"), entry("f5:a"))
     for info in cat.active_strategies.values():

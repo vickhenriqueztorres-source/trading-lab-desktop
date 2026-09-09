@@ -1,9 +1,12 @@
 """R-COL-1/I-8/I-14: secrets come only from the independent Lab namespace."""
 
+import json
 import uuid
+import warnings
 from types import SimpleNamespace
 
 import pytest
+from strategy_lab import cli
 from strategy_lab.collect import credentials
 
 
@@ -53,3 +56,115 @@ def test_environment_is_ignored_outside_vps(monkeypatch):
     monkeypatch.setattr(credentials, "_load_keyring_module", lambda: fake_keyring)
     with pytest.raises(RuntimeError, match="IQ_COLLECTION_CREDENTIALS_UNAVAILABLE"):
         credentials.load_credentials()
+
+
+def test_interactive_store_uses_dedicated_keyring_and_masks_secret(monkeypatch, capsys):
+    """R-COL-1/I-8: setup never receives a password as a CLI argument or prints it."""
+    username = f"collector-{uuid.uuid4().hex}@invalid.test"
+    opaque_secret = uuid.uuid4().hex
+    stored: dict[tuple[str, str], str] = {}
+    fake_keyring = SimpleNamespace(
+        set_password=lambda service, user, secret: stored.__setitem__((service, user), secret),
+        get_password=lambda service, user: stored.get((service, user)),
+        get_credential=lambda service, user: (
+            SimpleNamespace(username=username, password=stored[(service, username)])
+            if (service, username) in stored
+            else None
+        ),
+    )
+    monkeypatch.setattr(credentials, "_load_keyring_module", lambda: fake_keyring)
+
+    credentials.prompt_and_store_credentials(
+        username_reader=lambda prompt: username,
+        password_reader=lambda prompt: opaque_secret,
+    )
+
+    assert stored[(credentials.KEYRING_SERVICE, username)] == opaque_secret
+    assert credentials.keyring_credentials_available() is True
+    output = capsys.readouterr().out
+    assert username not in output
+    assert opaque_secret not in output
+
+
+def test_interactive_store_rejects_empty_values_without_writing(monkeypatch):
+    """R-COL-1/I-7: incomplete collection credentials fail closed."""
+    called = False
+
+    def load_keyring():
+        nonlocal called
+        called = True
+        return SimpleNamespace()
+
+    monkeypatch.setattr(credentials, "_load_keyring_module", load_keyring)
+    with pytest.raises(RuntimeError, match="IQ_COLLECTION_CREDENTIALS_INVALID"):
+        credentials.store_keyring_credentials("", "secret")
+    assert called is False
+
+
+def test_credentials_cli_status_discloses_only_boolean(monkeypatch, capsys):
+    """R-COL-1/I-8: status exposes availability without identity or secret."""
+    monkeypatch.setattr(cli, "keyring_credentials_available", lambda: True)
+    assert cli.main(["credentials", "status"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "configured": True,
+        "event": "strategy_lab_collection_credentials_status",
+    }
+
+
+def test_credentials_cli_set_has_no_secret_argument_or_output(monkeypatch, capsys):
+    """R-COL-1/I-8: CLI setup invokes only the interactive provider."""
+    invoked = False
+
+    def interactive_setup() -> None:
+        nonlocal invoked
+        invoked = True
+
+    monkeypatch.setattr(cli, "prompt_and_store_credentials", interactive_setup)
+    assert cli.main(["credentials", "set"]) == 0
+    assert invoked is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "event": "strategy_lab_collection_credentials_configured",
+        "status": "ok",
+    }
+
+
+def test_secure_prompt_refuses_noninteractive_stdin(monkeypatch):
+    """R-COL-1/I-8: piped credentials must not trigger an echoed fallback."""
+    monkeypatch.setattr(credentials.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(RuntimeError, match="IQ_COLLECTION_INTERACTIVE_TERMINAL_REQUIRED"):
+        credentials.prompt_and_store_credentials(
+            username_reader=lambda prompt: pytest.fail("No input may be requested"),
+        )
+
+
+def test_getpass_echo_warning_aborts_without_store(monkeypatch):
+    """R-COL-1/I-8: inability to hide password aborts before reading or storing it."""
+
+    def insecure_reader(prompt):
+        warnings.warn("fallback", credentials.getpass.GetPassWarning, stacklevel=2)
+        pytest.fail("Echoed fallback must never execute")
+
+    monkeypatch.setattr(
+        credentials, "store_keyring_credentials", lambda *args: pytest.fail("Must not store")
+    )
+    with pytest.raises(RuntimeError, match="IQ_COLLECTION_SECURE_INPUT_UNAVAILABLE"):
+        credentials.prompt_and_store_credentials(
+            username_reader=lambda prompt: "synthetic",
+            password_reader=insecure_reader,
+        )
+
+
+def test_keyring_failure_content_is_not_exposed(monkeypatch, capsys):
+    """R-COL-1/I-8: a failing native backend may include secrets in its exception."""
+    secret = uuid.uuid4().hex
+
+    def fail(*args):
+        raise RuntimeError(secret)
+
+    fake = SimpleNamespace(set_password=fail, get_credential=fail)
+    monkeypatch.setattr(credentials, "_load_keyring_module", lambda: fake)
+    with pytest.raises(RuntimeError, match="^IQ_COLLECTION_CREDENTIALS_STORE_FAILED$"):
+        credentials.store_keyring_credentials("synthetic", secret)
+    assert credentials.keyring_credentials_available() is False
+    assert secret not in str(capsys.readouterr())

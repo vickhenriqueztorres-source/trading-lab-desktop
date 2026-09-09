@@ -8,6 +8,7 @@ JWT tokens, and database connection strings before committing.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import re
 import subprocess
 import sys
@@ -19,9 +20,7 @@ PEM_PRIVATE_KEY_PATTERN = re.compile(
     re.MULTILINE,
 )
 
-JWT_PATTERN = re.compile(
-    r"\beyJ[a-zA-Z0-9_\-]{8,}\.eyJ[a-zA-Z0-9_\-]{8,}\.[a-zA-Z0-9_\-]{10,}\b"
-)
+JWT_PATTERN = re.compile(r"\beyJ[a-zA-Z0-9_\-]{8,}\.eyJ[a-zA-Z0-9_\-]{8,}\.[a-zA-Z0-9_\-]{10,}\b")
 
 DATABASE_URL_PATTERN = re.compile(
     r"postgres(?:ql)?://[a-zA-Z0-9_]+:[^@\s/]+@[a-zA-Z0-9_.\-]+(?::\d+)?/[a-zA-Z0-9_.\-]+",
@@ -87,10 +86,11 @@ def scan_content(content: str, filename: str) -> list[str]:
     violations: list[str] = []
 
     # Check for private keys
-    if PEM_PRIVATE_KEY_PATTERN.search(content):
-        # Allow test keys only in designated test fixture files
-        if not any(allowed in filename for allowed in ("test_key", "test_keys", "tests/keys")):
-            violations.append("Exposed PEM Private Key detected")
+    if PEM_PRIVATE_KEY_PATTERN.search(content) and not any(
+        allowed in filename for allowed in ("test_key", "test_keys", "tests/keys")
+    ):
+        # Allow test keys only in designated test fixture files.
+        violations.append("Exposed PEM Private Key detected")
 
     # Check for live JWTs
     for match in JWT_PATTERN.finditer(content):
@@ -108,7 +108,11 @@ def scan_content(content: str, filename: str) -> list[str]:
     # Check for exposed passwords in code assignments
     for match in EXPOSED_PASSWORD_PATTERN.finditer(content):
         val = match.group(1).strip()
-        if val.lower() not in SAFE_PLACEHOLDERS and not val.startswith("${"):
+        if (
+            val.lower() not in SAFE_PLACEHOLDERS
+            and not val.startswith("${")
+            and not val.lower().startswith("env(")
+        ):
             violations.append(f"Exposed Credential/Password assignment: '{match.group(0)}'")
 
     return violations
@@ -214,10 +218,8 @@ def install_pre_commit_hook(repo_root: Path) -> int:
 python scripts/scrub_secrets.py
 """
     hook_file.write_text(hook_content, encoding="utf-8")
-    try:
+    with contextlib.suppress(Exception):
         hook_file.chmod(0o755)
-    except Exception:
-        pass
 
     print(f"Pre-commit hook installed successfully at {hook_file}")
     return 0

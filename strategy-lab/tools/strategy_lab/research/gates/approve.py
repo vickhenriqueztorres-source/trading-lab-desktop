@@ -63,8 +63,32 @@ def approve_candidate(
     p_pessimistic = apply_delay_penalty(p_hat, PESSIMISTIC_DELAY_PENALTY)
     w_lower = wilson_lower_p(p_pessimistic, n)
     required_threshold = p_min + required_margin
+    payout_gate = GateResult(
+        gate_name="payout_available",
+        passed=trade_log.excluded_missing_payout == 0,
+        metrics={"excluded_missing_payout": trade_log.excluded_missing_payout},
+        reason="" if trade_log.excluded_missing_payout == 0 else "RES_PAYOUT_MISSING",
+    )
+    if not payout_gate.passed:
+        return ApprovalResult(
+            approved=False,
+            wilson_lower=w_lower,
+            p_hat=p_hat,
+            p_hat_pessimistic=p_pessimistic,
+            n=n,
+            p_min=p_min,
+            required_threshold=required_threshold,
+            gate_results=(payout_gate,),
+            reason=payout_gate.reason,
+        )
 
     # 1. Sample size gate (n >= 500)
+    sample_gate = GateResult(
+        gate_name="sample_size",
+        passed=n >= min_oos_trades,
+        metrics={"n": n, "min_oos_trades": min_oos_trades},
+        reason="" if n >= min_oos_trades else "INSUFFICIENT_OUT_OF_SAMPLE_TRADES",
+    )
     if n < min_oos_trades:
         return ApprovalResult(
             approved=False,
@@ -74,11 +98,22 @@ def approve_candidate(
             n=n,
             p_min=p_min,
             required_threshold=required_threshold,
-            gate_results=(),
+            gate_results=(payout_gate, sample_gate),
             reason="INSUFFICIENT_OUT_OF_SAMPLE_TRADES",
         )
 
     # 2. Pessimistic Wilson lower bound gate
+    wilson_gate = GateResult(
+        gate_name="pessimistic_wilson",
+        passed=w_lower >= required_threshold,
+        metrics={
+            "p_hat": p_hat,
+            "p_hat_pessimistic": p_pessimistic,
+            "wilson_lower": w_lower,
+            "required_threshold": required_threshold,
+        },
+        reason="" if w_lower >= required_threshold else "WILSON_LOWER_BELOW_THRESHOLD",
+    )
     if w_lower < required_threshold:
         return ApprovalResult(
             approved=False,
@@ -88,7 +123,7 @@ def approve_candidate(
             n=n,
             p_min=p_min,
             required_threshold=required_threshold,
-            gate_results=(),
+            gate_results=(payout_gate, sample_gate, wilson_gate),
             reason="WILSON_LOWER_BELOW_THRESHOLD",
         )
 
@@ -108,6 +143,7 @@ def approve_candidate(
     )
 
     all_gates_passed = len(gate_results) == 5 and all(res.passed for res in gate_results)
+    all_results = (payout_gate, sample_gate, wilson_gate, *gate_results)
     if not all_gates_passed:
         first_fail = next((r for r in gate_results if not r.passed), None)
         fail_reason = first_fail.reason if first_fail else "GATE_FAILED"
@@ -119,7 +155,7 @@ def approve_candidate(
             n=n,
             p_min=p_min,
             required_threshold=required_threshold,
-            gate_results=tuple(gate_results),
+            gate_results=all_results,
             reason=fail_reason,
         )
 
@@ -131,6 +167,6 @@ def approve_candidate(
         n=n,
         p_min=p_min,
         required_threshold=required_threshold,
-        gate_results=tuple(gate_results),
+        gate_results=all_results,
         reason="",
     )

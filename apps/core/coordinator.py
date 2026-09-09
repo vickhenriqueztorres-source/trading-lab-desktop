@@ -122,6 +122,22 @@ class OutboxDispatcher:
         if command.deadline_at <= dispatch_time:
             self._writer.cancel_expired_before_dispatch(command, dispatch_time)
             return command
+        # Entry authority is checked again after the durable outbox claim.  A
+        # concurrent operator stop or broker recovery can happen after the
+        # intent/reservation transaction but before the external call.  In that
+        # case the command is proven NOT_SENT and remains recoverable; it is
+        # never allowed to cross the worker boundary.
+        allowed, blocker = self._health_gate.can_enter_order(
+            command.broker.value,
+            command.account_id,
+        )
+        if not allowed:
+            self._writer.record_dispatch_not_sent(
+                command,
+                reason_code=blocker or "HG_ENTRY_NOT_AUTHORIZED",
+                now=utc_now(),
+            )
+            return command
         reason_code: str | None = None
         try:
             result = self._worker.submit_order(command)

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.core.families import EvalResult, F4SqueezeBreak, F5Quadrant
-from apps.core.iqoption_auto_trader import IqOptionAutoTrader
+from apps.core.iqoption_auto_trader import IqOptionAutoTrader, IqOptionExecutionFlags
 from apps.core.iqoption_connection_safety import IQOptionMessageBudget
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.manifest_catalog import parse_strategy_entry
@@ -199,6 +199,79 @@ def test_signal_uses_broker_candles_and_persists_through_core() -> None:
     trader._evaluate_cycle()
     assert len(runtime.requests) == 1
     assert trader.status_reason.startswith("SINAL_CONSUMIDO:")
+
+
+def test_incremental_rsi_engine_is_explicit_and_still_uses_core_pipeline() -> None:
+    client = FakeClient(_make_candles(_falling_prices()))
+    runtime = FakeRuntime()
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,  # type: ignore[arg-type]
+        risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
+        operator_armed=lambda: True,
+        execution_flags_provider=lambda: IqOptionExecutionFlags(
+            legacy_entries_enabled=False,
+            indicator_shadow_enabled=True,
+            incremental_entries_enabled=True,
+        ),
+    )
+    trader._strategy.evaluate_decision = pytest.fail  # type: ignore[method-assign]
+
+    trader._evaluate_cycle()
+
+    assert len(runtime.requests) == 1
+    request = runtime.requests[0]
+    assert request.broker is Broker.IQ_OPTION
+    assert request.strategy_id == "iqoption-rsi-demo"
+    assert request.direction is Direction.CALL
+    assert trader.status_reason.startswith("ORDEM_ACEITA:")
+
+
+def test_disabling_all_entry_engines_does_not_fetch_or_submit() -> None:
+    client = FakeClient(_make_candles(_falling_prices()))
+    runtime = FakeRuntime()
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,  # type: ignore[arg-type]
+        risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
+        operator_armed=lambda: True,
+        execution_flags_provider=lambda: IqOptionExecutionFlags(
+            legacy_entries_enabled=False,
+            indicator_shadow_enabled=False,
+            incremental_entries_enabled=False,
+        ),
+    )
+
+    trader._evaluate_cycle()
+
+    assert client.market_requests == []
+    assert runtime.requests == []
+    assert trader.status_reason == "IQOPTION_ENTRY_ENGINE_DISABLED"
+
+
+def test_manifest_family_does_not_fall_back_to_legacy_when_legacy_disabled() -> None:
+    client = FakeClient(_make_candles(_falling_prices()))
+    runtime = FakeRuntime()
+    catalog = explicit_signal_catalog(("EURUSD-OTC",))
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,  # type: ignore[arg-type]
+        risk_config_provider=lambda: IqOptionRiskConfig(strategy_id="f5:EURUSD-OTC"),
+        operator_armed=lambda: True,
+        catalog_provider=lambda: catalog,
+        monitor_provider=lambda: SimpleNamespace(ready=True),
+        execution_flags_provider=lambda: IqOptionExecutionFlags(
+            legacy_entries_enabled=False,
+            indicator_shadow_enabled=True,
+            incremental_entries_enabled=True,
+        ),
+    )
+
+    trader._evaluate_cycle()
+
+    assert runtime.requests == []
+    assert trader.asset_ranking[0].condition == "INCREMENTAL_ENGINE_UNSUPPORTED"
+    assert trader.status_reason == "IQOPTION_WAITING_RSI_SIGNAL (EURUSD-OTC)"
 
 
 def test_core_submission_failure_is_never_reported_as_success() -> None:

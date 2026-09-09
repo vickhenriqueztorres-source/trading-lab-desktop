@@ -1,4 +1,4 @@
-﻿"""Unit test for TradingLabMainWindow integration with ManifestStrategyPanelWidget."""
+"""Unit test for TradingLabMainWindow integration with ManifestStrategyPanelWidget."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def test_main_window_has_manifest_strategy_tab(qapp: QApplication, tmp_path: Pat
 
         cards = window._manifest_strategy_panel._cards
         assert len(cards) > 0, "Expected at least one strategy card to be rendered"
-        for key, card in cards.items():
+        for _key, card in cards.items():
             assert card._header_label.text() != ""
             assert card._stat1_label.text() != ""
             assert "Taxa de acerto validada" in card._stat1_label.text()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -19,6 +20,26 @@ logger = logging.getLogger("core.outcomes_uploader")
 
 # Exact 5 allowed payload fields according to R-BOT-10
 REQUIRED_OUTCOME_FIELDS = frozenset({"client_id", "strategy_key", "ts", "won", "payout_pct"})
+OUTCOME_V2_FIELDS = frozenset(
+    {
+        "client_id",
+        "event_id",
+        "strategy_key",
+        "recipe_revision",
+        "manifest_version",
+        "execution_semantics_version",
+        "primitives_version",
+        "asset",
+        "timeframe_s",
+        "product",
+        "account_environment",
+        "source",
+        "signal_group_id",
+        "ts",
+        "won",
+        "payout_pct",
+    }
+)
 
 
 def format_outcome_item(
@@ -44,6 +65,59 @@ def format_outcome_item(
     return payload
 
 
+def format_outcome_v2_item(
+    *,
+    client_id: str,
+    event_id: str,
+    strategy_key: str,
+    recipe_revision: int,
+    manifest_version: int,
+    execution_semantics_version: str,
+    primitives_version: str,
+    asset: str,
+    timeframe_s: int,
+    product: str,
+    account_environment: str,
+    source: str,
+    signal_group_id: str,
+    ts: int,
+    won: bool,
+    payout_pct: Decimal | str | float | int,
+) -> dict[str, Any]:
+    """Build the Hub v2 contract without account or credential identifiers."""
+    payload: dict[str, Any] = {
+        "client_id": str(client_id),
+        "event_id": str(event_id),
+        "strategy_key": str(strategy_key),
+        "recipe_revision": int(recipe_revision),
+        "manifest_version": int(manifest_version),
+        "execution_semantics_version": str(execution_semantics_version),
+        "primitives_version": str(primitives_version),
+        "asset": str(asset),
+        "timeframe_s": int(timeframe_s),
+        "product": str(product),
+        "account_environment": str(account_environment),
+        "source": str(source),
+        "signal_group_id": str(signal_group_id),
+        "ts": int(ts),
+        "won": bool(won),
+        "payout_pct": str(payout_pct),
+    }
+    if frozenset(payload) != OUTCOME_V2_FIELDS:
+        raise ValueError("Invalid v2 outcome fields")
+    return payload
+
+
+def deterministic_event_id(order_id: str) -> str:
+    """Stable UUID for a terminal order, making retries idempotent."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"trading-lab:terminal:{order_id}"))
+
+
+def signal_group_id(strategy_key: str, asset: str, timeframe_s: int, ts: int) -> str:
+    digest = hashlib.sha256(f"{strategy_key}|{asset}|{timeframe_s}|{ts}".encode()).hexdigest()
+    return f"sha256:{digest}"
+
+
 class OutcomesUploader:
     """Manages asynchronous anonymous batch uploading of trade outcomes.
 
@@ -62,6 +136,7 @@ class OutcomesUploader:
         upload_interval_seconds: float = 300.0,
         http_post_fn: Callable[[str, dict[str, str], bytes], int] | None = None,
         token_provider: Callable[[str], str] | None = None,
+        opt_in: bool = True,
     ) -> None:
         self._writer = writer
         self._identity_file = identity_file
@@ -69,6 +144,8 @@ class OutcomesUploader:
         self._upload_interval_seconds = upload_interval_seconds
         self._http_post_fn = http_post_fn or self._default_http_post
         self._token_provider = token_provider or self._default_token_provider
+        self._opt_in = opt_in
+        self._expired_count = 0
 
         self._client_id, self._client_token = self._load_or_create_identity()
         self._stop_event = threading.Event()
@@ -84,26 +161,38 @@ class OutcomesUploader:
     def client_token(self) -> str:
         return self._client_token
 
+    @property
+    def opt_in(self) -> bool:
+        return self._opt_in
+
+    @property
+    def expired_count(self) -> int:
+        return self._expired_count
+
     def _load_or_create_identity(self) -> tuple[str, str]:
         """Load or create persistent anonymous UUIDv4 client identity."""
         if self._identity_file.exists():
             try:
                 data = json.loads(self._identity_file.read_text(encoding="utf-8"))
                 cid = str(data.get("client_id", ""))
-                tok = str(data.get("client_token", ""))
-                if cid and tok:
-                    return cid, tok
+                if cid:
+                    # Tokens are session secrets and are intentionally not read
+                    # or retained from the identity file.
+                    self._identity_file.write_text(
+                        json.dumps({"client_id": cid, "created_at": data.get("created_at", "")}),
+                        encoding="utf-8",
+                    )
+                    return cid, ""
             except Exception as exc:
                 logger.warning("Failed to parse identity file %s: %s", self._identity_file, exc)
 
         # Generate new anonymous identity
         cid = str(uuid.uuid4())
-        tok = self._token_provider(cid)
+        tok = ""
         self._identity_file.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._identity_file.with_suffix(".tmp")
         identity_data = {
             "client_id": cid,
-            "client_token": tok,
             "created_at": datetime.now(UTC).isoformat(),
         }
         tmp_path.write_text(json.dumps(identity_data), encoding="utf-8")
@@ -111,8 +200,25 @@ class OutcomesUploader:
         return cid, tok
 
     def _default_token_provider(self, client_id: str) -> str:
-        """Create a default anonymous client bearer token."""
-        return f"anon_jwt_{client_id}"
+        """Obtain a short-lived anonymous Hub token; never persist it on disk."""
+        if not self._endpoint_url:
+            # Compatibility for offline/unit-test instances with no Hub endpoint.
+            return f"anon_jwt_{client_id}"
+        import urllib.request
+
+        token_url = self._endpoint_url.rsplit("/", 1)[0] + "/client_token"
+        request = urllib.request.Request(
+            token_url,
+            data=json.dumps({"client_id": client_id}, separators=(",", ":")).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10.0) as response:
+            payload = json.loads(response.read(16 * 1024).decode("utf-8"))
+        token = payload.get("token") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("OUTCOMES_CLIENT_TOKEN_INVALID")
+        return token
 
     def _default_http_post(self, url: str, headers: dict[str, str], data: bytes) -> int:
         """Default HTTP POST transport using urllib."""
@@ -143,6 +249,48 @@ class OutcomesUploader:
             # Fail-silent to never break settlement or core execution
             logger.warning("Failed to enqueue outcome for %s: %s", strategy_key, exc)
 
+    def enqueue_terminal_v2(
+        self,
+        *,
+        order_id: str,
+        strategy_key: str,
+        recipe_revision: int,
+        manifest_version: int,
+        execution_semantics_version: str,
+        primitives_version: str,
+        asset: str,
+        timeframe_s: int,
+        product: str,
+        account_environment: str,
+        ts: int,
+        won: bool,
+        payout_pct: Decimal | str | float | int,
+    ) -> bool:
+        """Queue one already-persisted terminal event; no financial side effect."""
+        try:
+            self._writer.enqueue_outcome_v2(
+                event_id=deterministic_event_id(order_id),
+                strategy_key=strategy_key,
+                recipe_revision=recipe_revision,
+                manifest_version=manifest_version,
+                execution_semantics_version=execution_semantics_version,
+                primitives_version=primitives_version,
+                asset=asset,
+                timeframe_s=timeframe_s,
+                product=product,
+                account_environment=account_environment,
+                source="desktop_bot",
+                signal_group_id=signal_group_id(strategy_key, asset, timeframe_s, ts),
+                ts=ts,
+                won=won,
+                payout_pct=str(payout_pct),
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Failed to enqueue terminal outcome: %s", type(exc).__name__)
+            return False
+
     def pending_count(self) -> int:
         """Return count of pending outcomes in local SQLite queue."""
         try:
@@ -152,8 +300,16 @@ class OutcomesUploader:
 
     def flush_once(self, batch_size: int = 500) -> int:
         """Synchronously upload one batch of pending outcomes (fail-silent)."""
-        if not self._endpoint_url:
+        if not self._opt_in or not self._endpoint_url:
             return 0
+
+        # Hub accepts only the last seven days. Expiry is explicit and bounded;
+        # it never touches authoritative orders or settlement records.
+        try:
+            expired = self._writer.expire_outcomes(int(datetime.now(UTC).timestamp()) - 7 * 86400)
+            self._expired_count += expired
+        except Exception:
+            pass
 
         try:
             rows = self._writer.fetch_pending_outcomes(limit=batch_size)
@@ -164,25 +320,65 @@ class OutcomesUploader:
         if not rows:
             return 0
 
+        # Keep the legacy five-field compatibility path usable with injected
+        # transports in existing installations; v2 always obtains a real Hub token.
+        v2 = rows[0].get("event_id") is not None
+        if not self._client_token and not v2:
+            self._client_token = f"legacy_{self._client_id}"
+        if not self._client_token and v2:
+            try:
+                self._client_token = self._token_provider(self._client_id)
+            except Exception as exc:
+                logger.warning("Outcome token unavailable: %s", type(exc).__name__)
+                self._apply_backoff()
+                return 0
+
+        # Keep schema versions in separate requests; the Hub rejects mixed payloads.
+        rows = [row for row in rows if (row.get("event_id") is not None) == v2]
         items = []
         ids_to_ack = []
         for r in rows:
-            items.append(
-                format_outcome_item(
-                    client_id=self._client_id,
-                    strategy_key=r["strategy_key"],
-                    ts=r["ts"],
-                    won=bool(r["won"]),
-                    payout_pct=r["payout_pct"],
+            if v2:
+                items.append(
+                    format_outcome_v2_item(
+                        client_id=self._client_id,
+                        event_id=str(r["event_id"]),
+                        strategy_key=r["strategy_key"],
+                        recipe_revision=int(r["recipe_revision"]),
+                        manifest_version=int(r["manifest_version"]),
+                        execution_semantics_version=str(r["execution_semantics_version"]),
+                        primitives_version=str(r["primitives_version"]),
+                        asset=str(r["asset"]),
+                        timeframe_s=int(r["timeframe_s"]),
+                        product=str(r["product"]),
+                        account_environment=str(r["account_environment"]),
+                        source=str(r["source"]),
+                        signal_group_id=str(r["signal_group_id"]),
+                        ts=r["ts"],
+                        won=bool(r["won"]),
+                        payout_pct=r["payout_pct"],
+                    )
                 )
-            )
+            else:
+                items.append(
+                    format_outcome_item(
+                        client_id=self._client_id,
+                        strategy_key=r["strategy_key"],
+                        ts=r["ts"],
+                        won=bool(r["won"]),
+                        payout_pct=r["payout_pct"],
+                    )
+                )
             ids_to_ack.append(r["id"])
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._client_token}",
         }
-        body = json.dumps(items).encode("utf-8")
+        body = json.dumps(
+            {"schema_version": 2, "outcomes": items} if v2 else items,
+            separators=(",", ":"),
+        ).encode("utf-8")
 
         try:
             status_code = self._http_post_fn(self._endpoint_url, headers, body)

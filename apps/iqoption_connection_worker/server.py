@@ -55,7 +55,12 @@ class IQOptionReadOnlyWorkerServer:
         self._capabilities = WorkerCapabilities(
             broker="IQOPTION",
             account_modes=("PRACTICE", "REAL"),
-            products=("ACCOUNT_READ_ONLY", "BINARY_OPTION", "OPTIONS"),
+            products=(
+                "ACCOUNT_READ_ONLY",
+                "BINARY_OPTION",
+                "DIGITAL_OPTION_DISCOVERY",
+                "OPTIONS",
+            ),
             supports_reconciliation=is_demo,
             supports_quotes=is_demo,
             supports_order_status_query=is_demo,
@@ -111,12 +116,8 @@ class IQOptionReadOnlyWorkerServer:
     def _dispatch(self, request: Envelope) -> tuple[MessageType, dict[str, Any]]:
         try:
             if request.message_type is MessageType.PING:
-                if self._connect_attempted and not self._session.is_connected:
-                    # Recover the transport in place with the memory-only SSID.
-                    # This path cannot perform HTTP login, so heartbeat cannot
-                    # create an authentication storm behind Core's persistent
-                    # connection admission controller.
-                    self._session.reconnect(timeout=8.0)
+                # IPC liveness is deliberately independent from broker session
+                # health.  Heartbeat must never login, reconnect or submit.
                 return MessageType.PONG, {}
             if request.message_type is MessageType.BROKER_BALANCE_REQUEST:
                 self._ensure_connected()
@@ -126,6 +127,14 @@ class IQOptionReadOnlyWorkerServer:
                 return MessageType.BROKER_CLOCK_RESPONSE, self._session.get_clock().to_payload()
             if request.message_type is MessageType.BROKER_CAPABILITIES_REQUEST:
                 return MessageType.BROKER_CAPABILITIES_RESPONSE, self._capabilities.to_payload()
+            if request.message_type is MessageType.BROKER_INSTRUMENT_CATALOG_REQUEST:
+                self._ensure_connected()
+                if request.payload:
+                    return self._error_payload("IPC_INVALID_ENVELOPE")
+                return (
+                    MessageType.BROKER_INSTRUMENT_CATALOG_RESPONSE,
+                    self._session.get_instrument_catalog().to_payload(),
+                )
             if request.message_type is MessageType.MARKET_HISTORY_REQUEST:
                 self._ensure_connected()
                 if self._order_session is None:
@@ -256,6 +265,10 @@ class IQOptionReadOnlyWorkerServer:
                             )
                         )
                 except Exception:
+                    # Make the loss observable to the next broker request.  The
+                    # Core lifecycle owns replacement/recovery; this pump must
+                    # never create a competing reconnect loop.
+                    self._session.close()
                     return
                 time.sleep(0.01)
 
@@ -277,11 +290,9 @@ class IQOptionReadOnlyWorkerServer:
         if self._session.is_connected:
             return
         if self._connect_attempted:
-            # After the first session start, every in-worker recovery is SSID
-            # only.  A market-data request racing the heartbeat cannot bypass
-            # the bounded reconnect path and trigger a fresh HTTP login.
-            self._session.reconnect(timeout=8.0)
-            return
+            # Requests never reconnect implicitly.  The Core lifecycle is the
+            # sole bounded recovery owner and will fence/replace this worker.
+            raise IQOptionExternalError(self._session.disconnect_reason)
         self._connect_attempted = True
         self._session.connect()
 
@@ -290,7 +301,7 @@ class IQOptionReadOnlyWorkerServer:
         try:
             normalized = ProtocolErrorCode(reason_code).value
         except ValueError:
-            normalized = ProtocolErrorCode.IPC_INVALID_ENVELOPE.value
+            normalized = ProtocolErrorCode.IQOPTION_EXTERNAL_ERROR.value
         return MessageType.ERROR, {"reason_code": normalized}
 
     def _validate_routing(self, request: Envelope) -> None:

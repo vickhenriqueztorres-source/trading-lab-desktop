@@ -424,4 +424,3 @@ def test_turn_on_all_and_turn_off_all_bulk_actions(sample_manifest: dict[str, An
     assert len(active_cards_after) == 0
 
     panel.close()
-

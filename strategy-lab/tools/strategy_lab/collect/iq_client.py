@@ -27,6 +27,7 @@ from primitives import Candle
 from pydantic import ValidationError
 
 from strategy_lab.collect.credentials import Credentials, load_credentials
+from strategy_lab.collect.login_budget import LoginBudget, LoginBudgetError
 
 __all__ = ["Candle", "FakeIQClient", "IQClient", "IQClientProtocol", "InvalidCandleError"]
 
@@ -160,7 +161,15 @@ def convert_candle(payload: object, *, tf_s: int, end_ts: int, now_ts: int) -> C
 
 
 def parse_catalog(raw: object) -> dict[str, tuple[int, Decimal | None]]:
-    """Use turbo (M1) only; never silently substitute a different product's payout."""
+    """Return canonical turbo assets without aliasing broker-only instrument names.
+
+    The upstream turbo catalogue also contains synthetic composites and ``-op``
+    aliases whose names cannot safely be used as Lab asset identifiers (some
+    contain ``/`` or ``:``).  They are outside the public canonical namespace and
+    are deliberately excluded.  A requested asset is still matched exactly and
+    never falls back to one of those aliases.  Structural corruption, duplicate
+    canonical names, and invalid payout data for canonical rows remain fatal.
+    """
     try:
         if not isinstance(raw, dict):
             raise ValueError
@@ -178,7 +187,14 @@ def parse_catalog(raw: object) -> dict[str, tuple[int, Decimal | None]]:
             active_id = int(identifier)
             if active_id <= 0 or not isinstance(row, dict):
                 raise ValueError
-            name = validate_asset(row["name"].removeprefix("front."))
+            raw_name = row["name"]
+            if not isinstance(raw_name, str) or not raw_name.isascii() or len(raw_name) > 96:
+                raise ValueError
+            name = raw_name.removeprefix("front.")
+            if not ASSET_PATTERN.fullmatch(name):
+                # Exclusion is exact: never normalize ``EURUSD-op`` into
+                # ``EURUSD`` or a composite into another tradeable instrument.
+                continue
             if name in result:
                 raise ValueError
             commission = row.get("option", {}).get("profit", {}).get("commission")
@@ -205,12 +221,15 @@ class IQClient:
         pause: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = lambda: random.uniform(0.5, 2.0),
         now: Callable[[], int] = _utc_epoch,
+        login_budget: Callable[[], None] | None = None,
     ) -> None:
+        self._external_backend = backend is None
         self._backend = backend
         self._credential_provider = credential_provider
         self._pause = pause
         self._jitter = jitter
         self._now = now
+        self._login_budget = login_budget
         self._connected = False
         self._called = False
         self._lock = threading.Lock()
@@ -241,17 +260,28 @@ class IQClient:
                 return
             try:
                 if self._backend is None:
-                    self._backend = _VendorBackend(self._credential_provider())
+                    credentials = self._credential_provider()
+                    budget = (
+                        self._login_budget
+                        or LoginBudget(
+                            LAB_ROOT / "state/iq-login-budget.json", now=self._now
+                        ).consume
+                    )
+                    budget()
+                    self._backend = _VendorBackend(credentials)
+                elif self._external_backend and self._login_budget is not None:
+                    self._login_budget()
                 self._paced(self._backend.connect)
                 self._connected = True
-            except Exception:
+            except Exception as exc:
                 self._connected = False
                 if self._backend is not None:
                     try:
                         self._backend.close()
                     except Exception:
                         raise IQClientError("IQ_SHUTDOWN_INCOMPLETE") from None
-                raise IQClientError("IQ_LOGIN_FAILED") from None
+                reason = str(exc) if isinstance(exc, LoginBudgetError) else "IQ_LOGIN_FAILED"
+                raise IQClientError(reason) from None
 
     def logout(self) -> None:
         with self._lock:
@@ -293,7 +323,10 @@ class IQClient:
             if asset not in self._assets:
                 raise IQClientError("IQ_ASSET_UNAVAILABLE")
             active_id = self._assets[asset][0]
-            raw = self._paced(lambda: backend.candles(active_id, tf_s, n, end_ts))
+            # IQ Option treats ``endtime`` as inclusive.  The Lab contract is
+            # [start, end), so query the last instant before the exclusive bound.
+            # Validation below still uses the unmodified exclusive ``end_ts``.
+            raw = self._paced(lambda: backend.candles(active_id, tf_s, n, end_ts - 1))
             if not isinstance(raw, list) or not 0 < len(raw) <= n:
                 raise IQClientError("IQ_INVALID_CANDLE_BATCH")
             result = [

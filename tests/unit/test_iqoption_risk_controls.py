@@ -59,6 +59,7 @@ def test_iqoption_bot_command_requires_explicit_boolean() -> None:
 
 def test_iqoption_bot_fails_closed_for_read_only_practice_connector() -> None:
     service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._iqoption_session_invalidated = False
     service._iqoption_switch_lock = threading.RLock()
     service._iqoption_bot_armed = False
     service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
@@ -91,6 +92,7 @@ def test_iqoption_bot_fails_closed_for_read_only_practice_connector() -> None:
 
 def test_iqoption_real_is_never_armed_even_if_capabilities_claim_ready() -> None:
     service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._iqoption_session_invalidated = False
     service._iqoption_switch_lock = threading.RLock()
     service._iqoption_bot_armed = False
     service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
@@ -120,6 +122,7 @@ def test_iqoption_real_is_never_armed_even_if_capabilities_claim_ready() -> None
 
 def test_iqoption_bot_arms_successfully_in_practice_when_capabilities_ready() -> None:
     service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._iqoption_session_invalidated = False
     service._iqoption_switch_lock = threading.RLock()
     service._iqoption_bot_armed = False
     service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"

@@ -20,7 +20,10 @@ _MAX_BROKERS = 4
 _MAX_ORDERS = 100
 _MAX_DERIV_STRATEGIES = 36
 _MAX_DERIV_ASSET_RANKS = 16
-_MAX_IQOPTION_ASSET_RANKS = 32
+# IQ Option currently exposes well over the legacy 32-pair sample once Binary,
+# Turbo and Digital markets are discovered dynamically. Keep a hard IPC bound,
+# but size it for the broker catalogue rather than a hand-written shortlist.
+_MAX_IQOPTION_ASSET_RANKS = 512
 
 
 class UiHandshakeStatus(StrEnum):
@@ -1121,6 +1124,19 @@ class UiIqOptionAssetRank:
     selected: bool = False
     status: str = "MONITORING"
     candidate_details: str = ""
+    # Evidence fields are projected by the Core.  They are deliberately
+    # additive so older UI peers can continue to consume the legacy radar.
+    source: str = "UNKNOWN"
+    mode: str = "LEGACY"
+    revision: str | None = None
+    readiness: str = "UNKNOWN"
+    signal_observed: bool = False
+    candidate_eligible: bool = False
+    order_submitted: bool = False
+    order_accepted: bool = False
+    terminal: bool = False
+    wait_reason: str | None = None
+    waiting_seconds: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate_details, str) or len(self.candidate_details) > 2048:
@@ -1132,6 +1148,26 @@ class UiIqOptionAssetRank:
             raise ValueError("IQ Option asset rank selection is invalid")
         if self.direction is not None and self.direction not in {"CALL", "PUT"}:
             raise ValueError("IQ Option asset rank direction is invalid")
+        for value in (self.source, self.mode, self.readiness):
+            if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
+                raise ValueError("IQ Option evidence text is invalid")
+        if self.revision is not None and (not self.revision.strip() or len(self.revision) > 128):
+            raise ValueError("IQ Option evidence revision is invalid")
+        if self.wait_reason is not None and (
+            not self.wait_reason.strip() or len(self.wait_reason) > _MAX_TEXT
+        ):
+            raise ValueError("IQ Option wait reason is invalid")
+        for flag in (
+            self.signal_observed,
+            self.candidate_eligible,
+            self.order_submitted,
+            self.order_accepted,
+            self.terminal,
+        ):
+            if type(flag) is not bool:
+                raise ValueError("IQ Option evidence flag is invalid")
+        if type(self.waiting_seconds) is not int or self.waiting_seconds < 0:
+            raise ValueError("IQ Option waiting duration is invalid")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -1143,6 +1179,17 @@ class UiIqOptionAssetRank:
             "selected": self.selected,
             "status": self.status,
             "candidate_details": self.candidate_details,
+            "source": self.source,
+            "mode": self.mode,
+            "revision": self.revision,
+            "readiness": self.readiness,
+            "signal_observed": self.signal_observed,
+            "candidate_eligible": self.candidate_eligible,
+            "order_submitted": self.order_submitted,
+            "order_accepted": self.order_accepted,
+            "terminal": self.terminal,
+            "wait_reason": self.wait_reason,
+            "waiting_seconds": self.waiting_seconds,
         }
 
     @classmethod
@@ -1151,18 +1198,28 @@ class UiIqOptionAssetRank:
         details = payload.pop("candidate_details", "")
         if not isinstance(details, str) or len(details) > 2048:
             raise _invalid()
-        _exact(
-            payload,
-            {
-                "symbol",
-                "display_name",
-                "rsi",
-                "direction",
-                "condition",
-                "selected",
-                "status",
-            },
-        )
+        allowed = {
+            "symbol",
+            "display_name",
+            "rsi",
+            "direction",
+            "condition",
+            "selected",
+            "status",
+            "source",
+            "mode",
+            "revision",
+            "readiness",
+            "signal_observed",
+            "candidate_eligible",
+            "order_submitted",
+            "order_accepted",
+            "terminal",
+            "wait_reason",
+            "waiting_seconds",
+        }
+        if not set(payload).issubset(allowed):
+            raise _invalid()
         selected = payload.get("selected")
         if type(selected) is not bool:
             raise _invalid()
@@ -1170,6 +1227,22 @@ class UiIqOptionAssetRank:
         if direction is not None and (
             type(direction) is not str or direction not in {"CALL", "PUT"}
         ):
+            raise _invalid()
+        evidence_flags_raw = tuple(
+            payload.get(name, False)
+            for name in (
+                "signal_observed",
+                "candidate_eligible",
+                "order_submitted",
+                "order_accepted",
+                "terminal",
+            )
+        )
+        if any(type(value) is not bool for value in evidence_flags_raw):
+            raise _invalid()
+        evidence_flags = cast(tuple[bool, ...], evidence_flags_raw)
+        waiting_seconds = payload.get("waiting_seconds", 0)
+        if type(waiting_seconds) is not int:
             raise _invalid()
         try:
             return cls(
@@ -1181,6 +1254,228 @@ class UiIqOptionAssetRank:
                 selected=selected,
                 status=_string(payload, "status", 32),
                 candidate_details=details,
+                source=_string(payload, "source", _MAX_TEXT) if "source" in payload else "UNKNOWN",
+                mode=_string(payload, "mode", _MAX_TEXT) if "mode" in payload else "LEGACY",
+                revision=_optional_string(payload, "revision", 128),
+                readiness=(
+                    _string(payload, "readiness", _MAX_TEXT)
+                    if "readiness" in payload
+                    else "UNKNOWN"
+                ),
+                signal_observed=evidence_flags[0],
+                candidate_eligible=evidence_flags[1],
+                order_submitted=evidence_flags[2],
+                order_accepted=evidence_flags[3],
+                terminal=evidence_flags[4],
+                wait_reason=_optional_string(payload, "wait_reason", _MAX_TEXT),
+                waiting_seconds=waiting_seconds,
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiIqOptionExecutionMetrics:
+    """Bounded, local-only evidence for the IQ Option execution projection."""
+
+    source: str = "UNKNOWN"
+    mode: str = "LEGACY"
+    manifest_revision: str | None = None
+    manifest_version: int | None = None
+    strategy_count: int = 0
+    series_count: int = 0
+    unique_indicator_nodes: int = 0
+    cache_reuse_hits: int = 0
+    fetches: int = 0
+    indicator_updates: int = 0
+    decisions: int = 0
+    decision_p50_ms: int = 0
+    decision_p95_ms: int = 0
+    decision_p99_ms: int = 0
+    queue_depth: int = 0
+    close_delay_ms: int = 0
+    cache_entries: int = 0
+    memory_rss_mb: int | None = None
+    fencing_discards: int = 0
+    waiting_reason: str | None = None
+    waiting_seconds: int = 0
+    catalog_status: str = "UNAVAILABLE"
+    evidence_n: int | None = None
+    evidence_oos: int | None = None
+    evidence_validity: str = "UNAVAILABLE"
+    uploader_opt_in: bool = False
+    uploader_pending: int = 0
+    uploader_expired: int = 0
+
+    def __post_init__(self) -> None:
+        for value in (self.source, self.mode, self.catalog_status, self.evidence_validity):
+            if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
+                raise ValueError("IQ metrics text is invalid")
+        if self.manifest_revision is not None and len(self.manifest_revision) > 128:
+            raise ValueError("IQ manifest revision is invalid")
+        for name in (
+            "strategy_count",
+            "series_count",
+            "unique_indicator_nodes",
+            "cache_reuse_hits",
+            "fetches",
+            "indicator_updates",
+            "decisions",
+            "decision_p50_ms",
+            "decision_p95_ms",
+            "decision_p99_ms",
+            "queue_depth",
+            "close_delay_ms",
+            "cache_entries",
+            "fencing_discards",
+            "waiting_seconds",
+            "uploader_pending",
+            "uploader_expired",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError("IQ metrics integer is invalid")
+        for name in ("manifest_version", "memory_rss_mb", "evidence_n", "evidence_oos"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("IQ metrics optional integer is invalid")
+        if self.waiting_reason is not None and len(self.waiting_reason) > _MAX_TEXT:
+            raise ValueError("IQ waiting reason is invalid")
+        if type(self.uploader_opt_in) is not bool:
+            raise ValueError("IQ uploader opt-in must be boolean")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "mode": self.mode,
+            "manifest_revision": self.manifest_revision,
+            "manifest_version": self.manifest_version,
+            "strategy_count": self.strategy_count,
+            "series_count": self.series_count,
+            "unique_indicator_nodes": self.unique_indicator_nodes,
+            "cache_reuse_hits": self.cache_reuse_hits,
+            "fetches": self.fetches,
+            "indicator_updates": self.indicator_updates,
+            "decisions": self.decisions,
+            "decision_p50_ms": self.decision_p50_ms,
+            "decision_p95_ms": self.decision_p95_ms,
+            "decision_p99_ms": self.decision_p99_ms,
+            "queue_depth": self.queue_depth,
+            "close_delay_ms": self.close_delay_ms,
+            "cache_entries": self.cache_entries,
+            "memory_rss_mb": self.memory_rss_mb,
+            "fencing_discards": self.fencing_discards,
+            "waiting_reason": self.waiting_reason,
+            "waiting_seconds": self.waiting_seconds,
+            "catalog_status": self.catalog_status,
+            "evidence_n": self.evidence_n,
+            "evidence_oos": self.evidence_oos,
+            "evidence_validity": self.evidence_validity,
+            "uploader_opt_in": self.uploader_opt_in,
+            "uploader_pending": self.uploader_pending,
+            "uploader_expired": self.uploader_expired,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionExecutionMetrics:
+        expected = {
+            "source",
+            "mode",
+            "manifest_revision",
+            "manifest_version",
+            "strategy_count",
+            "series_count",
+            "unique_indicator_nodes",
+            "cache_reuse_hits",
+            "fetches",
+            "indicator_updates",
+            "decisions",
+            "decision_p50_ms",
+            "decision_p95_ms",
+            "decision_p99_ms",
+            "queue_depth",
+            "close_delay_ms",
+            "cache_entries",
+            "memory_rss_mb",
+            "fencing_discards",
+            "waiting_reason",
+            "waiting_seconds",
+            "catalog_status",
+            "evidence_n",
+            "evidence_oos",
+            "evidence_validity",
+            "uploader_opt_in",
+            "uploader_pending",
+            "uploader_expired",
+        }
+        if set(payload) != expected:
+            raise _invalid()
+        ints_raw = tuple(
+            payload.get(name)
+            for name in (
+                "strategy_count",
+                "series_count",
+                "unique_indicator_nodes",
+                "cache_reuse_hits",
+                "fetches",
+                "indicator_updates",
+                "decisions",
+                "decision_p50_ms",
+                "decision_p95_ms",
+                "decision_p99_ms",
+                "queue_depth",
+                "close_delay_ms",
+                "cache_entries",
+                "fencing_discards",
+                "waiting_seconds",
+                "uploader_pending",
+                "uploader_expired",
+            )
+        )
+        optional_ints_raw = tuple(
+            payload.get(name)
+            for name in ("manifest_version", "memory_rss_mb", "evidence_n", "evidence_oos")
+        )
+        if any(type(value) is not int or value < 0 for value in ints_raw):
+            raise _invalid()
+        ints = cast(tuple[int, ...], ints_raw)
+        optional_ints = cast(tuple[int | None, ...], optional_ints_raw)
+        if any(
+            value is not None and (type(value) is not int or value < 0) for value in optional_ints
+        ):
+            raise _invalid()
+        if type(payload.get("uploader_opt_in")) is not bool:
+            raise _invalid()
+        try:
+            return cls(
+                source=_string(payload, "source"),
+                mode=_string(payload, "mode"),
+                manifest_revision=_optional_string(payload, "manifest_revision", 128),
+                manifest_version=optional_ints[0],
+                strategy_count=ints[0],
+                series_count=ints[1],
+                unique_indicator_nodes=ints[2],
+                cache_reuse_hits=ints[3],
+                fetches=ints[4],
+                indicator_updates=ints[5],
+                decisions=ints[6],
+                decision_p50_ms=ints[7],
+                decision_p95_ms=ints[8],
+                decision_p99_ms=ints[9],
+                queue_depth=ints[10],
+                close_delay_ms=ints[11],
+                cache_entries=ints[12],
+                memory_rss_mb=optional_ints[1],
+                fencing_discards=ints[13],
+                waiting_reason=_optional_string(payload, "waiting_reason"),
+                waiting_seconds=ints[14],
+                catalog_status=_string(payload, "catalog_status"),
+                evidence_n=optional_ints[2],
+                evidence_oos=optional_ints[3],
+                evidence_validity=_string(payload, "evidence_validity"),
+                uploader_opt_in=bool(payload["uploader_opt_in"]),
+                uploader_pending=ints[15],
+                uploader_expired=ints[16],
             )
         except ValueError as exc:
             raise _invalid() from exc
@@ -1344,6 +1639,9 @@ class UiProjectionSnapshot:
     iqoption_bot_reason: str = "IQOPTION_BOT_DISARMED"
     iqoption_asset_ranking: tuple[UiIqOptionAssetRank, ...] = ()
     deriv_bot_armed: bool = False
+    iqoption_execution_metrics: UiIqOptionExecutionMetrics | None = None
+    iqoption_entry_ready: bool = False
+    iqoption_entry_blocker: str | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.health_gates) <= _MAX_GATES:
@@ -1395,6 +1693,14 @@ class UiProjectionSnapshot:
             raise ValueError("IQ Option bot state is invalid")
         if type(self.deriv_bot_armed) is not bool:
             raise ValueError("Deriv bot state is invalid")
+        if type(self.iqoption_entry_ready) is not bool:
+            raise ValueError("IQ Option entry readiness is invalid")
+        if self.iqoption_entry_blocker is not None and (
+            not isinstance(self.iqoption_entry_blocker, str)
+            or not self.iqoption_entry_blocker
+            or len(self.iqoption_entry_blocker) > 128
+        ):
+            raise ValueError("IQ Option entry blocker is invalid")
         if (
             not isinstance(self.iqoption_bot_reason, str)
             or not self.iqoption_bot_reason
@@ -1449,6 +1755,13 @@ class UiProjectionSnapshot:
             "iqoption_bot_armed": self.iqoption_bot_armed,
             "iqoption_bot_reason": self.iqoption_bot_reason,
             "deriv_bot_armed": self.deriv_bot_armed,
+            "iqoption_execution_metrics": (
+                None
+                if self.iqoption_execution_metrics is None
+                else self.iqoption_execution_metrics.to_payload()
+            ),
+            "iqoption_entry_ready": self.iqoption_entry_ready,
+            "iqoption_entry_blocker": self.iqoption_entry_blocker,
         }
 
     @classmethod
@@ -1483,6 +1796,9 @@ class UiProjectionSnapshot:
             "iqoption_bot_reason",
             "iqoption_asset_ranking",
             "deriv_bot_armed",
+            "iqoption_execution_metrics",
+            "iqoption_entry_ready",
+            "iqoption_entry_blocker",
         }
         actual_keys = set(payload)
         if not (
@@ -1519,6 +1835,9 @@ class UiProjectionSnapshot:
             "deriv_bot_armed",
             not safe_stop if isinstance(safe_stop, bool) else False,
         )
+        iqoption_execution_metrics_payload = payload.get("iqoption_execution_metrics")
+        iqoption_entry_ready = payload.get("iqoption_entry_ready", False)
+        iqoption_entry_blocker = payload.get("iqoption_entry_blocker")
         if (
             not isinstance(safe_stop, bool)
             or type(pnl) is not int
@@ -1533,6 +1852,15 @@ class UiProjectionSnapshot:
             or len(deriv_bot_reason) > 64
             or type(iqoption_bot_armed) is not bool
             or type(deriv_bot_armed) is not bool
+            or type(iqoption_entry_ready) is not bool
+            or (
+                iqoption_entry_blocker is not None
+                and (
+                    not isinstance(iqoption_entry_blocker, str)
+                    or not iqoption_entry_blocker
+                    or len(iqoption_entry_blocker) > 128
+                )
+            )
             or not isinstance(iqoption_bot_reason, str)
             or not iqoption_bot_reason
             or len(iqoption_bot_reason) > 64
@@ -1604,6 +1932,15 @@ class UiProjectionSnapshot:
                     for item in iqoption_asset_ranking_payload
                 ),
                 deriv_bot_armed,
+                (
+                    None
+                    if iqoption_execution_metrics_payload is None
+                    else UiIqOptionExecutionMetrics.from_payload(
+                        _mapping(iqoption_execution_metrics_payload)
+                    )
+                ),
+                iqoption_entry_ready,
+                iqoption_entry_blocker,
             )
         except ValueError as exc:
             raise _invalid() from exc

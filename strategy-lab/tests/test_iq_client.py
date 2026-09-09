@@ -66,6 +66,49 @@ def test_injected_pause_between_all_backend_calls():
     assert pauses == [1.25, 1.25, 1.25]
 
 
+def test_candle_query_translates_exclusive_end_to_broker_inclusive_end():
+    """R-VEND-3/I-3: the broker must not return the candle starting at end_ts."""
+
+    class Backend:
+        requested_end: int | None = None
+
+        def connect(self):
+            pass
+
+        def close(self):
+            pass
+
+        def catalog(self):
+            return {
+                "result": {
+                    "turbo": {
+                        "actives": {
+                            "7": {
+                                "name": "front.EURUSD-OTC",
+                                "option": {"profit": {"commission": "13"}},
+                            }
+                        }
+                    }
+                }
+            }
+
+        def candles(self, active_id, tf_s, n, end_ts):
+            self.requested_end = end_ts
+            return json.loads(FIXTURE.read_text())["candles"]
+
+    backend = Backend()
+    client = IQClient(
+        backend=backend,
+        now=lambda: NOW,
+        pause=lambda seconds: None,
+        jitter=lambda: 1,
+    )
+    client.login()
+
+    assert len(client.fetch_candles("EURUSD-OTC", 60, 3, END)) == 3
+    assert backend.requested_end == END - 1
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -202,6 +245,50 @@ def test_catalog_decimal_and_missing_payout():
             parse_catalog(catalog(bad))
     with pytest.raises(IQClientError):
         parse_catalog({"result": {"binary": {"actives": {}}}})
+
+
+def test_catalog_excludes_noncanonical_broker_names_without_aliasing():
+    """R-VEND-3: auxiliary names cannot abort or impersonate canonical assets."""
+    catalog = {
+        "result": {
+            "turbo": {
+                "actives": {
+                    "7": {
+                        "name": "front.EURUSD-OTC",
+                        "option": {"profit": {"commission": "13"}},
+                    },
+                    "8": {
+                        "name": "front.EURUSD-op",
+                        "option": {"profit": {"commission": "12"}},
+                    },
+                    "9": {
+                        "name": "front.US500/JP225-OTC",
+                        "option": {"profit": {"commission": "11"}},
+                    },
+                }
+            }
+        }
+    }
+
+    assert parse_catalog(catalog) == {"EURUSD-OTC": (7, Decimal("0.87"))}
+
+
+def test_catalog_invalid_canonical_payout_remains_fail_closed():
+    catalog = {
+        "result": {
+            "turbo": {
+                "actives": {
+                    "7": {
+                        "name": "front.EURUSD-OTC",
+                        "option": {"profit": {"commission": "not-a-number"}},
+                    }
+                }
+            }
+        }
+    }
+
+    with pytest.raises(IQClientError, match="IQ_INVALID_CATALOG"):
+        parse_catalog(catalog)
 
 
 def test_login_failure_is_not_success():

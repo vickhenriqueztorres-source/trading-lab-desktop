@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from apps.ui.components.iqoption_strategy_panel import IqOptionStrategyConfigWidget
-from packages.protocol.ui_messages import UiIqOptionRiskConfig
+from packages.protocol.ui_messages import UiIqOptionAssetRank, UiIqOptionRiskConfig
 from tests.unit.test_iqoption_candidates import entry
 
 
@@ -40,5 +40,39 @@ def test_local_rsi_cannot_be_applied_for_real_account():
     panel._emit_config()
     assert sent == []
     assert "não validado" in panel._strategy.currentText()
+    panel.close()
+    assert app is not None
+
+
+def test_asset_selector_uses_core_catalogue_and_disables_discovery_only_product():
+    app = QApplication.instance() or QApplication([])
+    panel = IqOptionStrategyConfigWidget()
+    panel.set_available_assets(
+        (
+            UiIqOptionAssetRank(
+                "EURUSD",
+                "EUR/USD · TURBO",
+                "--",
+                condition="WAITING_DATA",
+                status="WAITING_DATA",
+                readiness="READY",
+                candidate_details="TURBO: OPEN · executável",
+            ),
+            UiIqOptionAssetRank(
+                "XAUUSD-OTC",
+                "XAU/USD OTC · DIGITAL",
+                "--",
+                condition="OPEN_READ_ONLY",
+                status="DISCOVERY_ONLY",
+                readiness="READ_ONLY",
+                candidate_details="DIGITAL: OPEN · somente detecção",
+            ),
+        )
+    )
+    model = panel._symbol.model()
+    assert panel._symbol.findData("EURUSD") > 0
+    digital_row = panel._symbol.findData("XAUUSD-OTC")
+    assert digital_row > 0
+    assert not model.item(digital_row).isEnabled()
     panel.close()
     assert app is not None

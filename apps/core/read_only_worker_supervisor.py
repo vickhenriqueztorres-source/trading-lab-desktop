@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,7 +51,13 @@ class ReadOnlyWorkerSupervisor:
         heartbeat_interval: float = 0.5,
         heartbeat_timeout: float = 1.0,
         event_queue_size: int = 128,
+        heartbeat_failure_threshold: int = 3,
+        disconnect_notifier: (
+            Callable[[ReadOnlyWorkerSupervisor, ProtocolErrorCode], None] | None
+        ) = None,
     ) -> None:
+        if heartbeat_failure_threshold <= 0:
+            raise ValueError("heartbeat failure threshold must be positive")
         self._health_gate = health_gate
         self._spec = spec
         self._worker_protocol_version = worker_protocol_version
@@ -59,6 +66,8 @@ class ReadOnlyWorkerSupervisor:
         self._heartbeat_interval = heartbeat_interval
         self._heartbeat_timeout = heartbeat_timeout
         self._event_queue_size = event_queue_size
+        self._heartbeat_failure_threshold = heartbeat_failure_threshold
+        self._disconnect_notifier = disconnect_notifier
         self._health_lock = threading.Lock()
         self._health_state = WorkerHealthState.STOPPED
         self._process: subprocess.Popen[bytes] | None = None
@@ -66,6 +75,8 @@ class ReadOnlyWorkerSupervisor:
         self._monitor_stop = threading.Event()
         self._monitor: threading.Thread | None = None
         self._stopping = False
+        self._disconnect_lock = threading.Lock()
+        self._disconnect_notified = False
 
     @property
     def health_state(self) -> WorkerHealthState:
@@ -86,6 +97,8 @@ class ReadOnlyWorkerSupervisor:
         if self._client is not None and self._client.is_ready:
             return self._client
         self._stopping = False
+        with self._disconnect_lock:
+            self._disconnect_notified = False
         self._monitor_stop.clear()
         self._set_health(WorkerHealthState.STARTING)
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -230,6 +243,7 @@ class ReadOnlyWorkerSupervisor:
         self._set_health(WorkerHealthState.STOPPED)
 
     def _monitor_loop(self) -> None:
+        consecutive_failures = 0
         while not self._monitor_stop.wait(self._heartbeat_interval):
             process = self._process
             client = self._client
@@ -248,14 +262,24 @@ class ReadOnlyWorkerSupervisor:
             try:
                 client.ping(self._heartbeat_timeout)
             except WorkerDispatchError:
+                consecutive_failures += 1
+                if consecutive_failures < self._heartbeat_failure_threshold:
+                    continue
                 self._on_disconnect(ProtocolErrorCode.IPC_CONNECTION_LOST)
                 return
+            consecutive_failures = 0
 
-    def _on_disconnect(self, _code: ProtocolErrorCode) -> None:
+    def _on_disconnect(self, code: ProtocolErrorCode) -> None:
         if self._stopping:
             return
+        with self._disconnect_lock:
+            if self._disconnect_notified:
+                return
+            self._disconnect_notified = True
         self._set_health(WorkerHealthState.DISCONNECTED)
         self._block_health("HG_MARKET_DATA_DISCONNECTED")
+        if self._disconnect_notifier is not None:
+            self._disconnect_notifier(self, code)
 
     def _block_health(self, reason: str) -> None:
         self._health_gate.block_scope(self._spec.broker, self._HEALTH_ACCOUNT, reason)

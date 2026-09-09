@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from manifest_schema.canonical import load_document
+from manifest_schema.capabilities import ConsumerCapabilities, assess_manifest_capabilities
 from manifest_schema.models import Manifest
 from manifest_schema.signing import verify
 
@@ -16,6 +17,7 @@ def evaluate(
     allow_test_keys: bool = False,
     expected_primitives_version: str | None = None,
     expected_parity_sha256: str | None = None,
+    capabilities: ConsumerCapabilities | None = None,
 ) -> tuple[Manifest | None, str]:
     try:
         data: dict[str, Any] = load_document(raw)
@@ -39,4 +41,8 @@ def evaluate(
         expected_parity_sha256
     ):
         return None, "MANIFEST_PRIMITIVES_PARITY"
+    if capabilities is not None:
+        compatible, reason = assess_manifest_capabilities(manifest, capabilities)
+        if not compatible:
+            return None, reason
     return manifest, "MANIFEST_ACCEPTED"

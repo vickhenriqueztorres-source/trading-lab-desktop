@@ -10,6 +10,7 @@ import pytest
 from apps.core.lifecycle_service import CoreLifecycleService, CoreServiceState
 from apps.core.runtime import CoreRuntime
 from apps.core.ui_service import CoreUiProjectionBuilder, CoreUiProjectionService
+from apps.core.worker_supervisor import WorkerHealthState
 from apps.simulated_worker.scenarios import WorkerScenario
 from apps.ui.ipc_client import UiIpcClient
 from packages.domain.models import Broker, Direction, Money, OrderRequest
@@ -46,8 +47,9 @@ def test_core_ui_projection_safe_stop_and_resume_preserve_core_authority(
     client = UiIpcClient.connect(service.ui_port, token)
     try:
         initial = client.projection()
-        assert initial.global_state is UiGlobalState.SAFE_STOPPED
-        assert initial.safe_stop_active is True
+        # Broker-specific startup disarms do not masquerade as a global stop.
+        assert initial.global_state is UiGlobalState.READY
+        assert initial.safe_stop_active is False
         assert all(card.balance_minor_units is None for card in initial.broker_cards)
 
         assert client.resume().accepted
@@ -57,9 +59,12 @@ def test_core_ui_projection_safe_stop_and_resume_preserve_core_authority(
 
         assert client.safe_stop().accepted
         stopped = client.projection()
-        assert stopped.safe_stop_active is True
-        assert stopped.global_state is UiGlobalState.SAFE_STOPPED
-        # Process availability and trading authority are independent dimensions.
+        # Lifecycle safe-stop controls Deriv only; it must not present an IQ-wide
+        # or global stop when no Deriv financial account is selected.
+        assert stopped.safe_stop_active is False
+        assert stopped.global_state is UiGlobalState.READY
+        assert service.safe_stop_active is True
+        # Process availability and broker trading authority are independent dimensions.
         assert service.state is CoreServiceState.READY
 
         assert client.resume().accepted
@@ -70,6 +75,28 @@ def test_core_ui_projection_safe_stop_and_resume_preserve_core_authority(
     finally:
         client.close()
         service.emergency_shutdown()
+
+
+def test_iqoption_connection_is_visible_before_account_sync(tmp_path: Path) -> None:
+    runtime = CoreRuntime(tmp_path / "runtime", worker_scenario=WorkerScenario.NORMAL_LIFECYCLE)
+    runtime.start()
+    try:
+        projection = CoreUiProjectionBuilder(
+            runtime,
+            deriv_health=lambda: None,
+            iqoption_health=lambda: WorkerHealthState.READY,
+            iqoption_balance=lambda: None,
+            iqoption_clock=lambda: None,
+            iqoption_bot_armed=lambda: True,
+        ).snapshot()
+
+        iq_card = next(card for card in projection.broker_cards if card.broker == "IQOPTION")
+        assert iq_card.is_connected is True
+        assert iq_card.balance_minor_units is None
+        assert projection.iqoption_entry_ready is False
+        assert projection.iqoption_entry_blocker == "IQOPTION_BALANCE_SYNC_REQUIRED"
+    finally:
+        runtime.shutdown()
 
 
 def test_ui_safe_stop_blocks_new_intent_but_open_order_still_settles(

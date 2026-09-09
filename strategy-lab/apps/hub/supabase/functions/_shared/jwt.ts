@@ -4,12 +4,14 @@ export interface JwtClaims {
   client_id: string;
   role: string;
   exp: number;
+  hub_env?: "staging" | "production";
 }
 
 export async function signAnonJwt(
   clientId: string,
   secret: string,
   nowTs: number,
+  hubEnv?: "staging" | "production",
 ): Promise<string> {
   const header = base64Url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
   const payload = base64Url(
@@ -18,6 +20,7 @@ export async function signAnonJwt(
         role: "anon",
         client_id: clientId,
         exp: nowTs + 365 * 86400,
+        ...(hubEnv ? { hub_env: hubEnv } : {}),
       }),
     ),
   );
@@ -39,38 +42,54 @@ export async function verifyAnonJwt(
   token: string,
   secret: string,
   nowTs: number,
+  expectedHubEnv?: "staging" | "production",
 ): Promise<JwtClaims | null> {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const signingInput = `${parts[0]}.${parts[1]}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const ok = await crypto.subtle.verify(
-    "HMAC",
-    key,
-    bytesToArrayBuffer(base64UrlToBytes(parts[2])),
-    new TextEncoder().encode(signingInput),
-  );
-  if (!ok) return null;
-  const claims = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1]))) as Partial<
-    JwtClaims
-  >;
-  if (
-    claims.role !== "anon" ||
-    typeof claims.client_id !== "string" ||
-    !isUuid(claims.client_id) ||
-    typeof claims.exp !== "number" ||
-    !Number.isSafeInteger(claims.exp) ||
-    claims.exp <= nowTs
-  ) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[0]))) as Record<
+      string,
+      unknown
+    >;
+    if (header.alg !== "HS256" || header.typ !== "JWT") return null;
+    const signingInput = `${parts[0]}.${parts[1]}`;
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const signature = base64UrlToBytes(parts[2]);
+    if (signature.length !== 32) return null;
+    const ok = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      bytesToArrayBuffer(signature),
+      new TextEncoder().encode(signingInput),
+    );
+    if (!ok) return null;
+    const claims = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1]))) as Partial<
+      JwtClaims
+    >;
+    if (
+      claims.role !== "anon" ||
+      typeof claims.client_id !== "string" ||
+      !isUuid(claims.client_id) ||
+      typeof claims.exp !== "number" ||
+      !Number.isSafeInteger(claims.exp) ||
+      claims.exp <= nowTs ||
+      (claims.hub_env !== undefined &&
+        claims.hub_env !== "staging" && claims.hub_env !== "production") ||
+      (expectedHubEnv !== undefined &&
+        claims.hub_env !== undefined && claims.hub_env !== expectedHubEnv)
+    ) {
+      return null;
+    }
+    return claims as JwtClaims;
+  } catch {
     return null;
   }
-  return claims as JwtClaims;
 }
 
 export function bearerToken(request: Request): string | null {

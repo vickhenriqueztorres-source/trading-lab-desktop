@@ -238,6 +238,11 @@ class FakeWebSocket:
         self.closed = False
         self._idle = threading.Event()
 
+    def ping(self) -> threading.Event:
+        pong = threading.Event()
+        pong.set()
+        return pong
+
     def send(self, message: str) -> None:
         self.sent.append(json.loads(message))
 
@@ -916,9 +921,10 @@ def test_iqoption_worker_connects_to_core_listener_before_handshake() -> None:
     assert result == [0]
 
 
-def test_worker_never_repeats_http_login_after_first_connection_attempt() -> None:
+def test_worker_request_never_reconnects_after_session_loss() -> None:
     class SessionSpy:
         is_connected = False
+        disconnect_reason = "IQOPTION_WEBSOCKET_UNAVAILABLE"
 
         def __init__(self) -> None:
             self.connect_calls = 0
@@ -929,7 +935,7 @@ def test_worker_never_repeats_http_login_after_first_connection_attempt() -> Non
             self.is_connected = True
 
         def reconnect(self, *, timeout: float) -> None:
-            assert timeout == 8.0
+            del timeout
             self.reconnect_calls += 1
             self.is_connected = True
 
@@ -944,10 +950,57 @@ def test_worker_never_repeats_http_login_after_first_connection_attempt() -> Non
 
     server._ensure_connected()
     session.is_connected = False
-    server._ensure_connected()
+    with pytest.raises(IQOptionExternalError, match="IQOPTION_WEBSOCKET_UNAVAILABLE"):
+        server._ensure_connected()
 
     assert session.connect_calls == 1
-    assert session.reconnect_calls == 1
+    assert session.reconnect_calls == 0
+
+
+def test_ping_is_ipc_liveness_only_and_never_reconnects() -> None:
+    class SessionSpy:
+        is_connected = False
+
+        def __init__(self) -> None:
+            self.connect_calls = 0
+            self.reconnect_calls = 0
+
+        def connect(self) -> None:
+            self.connect_calls += 1
+
+        def reconnect(self, *, timeout: float) -> None:
+            del timeout
+            self.reconnect_calls += 1
+
+    session = SessionSpy()
+    server = IQOptionReadOnlyWorkerServer(
+        "127.0.0.1",
+        1,
+        1,
+        cast(IQOptionCommunityReadOnlySession, session),
+        connection_mode="DEMO_AUTH_FINANCIAL",
+    )
+    server._connect_attempted = True
+    now = datetime.now(UTC)
+    request = Envelope(
+        protocol_version=1,
+        message_id="ping-message",
+        correlation_id="ping-correlation",
+        causation_id=None,
+        source=EndpointRole.CORE,
+        target=EndpointRole.IQOPTION_WORKER,
+        message_type=MessageType.PING,
+        created_at_utc=now,
+        deadline_at=None,
+        payload={},
+    )
+
+    response_type, payload = server._dispatch(request)
+
+    assert response_type is MessageType.PONG
+    assert payload == {}
+    assert session.connect_calls == 0
+    assert session.reconnect_calls == 0
 
 
 def test_clock_remains_synchronized_over_time_and_heartbeat() -> None:
@@ -987,4 +1040,3 @@ def test_clock_remains_synchronized_over_time_and_heartbeat() -> None:
         assert clock_hb.offset_milliseconds == 0
     finally:
         session.close()
-

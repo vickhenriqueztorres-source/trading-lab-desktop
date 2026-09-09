@@ -1,0 +1,1182 @@
+{
+  "bootstrap_cases": [
+    {
+      "continuous": true,
+      "have": 28,
+      "id": "ready_exact",
+      "identity_matches": true,
+      "need": 28,
+      "reason": "READY"
+    },
+    {
+      "continuous": true,
+      "have": 27,
+      "id": "warming",
+      "identity_matches": true,
+      "need": 28,
+      "reason": "WARMING_UP"
+    },
+    {
+      "continuous": false,
+      "have": 28,
+      "id": "gap",
+      "identity_matches": true,
+      "need": 28,
+      "reason": "BOOTSTRAP_GAP"
+    },
+    {
+      "continuous": true,
+      "have": 28,
+      "id": "identity",
+      "identity_matches": false,
+      "need": 28,
+      "reason": "BOOTSTRAP_IDENTITY_MISMATCH"
+    }
+  ],
+  "composition_cases": [
+    {
+      "components": [
+        "adx",
+        "bb_close_outside",
+        "rsi_extreme"
+      ],
+      "family": "F1",
+      "requires_tick_volume": false
+    },
+    {
+      "components": [
+        "ema_alignment",
+        "ema_pullback",
+        "candle_rejection"
+      ],
+      "family": "F2",
+      "requires_tick_volume": false
+    },
+    {
+      "components": [
+        "session_window",
+        "level_touch",
+        "candle_rejection"
+      ],
+      "family": "F3",
+      "requires_tick_volume": false
+    },
+    {
+      "components": [
+        "bb_width_ratio",
+        "range_break",
+        "tick_volume_ratio"
+      ],
+      "family": "F4",
+      "requires_tick_volume": true
+    },
+    {
+      "components": [
+        "session_window",
+        "quadrant_majority",
+        "rsi_extreme"
+      ],
+      "family": "F5",
+      "requires_tick_volume": false
+    }
+  ],
+  "consensus_cases": [
+    {
+      "confirm": "call",
+      "direction": "call",
+      "id": "all_call",
+      "reason": "OK",
+      "regime": "call",
+      "regime_allowed": true,
+      "trigger": "call"
+    },
+    {
+      "confirm": "put",
+      "direction": "put",
+      "id": "all_put",
+      "reason": "OK",
+      "regime": "put",
+      "regime_allowed": true,
+      "trigger": "put"
+    },
+    {
+      "confirm": "call",
+      "direction": "none",
+      "id": "regime_gate",
+      "reason": "REGIME",
+      "regime": "none",
+      "regime_allowed": false,
+      "trigger": "call"
+    },
+    {
+      "confirm": "none",
+      "direction": "none",
+      "id": "no_signal",
+      "reason": "NO_SIGNAL",
+      "regime": "none",
+      "regime_allowed": true,
+      "trigger": "none"
+    },
+    {
+      "confirm": "put",
+      "direction": "none",
+      "id": "disagree",
+      "reason": "DISAGREE",
+      "regime": "call",
+      "regime_allowed": true,
+      "trigger": "call"
+    }
+  ],
+  "contract_version": 2,
+  "execution_semantics_version": "tl.candle-close.v2",
+  "manifest_cases": [
+    {
+      "accepted": true,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_real_observation",
+      "reason_code": "MANIFEST_ACCEPTED",
+      "schema_valid": true,
+      "sha256": "154d8f8201587bef84d4a8706f160cb67c127c21edcd3e192985d03cc570f9d2"
+    },
+    {
+      "accepted": true,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "synthetic",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:s97+lNTqEfs8Bi77w9fK/HnchsIEOsstwA2FFa+3k5rdo4CH8fyslHRQMm025zD0XIrwr5DQzLKPGFJrDkc9DA==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_synthetic_observation",
+      "reason_code": "MANIFEST_ACCEPTED",
+      "schema_valid": true,
+      "sha256": "f83a1e49ad2d31507a5fa3a5eba8b502fcc703dec30891a34bdb8fe2c9c5fb99"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "synthetic",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:s97+lNTqEfs8Bi77w9fK/HnchsIEOsstwA2FFa+3k5rdo4CH8fyslHRQMm025zD0XIrwr5DQzLKPGFJrDkc9DA==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "approved",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_synthetic_approved",
+      "reason_code": "MANIFEST_SYNTHETIC_APPROVAL",
+      "schema_valid": false,
+      "sha256": "869eef90ca88afd162bade3fda273c0bd46181ebc1a36fb5e510cd38c82845df"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "range_break"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_composition_mismatch",
+      "reason_code": "MANIFEST_COMPOSITION_MISMATCH",
+      "schema_valid": false,
+      "sha256": "3fb38e37b7b9405bcb73edb0f4c3961dedecd6667ddfdb9a9b3c7a7c4fe61fe1"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_recipe_fingerprint_mismatch",
+      "reason_code": "MANIFEST_RECIPE_FINGERPRINT",
+      "schema_valid": false,
+      "sha256": "98122f008540df01c738e71b2480a74f4b137932e491dd6767c5cfe1d55ec4b5"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.1",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v11_cannot_smuggle_v12_fields",
+      "reason_code": "MANIFEST_RECIPE_CONTRACT_REVISION",
+      "schema_valid": false,
+      "sha256": "8c80f0ceef74bf3366fb7c7232bc6c75ff248fbe443f74bf929d5c36b5f9c39d"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "legacy.bot.window-replay.v1"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_semantics_unsupported",
+      "reason_code": "MANIFEST_EXECUTION_SEMANTICS_UNSUPPORTED",
+      "schema_valid": true,
+      "sha256": "d79aeb40eb560fc9805482a4029d8ab20a88cf6a6f968174d1848bae7bd65121"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M5"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_timeframe_unsupported",
+      "reason_code": "MANIFEST_TIMEFRAME_UNSUPPORTED",
+      "schema_valid": true,
+      "sha256": "dbe0774a62e9e1ccd36af7eea8a4d8be81fd4352e5889d1638ed284aeb26c65a"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": true,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:NDGWrN3B3CinhcMpWk2v4SujMhjNRnDPdFrppFeiNaazs+wY7n5c//zd1GnH+7HJASxcMQllSZuuRNMkKCvJBQ==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": false
+            },
+            "composition": {
+              "confirm": "rsi_extreme",
+              "regime": "adx",
+              "trigger": "bb_close_outside"
+            },
+            "display_name_pt": "Receita pública F1",
+            "family": "F1",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f1:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "adx_len": "14",
+              "adx_max": "20",
+              "bb_k": "2.0",
+              "bb_len": "20",
+              "rsi_hi": "80",
+              "rsi_len": "7",
+              "rsi_lo": "20"
+            },
+            "recipe_fingerprint": "sha256:1e465c7271ac163ce2e7f705c7cc013119e3501652bce6fa4b5e3106d820601f",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 28
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_warmup_capacity",
+      "reason_code": "MANIFEST_WARMUP_CAPACITY_EXCEEDED",
+      "schema_valid": true,
+      "sha256": "0e3b1e2f894ffca132e2063d4be90f17d38ccce8201a2a556bce3f7d8642c347"
+    },
+    {
+      "accepted": false,
+      "capabilities": {
+        "execution_semantics": [
+          "tl.candle-close.v2"
+        ],
+        "max_warmup_candles": 10000,
+        "products": [
+          "binary_option"
+        ],
+        "tick_volume": false,
+        "timeframes": [
+          "M1",
+          "M5",
+          "M15"
+        ]
+      },
+      "document": {
+        "dataset_evidence": {
+          "coverage_pct": "99.50",
+          "dataset_id": "dataset_cat02_public",
+          "fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "from_ts": 1772323200,
+          "kind": "real_market",
+          "to_ts": 1788307200
+        },
+        "execution_semantics_version": "tl.candle-close.v2",
+        "expires_at": 1790942400,
+        "key_id": "A",
+        "manifest_version": 21,
+        "primitives_parity_sha256": "sha256:f3d4285fc5aa7d7801a565cbee815d70034049c7a963ec137a8fa07da18eae10",
+        "primitives_version": "1.0.0",
+        "published_at": 1788350400,
+        "research_run_id": "run_cat02_public",
+        "schema_revision": "1.2",
+        "schema_version": 1,
+        "signature": "ed25519:F2MsLGV+YLg/yxYSdDjGHG0E0apuOMlhc5Khv8T2PqZACwX/f/Dp9pB6KSulOHEbOX8BHbGkOSjnr2X7LkX3Cg==",
+        "strategies": [
+          {
+            "asset": "EURUSD",
+            "capabilities": {
+              "product": "binary_option",
+              "tick_volume": true
+            },
+            "composition": {
+              "confirm": "tick_volume_ratio",
+              "regime": "bb_width_ratio",
+              "trigger": "range_break"
+            },
+            "display_name_pt": "Receita pública F4",
+            "family": "F4",
+            "hours_utc": [
+              0,
+              6
+            ],
+            "key": "f4:EURUSD:M1:00-06:r1",
+            "management": {
+              "martingale_steps_max": 2,
+              "paroli": true,
+              "stake_pct": "1.0"
+            },
+            "params": {
+              "bb_k": "2",
+              "bb_len": "20",
+              "break_len": "20",
+              "volume_len": "20",
+              "volume_min": "1.5",
+              "width_median_len": "20",
+              "width_ratio_max": "0.5"
+            },
+            "recipe_fingerprint": "sha256:d37d86ff89506f0de0266cf1e6fff6ac14853a43ccce14bcb6a1692f4e0e1524",
+            "recipe_revision": 1,
+            "status": "observation",
+            "timeframe": "M1",
+            "validated": {
+              "holdout_passed": true,
+              "n": 1240,
+              "ops_per_day": "11.2",
+              "p_hat": "0.578",
+              "p_min_at_validation": "0.541",
+              "payout_min": "0.84",
+              "result_1000_ops_stake10": "182.00",
+              "wilson_lower": "0.561",
+              "windows_passed": "8/8",
+              "worst_streak": 6
+            },
+            "warmup_required": 39
+          }
+        ],
+        "telemetry": {
+          "opt_in_required": true,
+          "outcomes_supported": true,
+          "schema_version": 1
+        }
+      },
+      "id": "v12_volume_unavailable",
+      "reason_code": "MANIFEST_TICK_VOLUME_UNAVAILABLE",
+      "schema_valid": true,
+      "sha256": "bf47c19278b8540ff67536e28f0a9cd1c92e38594e287fe4ca2b767c47459860"
+    }
+  ],
+  "public_keys": {
+    "A": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+  },
+  "settlement_cases": [
+    {
+      "close_t": "1.1000",
+      "close_t1": "1.1001",
+      "direction": "call",
+      "won": true
+    },
+    {
+      "close_t": "1.1000",
+      "close_t1": "1.1000",
+      "direction": "call",
+      "won": false
+    },
+    {
+      "close_t": "1.1000",
+      "close_t1": "1.0999",
+      "direction": "put",
+      "won": true
+    },
+    {
+      "close_t": "1.1000",
+      "close_t1": "1.1000",
+      "direction": "put",
+      "won": false
+    }
+  ],
+  "sha256": "7943deffd83f1f76c49297beb4e3a282297b4c8f822ea59ce39b101e814b7f7a",
+  "telemetry": {
+    "allowed_fields": [
+      "client_id",
+      "strategy_key",
+      "recipe_revision",
+      "manifest_version",
+      "ts",
+      "won",
+      "payout_pct"
+    ],
+    "forbidden_fields": [
+      "account_id",
+      "email",
+      "password",
+      "token",
+      "credential",
+      "order_command"
+    ],
+    "opt_in_required": true
+  }
+}

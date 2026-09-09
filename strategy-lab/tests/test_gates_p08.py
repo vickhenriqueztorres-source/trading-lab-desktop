@@ -267,7 +267,7 @@ def test_injected_edge_is_approved() -> None:
 
     assert app_res.approved is True
     assert app_res.wilson_lower >= p_min + Decimal("0.015")
-    assert len(app_res.gate_results) == 5
+    assert len(app_res.gate_results) == 8
     assert all(gate.passed for gate in app_res.gate_results)
 
 

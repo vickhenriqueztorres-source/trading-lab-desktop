@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 
 from PySide6.QtWidgets import QApplication
 
@@ -18,9 +18,6 @@ from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.manifest_catalog import DynamicManifestCatalog
 from apps.ui.app import TradingLabMainWindow
 from apps.ui.controller import UiController
-from packages.domain.market import MarketCandle
-from packages.domain.models import Direction
-from datetime import UTC, datetime
 
 
 @pytest.fixture(scope="session")
@@ -77,37 +74,39 @@ def test_ui_card_toggle_updates_controller_for_iqoption_and_deriv(
 
 def test_iqoption_auto_trader_executes_catalog_family_strategy() -> None:
     catalog = DynamicManifestCatalog()
-    catalog.apply_manifest({
-        "manifest_version": 1,
-        "strategies": [
-            {
-                "key": "f1:EURUSD-OTC:M1:00-24:test",
-                "family": "F1",
-                "display_name_pt": "F1 Test",
-                "asset": "EURUSD-OTC",
-                "timeframe": "M1",
-                "hours_utc": [0, 24],
-                "params": {
-                    "rsi_period": 14,
-                    "rsi_overbought": 70,
-                    "rsi_oversold": 30,
-                    "bb_period": 20,
-                    "bb_std": 2.0,
-                },
-                "validated": {
-                    "p_hat": "0.66",
-                    "wilson_lower": "0.63",
-                    "p_min_at_validation": "0.55",
-                    "payout_min": "0.85",
-                    "ops_per_day": "20",
-                    "worst_streak": 4,
-                    "result_1000_ops_stake10": "2000",
-                    "score": "0.75",
-                },
-                "status": "approved",
-            }
-        ],
-    })
+    catalog.apply_manifest(
+        {
+            "manifest_version": 1,
+            "strategies": [
+                {
+                    "key": "f1:EURUSD-OTC:M1:00-24:test",
+                    "family": "F1",
+                    "display_name_pt": "F1 Test",
+                    "asset": "EURUSD-OTC",
+                    "timeframe": "M1",
+                    "hours_utc": [0, 24],
+                    "params": {
+                        "rsi_period": 14,
+                        "rsi_overbought": 70,
+                        "rsi_oversold": 30,
+                        "bb_period": 20,
+                        "bb_std": 2.0,
+                    },
+                    "validated": {
+                        "p_hat": "0.66",
+                        "wilson_lower": "0.63",
+                        "p_min_at_validation": "0.55",
+                        "payout_min": "0.85",
+                        "ops_per_day": "20",
+                        "worst_streak": 4,
+                        "result_1000_ops_stake10": "2000",
+                        "score": "0.75",
+                    },
+                    "status": "approved",
+                }
+            ],
+        }
+    )
 
     risk_config = IqOptionRiskConfig(
         strategy_id="f1:EURUSD-OTC:M1:00-24:test",

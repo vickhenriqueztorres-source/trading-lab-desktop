@@ -245,35 +245,51 @@ class IQOptionConnectionSafetyController:
 
 
 class IQOptionMessageBudget:
-    """Thread-safe sliding-window budget for nonfinancial market-data reads."""
+    """Coordinated sliding-window budget with an operational reserve.
+
+    ``try_acquire`` is the market lane.  Its lower ceiling leaves capacity for
+    balance, clock and control traffic admitted through
+    ``try_acquire_operational``.  Financial event consumption is never dropped.
+    """
 
     def __init__(
         self,
         *,
         limit: int = IQOPTION_MARKET_DATA_MESSAGE_BUDGET_PER_MINUTE,
         pressure_at: int | None = None,
+        total_limit: int = IQOPTION_TOTAL_INTERNAL_MESSAGE_BUDGET_PER_MINUTE,
+        total_pressure_at: int | None = None,
     ) -> None:
-        if limit <= 0:
+        if limit <= 0 or total_limit <= 0 or total_limit < limit:
             raise ValueError("IQ Option message budget must be positive")
         resolved_pressure = pressure_at if pressure_at is not None else max(1, (limit * 4 + 4) // 5)
         if not 1 <= resolved_pressure <= limit:
             raise ValueError("IQ Option message pressure threshold is invalid")
+        resolved_total_pressure = (
+            total_pressure_at
+            if total_pressure_at is not None
+            else max(1, (total_limit * 4 + 4) // 5)
+        )
+        if not 1 <= resolved_total_pressure <= total_limit:
+            raise ValueError("IQ Option total message pressure threshold is invalid")
         self._limit = limit
         self._pressure_at = resolved_pressure
-        self._timestamps: deque[float] = deque()
+        self._total_limit = total_limit
+        self._total_pressure_at = resolved_total_pressure
+        self._market_timestamps: deque[float] = deque()
+        self._total_timestamps: deque[float] = deque()
         self._lock = threading.Lock()
 
     def try_acquire(self, now_monotonic: float) -> IQOptionMessageBudgetDecision:
         if not math.isfinite(now_monotonic) or now_monotonic < 0:
             raise ValueError("IQ Option message budget time is invalid")
         with self._lock:
-            boundary = now_monotonic - 60.0
-            while self._timestamps and self._timestamps[0] <= boundary:
-                self._timestamps.popleft()
-            used = len(self._timestamps)
-            allowed = used < self._limit
+            self._prune(now_monotonic)
+            used = len(self._market_timestamps)
+            allowed = used < self._limit and len(self._total_timestamps) < self._total_limit
             if allowed:
-                self._timestamps.append(now_monotonic)
+                self._market_timestamps.append(now_monotonic)
+                self._total_timestamps.append(now_monotonic)
                 used += 1
             return IQOptionMessageBudgetDecision(
                 allowed=allowed,
@@ -281,6 +297,30 @@ class IQOptionMessageBudget:
                 limit=self._limit,
                 pressure=used >= self._pressure_at,
             )
+
+    def try_acquire_operational(self, now_monotonic: float) -> IQOptionMessageBudgetDecision:
+        if not math.isfinite(now_monotonic) or now_monotonic < 0:
+            raise ValueError("IQ Option message budget time is invalid")
+        with self._lock:
+            self._prune(now_monotonic)
+            used = len(self._total_timestamps)
+            allowed = used < self._total_limit
+            if allowed:
+                self._total_timestamps.append(now_monotonic)
+                used += 1
+            return IQOptionMessageBudgetDecision(
+                allowed=allowed,
+                used_in_window=used,
+                limit=self._total_limit,
+                pressure=used >= self._total_pressure_at,
+            )
+
+    def _prune(self, now_monotonic: float) -> None:
+        boundary = now_monotonic - 60.0
+        while self._market_timestamps and self._market_timestamps[0] <= boundary:
+            self._market_timestamps.popleft()
+        while self._total_timestamps and self._total_timestamps[0] <= boundary:
+            self._total_timestamps.popleft()
 
 
 __all__ = [

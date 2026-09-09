@@ -358,7 +358,10 @@ class CoreRuntime:
         self._reconciliation_report = ReconciliationReport((*prior, *report.results))
         if self._risk_ledger is not None and self._reader is not None:
             self._risk_ledger.restore(self._reader.list_by_state("risk_reservations", "ACTIVE"))
-        self.dispatcher_started = self.health_gate.state.is_open
+        # Reconciliation refreshes financial projections, but never grants or
+        # revokes broker-specific operator authority.  Scoped blockers may keep
+        # one account paused while the dispatcher remains available to another.
+        self.dispatcher_started = self.health_gate.global_state.is_open
         callback = getattr(self, "_deriv_reconciliation_completed", None)
         if callback is not None:
             callback()
@@ -551,13 +554,29 @@ class CoreRuntime:
         return self.coordinator.dispatch_pending()
 
     def stop_new_entries(self) -> None:
+        """Apply a deliberate global stop.
+
+        Broker buttons and broker recovery must use ``stop_new_entries_for``.
+        """
+
         self.dispatcher_started = False
         self.health_gate.block("HG_SAFE_STOP")
         self.event_sink.emit("trading_disarmed", reason_code="HG_SAFE_STOP")
 
+    def stop_new_entries_for(self, broker: Broker, account_id: str) -> None:
+        """Revoke new-entry authority only for one broker/account."""
+
+        self.health_gate.block_scope(broker.value, account_id, "HG_SAFE_STOP")
+        self.event_sink.emit(
+            "trading_disarmed",
+            broker=broker.value,
+            account_id=account_id,
+            reason_code="HG_SAFE_STOP",
+        )
+
     @property
     def safe_stop_active(self) -> bool:
-        return self.health_gate.contains("HG_SAFE_STOP")
+        return self.health_gate.contains_global("HG_SAFE_STOP")
 
     def resume_new_entries(self) -> bool:
         """Clear only the operator safe stop; every other blocker remains authoritative."""
@@ -589,7 +608,7 @@ class CoreRuntime:
         if self._writer is None:
             raise RuntimeError("Core runtime is not started")
         self.risk_ledger.refresh_digit_health_gate(self.health_gate)
-        self.health_gate.clear_if("HG_SAFE_STOP")
+        self.health_gate.clear_scope(broker.value, account_id, "HG_SAFE_STOP")
         scoped_state = self.health_gate.state_for(broker.value, account_id)
         armed = scoped_state.is_open
         if armed:

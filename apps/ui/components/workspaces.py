@@ -25,6 +25,7 @@ from packages.protocol.ui_messages import (
     OrderSummary,
     UiAccountMode,
     UiIqOptionAssetRank,
+    UiIqOptionExecutionMetrics,
     UiIqOptionRiskConfig,
 )
 
@@ -190,6 +191,10 @@ class BrokerWorkspaceWidget(QWidget):
     def update_iqoption_risk(self, config: UiIqOptionRiskConfig | None) -> None:
         if self.strategy_summary is not None:
             self.strategy_summary.update_config(config)
+
+    def update_iqoption_metrics(self, metrics: UiIqOptionExecutionMetrics | None) -> None:
+        if self.strategy_summary is not None:
+            self.strategy_summary.update_metrics(metrics)
 
     def set_deriv_connect_busy(self, busy: bool, message: str | None = None) -> None:
         if self._deriv_connect_button is None or self._deriv_connect_status is None:

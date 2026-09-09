@@ -3,6 +3,10 @@
 Artefatos públicos, sem dados de conta nem segredos de produção. Lab e bot mantêm código isolado
 e executam os mesmos vetores. Não importar `manifest_schema` no bot.
 
+O arquivo `strategy_contract_vectors.v2.json` é o contrato público aditivo do CAT-02. Ele fixa
+composição, outputs, bootstrap, liquidação, capabilities e telemetria de
+`tl.candle-close.v2`. O arquivo v1 de aceitação e seus documentos assinados permanecem imutáveis.
+
 ## Camadas obrigatórias
 
 1. Leitura UTF-8 de JSON limitada a 4 MiB e 32 níveis. Rejeitar nomes duplicados, NaN/Infinity,

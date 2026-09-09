@@ -4,15 +4,26 @@ from __future__ import annotations
 
 import itertools
 import random
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 
-from manifest_schema.families import FAMILY_COMPONENTS, Family
+from manifest_schema.families import (
+    FAMILY_BINDINGS,
+    FAMILY_COMPONENTS,
+    Family,
+    family_warmup_required,
+)
 from primitives.base import Category, Indicator, ParamRange
 from primitives.registry import REGISTRY, by_category
 
 from strategy_lab.research.candidate import Candidate, ParamMap
+
+DEFAULT_TRIAL_BUDGET = 500
+DEFAULT_MAX_WARMUP_CANDLES = 10_000
+EXECUTOR_SUPPORTED_FAMILIES: frozenset[str] = frozenset(FAMILY_COMPONENTS)
+EXECUTOR_SUPPORTED_TIMEFRAMES: frozenset[str] = frozenset({"M1", "M5", "M15"})
+EXECUTOR_RESEARCH_PRODUCT = "binary_option"
 
 # Incompatible pairs of primitives (R-RES-3)
 INCOMPATIBLE: frozenset[frozenset[str]] = frozenset(
@@ -39,6 +50,11 @@ DEFAULT_ASSETS: tuple[str, ...] = ("EURUSD-OTC", "GBPUSD-OTC")
 _FAMILY_LOOKUP: dict[tuple[str, str, str], Family] = {
     components: family for family, components in FAMILY_COMPONENTS.items()
 }
+_CANONICAL_FAMILY_TRIOS: frozenset[frozenset[str]] = frozenset(
+    frozenset(components) for components in FAMILY_COMPONENTS.values()
+)
+
+type LevelProfile = dict[str, Decimal]
 
 
 @dataclass(frozen=True)
@@ -46,11 +62,54 @@ class GrammarResult:
     candidates: list[Candidate]
     total_candidates: int
     seed: int
+    theoretical_candidates: int = 0
+    eligible_candidates: int = 0
+    sampled_candidates: int = 0
+    trial_budget: int = DEFAULT_TRIAL_BUDGET
+    discarded_by_reason: dict[str, int] | None = None
+
+    def audit_report(self) -> dict[str, object]:
+        """Return deterministic CAT-07 accounting for logs/reports."""
+        return {
+            "product": EXECUTOR_RESEARCH_PRODUCT,
+            "seed": self.seed,
+            "trial_budget": self.trial_budget,
+            "theoretical_candidates": self.theoretical_candidates or self.total_candidates,
+            "eligible_candidates": self.eligible_candidates or self.total_candidates,
+            "sampled_candidates": self.sampled_candidates or len(self.candidates),
+            "discarded_by_reason": self.discarded_by_reason or {},
+            "diversity": {
+                "families": _counts(candidate.family for candidate in self.candidates),
+                "assets": _counts(candidate.asset for candidate in self.candidates),
+                "timeframes": _counts(candidate.tf for candidate in self.candidates),
+                "hours": _counts(
+                    f"{candidate.hours[0]:02d}-{candidate.hours[1]:02d}"
+                    for candidate in self.candidates
+                ),
+            },
+        }
+
+
+@dataclass(frozen=True)
+class ExecutorCapabilities:
+    """Public executor budget consumed by CAT-07 before materializing candidates."""
+
+    families: frozenset[str] = EXECUTOR_SUPPORTED_FAMILIES
+    timeframes: frozenset[str] = EXECUTOR_SUPPORTED_TIMEFRAMES
+    max_warmup_candles: int = DEFAULT_MAX_WARMUP_CANDLES
+    tick_volume: bool = True
+    max_trials_per_experiment: int = DEFAULT_TRIAL_BUDGET
+    supported_assets: frozenset[str] | None = None
+
+
+DEFAULT_EXECUTOR_CAPABILITIES = ExecutorCapabilities()
 
 
 def is_compatible(regime: str, trigger: str, confirm: str) -> bool:
     """Return True if the trio does not contain any declared incompatible pair."""
     trio = {regime, trigger, confirm}
+    if frozenset(trio) in _CANONICAL_FAMILY_TRIOS:
+        return True
     return all(not pair.issubset(trio) for pair in INCOMPATIBLE)
 
 
@@ -69,12 +128,13 @@ def generate_param_values(param_range: ParamRange) -> list[int | Decimal]:
         curr_i = int(param_range.min)
         step_i = int(param_range.step)
         limit_i = int(param_range.max)
-        span_i = limit_i - curr_i
-        if span_i > 4 * step_i:
-            mid_i = curr_i + ((span_i // 2) // step_i) * step_i
-            return sorted(list({curr_i, mid_i, limit_i}))
+        step_count = max((limit_i - curr_i) // step_i, 0)
+        last_i = curr_i + step_count * step_i
+        if step_count > 4:
+            mid_i = curr_i + (step_count // 2) * step_i
+            return sorted(list({curr_i, mid_i, last_i}))
         vals_i: list[int | Decimal] = []
-        while curr_i <= limit_i:
+        while curr_i <= last_i:
             vals_i.append(curr_i)
             curr_i += step_i
         return vals_i or [param_range.min]
@@ -85,12 +145,14 @@ def generate_param_values(param_range: ParamRange) -> list[int | Decimal]:
         curr_d = param_range.min
         step_d = param_range.step
         limit_d = param_range.max
-        span_d = limit_d - curr_d
-        if span_d > Decimal("4") * step_d:
-            mid_d = curr_d + Decimal(int((span_d / Decimal("2")) / step_d)) * step_d
-            return sorted(list({curr_d, mid_d, limit_d}))
+        step_count_d = ((limit_d - curr_d) / step_d).to_integral_value(rounding=ROUND_FLOOR)
+        step_count = max(int(step_count_d), 0)
+        last_d = curr_d + Decimal(step_count) * step_d
+        if step_count > 4:
+            mid_d = curr_d + Decimal(step_count // 2) * step_d
+            return sorted(list({curr_d, mid_d, last_d}))
         vals_d: list[int | Decimal] = []
-        while curr_d <= limit_d:
+        while curr_d <= last_d:
             vals_d.append(curr_d)
             curr_d += step_d
         return vals_d or [param_range.min]
@@ -136,9 +198,11 @@ def enumerate_candidates(
     assets: Sequence[str] = DEFAULT_ASSETS,
     timeframes: Sequence[str] = TIMEFRAMES,
     hours_slots: Sequence[tuple[int, int]] = HOURS_SLOTS,
-    max_candidates: int = 5000,
+    max_candidates: int = DEFAULT_TRIAL_BUDGET,
     seed: int = 1,
     include_non_standard_families: bool = False,
+    executor_capabilities: ExecutorCapabilities = DEFAULT_EXECUTOR_CAPABILITIES,
+    level_profiles: dict[str, Sequence[LevelProfile]] | None = None,
 ) -> GrammarResult:
     """Enumerate candidate strategies = 1 Regime x 1 Trigger x 1 Confirm x params.
 
@@ -152,6 +216,9 @@ def enumerate_candidates(
     triggers = by_category(Category.TRIGGER)
     confirms = by_category(Category.CONFIRM)
 
+    trial_budget = min(max_candidates, executor_capabilities.max_trials_per_experiment)
+    discarded: dict[str, int] = {}
+
     # 1. Generate valid indicator trios
     trios: list[tuple[str, str, str]] = []
     if not include_non_standard_families:
@@ -164,23 +231,49 @@ def enumerate_candidates(
             if is_compatible(r, t, c):
                 trios.append((r, t, c))
 
-    all_candidates: list[Candidate] = []
+    selected: list[tuple[int, str, Candidate]] = []
+    selected_hashes: set[str] = set()
+    seen_hashes: set[str] = set()
+    theoretical_candidates = 0
+    eligible_candidates = 0
 
     # 2. Build candidates across grid
     for reg_name, trig_name, conf_name in trios:
         fam = identify_family(reg_name, trig_name, conf_name)
+        if fam not in executor_capabilities.families:
+            _discard(discarded, "FAMILY_UNSUPPORTED")
+            continue
         reg_cls = REGISTRY[reg_name]
         trig_cls = REGISTRY[trig_name]
         conf_cls = REGISTRY[conf_name]
 
         reg_grids = generate_indicator_param_grid(reg_cls)
-        trig_grids = generate_indicator_param_grid(trig_cls)
+        trig_grids = _trigger_grid_for_asset_independent(trig_name, trig_cls)
         conf_grids = generate_indicator_param_grid(conf_cls)
 
         for asset in assets:
+            if (
+                executor_capabilities.supported_assets is not None
+                and asset not in executor_capabilities.supported_assets
+            ):
+                _discard(discarded, "ASSET_UNSUPPORTED")
+                continue
+            asset_trigger_grids = _trigger_grids_for_asset(
+                trig_name,
+                trig_grids,
+                asset=asset,
+                level_profiles=level_profiles,
+            )
+            if not asset_trigger_grids:
+                _discard(discarded, "ABSOLUTE_LEVEL_PROFILE_REQUIRED")
+                continue
             for tf in timeframes:
+                if tf not in executor_capabilities.timeframes:
+                    _discard(discarded, "TIMEFRAME_UNSUPPORTED")
+                    continue
                 for hours in hours_slots:
-                    for rp, tp, cp in itertools.product(reg_grids, trig_grids, conf_grids):
+                    for rp, tp, cp in itertools.product(reg_grids, asset_trigger_grids, conf_grids):
+                        theoretical_candidates += 1
                         params: dict[str, ParamMap] = {
                             reg_name: rp,
                             trig_name: tp,
@@ -196,23 +289,121 @@ def enumerate_candidates(
                             hours=hours,
                             asset=asset,
                         )
-                        all_candidates.append(cand)
+                        cand_hash = cand.stable_hash()
+                        if cand_hash in seen_hashes:
+                            _discard(discarded, "DUPLICATE_CANDIDATE")
+                            continue
+                        seen_hashes.add(cand_hash)
+                        reason = _capability_rejection(cand, executor_capabilities)
+                        if reason is not None:
+                            _discard(discarded, reason)
+                            continue
+                        eligible_candidates += 1
+                        if cand_hash in selected_hashes:
+                            continue
+                        sample_key = _sample_key(seed, cand_hash)
+                        if len(selected) < trial_budget:
+                            selected.append((sample_key, cand_hash, cand))
+                            selected_hashes.add(cand_hash)
+                        else:
+                            worst_idx, worst = max(
+                                enumerate(selected),
+                                key=lambda item: (item[1][0], item[1][1]),
+                            )
+                            if (sample_key, cand_hash) < (worst[0], worst[1]):
+                                selected_hashes.remove(worst[1])
+                                selected[worst_idx] = (sample_key, cand_hash, cand)
+                                selected_hashes.add(cand_hash)
 
-    total_candidates = len(all_candidates)
-
-    # 3. Deterministic sampling if count exceeds max_candidates
-    if total_candidates > max_candidates:
-        rng = random.Random(seed)
-        sampled = rng.sample(all_candidates, max_candidates)
-        # Sort sampled candidates by stable hash for deterministic execution order
-        sampled.sort(key=lambda c: c.stable_hash())
-        final_candidates = sampled
-    else:
-        all_candidates.sort(key=lambda c: c.stable_hash())
-        final_candidates = all_candidates
+    selected.sort(key=lambda item: item[1])
+    final_candidates = [candidate for _sample_key_item, _candidate_hash, candidate in selected]
 
     return GrammarResult(
         candidates=final_candidates,
-        total_candidates=total_candidates,
+        total_candidates=eligible_candidates,
         seed=seed,
+        theoretical_candidates=theoretical_candidates,
+        eligible_candidates=eligible_candidates,
+        sampled_candidates=len(final_candidates),
+        trial_budget=trial_budget,
+        discarded_by_reason=discarded,
     )
+
+
+def _discard(discarded: dict[str, int], reason: str) -> None:
+    discarded[reason] = discarded.get(reason, 0) + 1
+
+
+def _counts(items: Iterable[str]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for item in items:
+        result[item] = result.get(item, 0) + 1
+    return result
+
+
+def _sample_key(seed: int, candidate_hash: str) -> int:
+    rng = random.Random(f"{seed}:{candidate_hash}")
+    return rng.getrandbits(128)
+
+
+def _trigger_grid_for_asset_independent(
+    trigger_name: str,
+    trigger_cls: type[Indicator],
+) -> list[ParamMap]:
+    if trigger_name == "level_touch":
+        return []
+    return generate_indicator_param_grid(trigger_cls)
+
+
+def _trigger_grids_for_asset(
+    trigger_name: str,
+    trigger_grids: list[ParamMap],
+    *,
+    asset: str,
+    level_profiles: dict[str, Sequence[LevelProfile]] | None,
+) -> list[ParamMap]:
+    if trigger_name != "level_touch":
+        return trigger_grids
+    profiles = () if level_profiles is None else level_profiles.get(asset, ())
+    return [
+        {
+            "support": profile["support"],
+            "resistance": profile["resistance"],
+            "tolerance": profile["tolerance"],
+        }
+        for profile in profiles
+        if profile["support"] > 0
+        and profile["resistance"] > profile["support"]
+        and profile["tolerance"] >= 0
+    ]
+
+
+def _capability_rejection(
+    candidate: Candidate,
+    executor_capabilities: ExecutorCapabilities,
+) -> str | None:
+    if _candidate_requires_tick_volume(candidate) and not executor_capabilities.tick_volume:
+        return "TICK_VOLUME_UNAVAILABLE"
+    if (
+        executor_capabilities.max_warmup_candles < DEFAULT_MAX_WARMUP_CANDLES
+        and _candidate_warmup_required(candidate) > executor_capabilities.max_warmup_candles
+    ):
+        return "WARMUP_CAPACITY_EXCEEDED"
+    return None
+
+
+def _candidate_requires_tick_volume(candidate: Candidate) -> bool:
+    return "tick_volume_ratio" in {candidate.regime, candidate.trigger, candidate.confirm}
+
+
+def _candidate_warmup_required(candidate: Candidate) -> int:
+    family = candidate.family
+    if family not in FAMILY_BINDINGS:
+        return DEFAULT_MAX_WARMUP_CANDLES + 1
+    wire_params: dict[str, str] = {}
+    for wire_name, (primitive_name, primitive_param) in FAMILY_BINDINGS[family].items():
+        raw = candidate.params.get(primitive_name, {}).get(primitive_param)
+        if raw is None:
+            return DEFAULT_MAX_WARMUP_CANDLES + 1
+        wire_params[wire_name] = format(raw, "f") if isinstance(raw, Decimal) else str(raw)
+    return family_warmup_required(family, wire_params, candidate.hours)

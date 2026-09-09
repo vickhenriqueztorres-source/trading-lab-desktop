@@ -80,9 +80,7 @@ def test_checklist_item_7_seven_consecutive_days_collect_clean_status() -> None:
     }
 
     # Build continuous candle history across all 7 days (7 * 1440 minutes)
-    history: list[Candle] = [
-        make_candle(base_epoch - 3600 + m * 60) for m in range(7 * 1440 + 120)
-    ]
+    history: list[Candle] = [make_candle(base_epoch - 3600 + m * 60) for m in range(7 * 1440 + 120)]
 
     # Simulate 7 daily collect runs
     for day in range(7):

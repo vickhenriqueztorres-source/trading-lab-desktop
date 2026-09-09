@@ -55,7 +55,10 @@ def start_actor(action: str, profile: Path) -> tuple[subprocess.Popen[str], dict
 def kill_actor(process: subprocess.Popen[str]) -> None:
     if process.poll() is None:
         process.kill()
-    process.wait(timeout=5)
+    # Reap the process and drain/close both inherited pipes.  On Windows,
+    # wait() alone can leave the Popen transport cleanup racing the next
+    # byte-range lock attempt even though the child has already exited.
+    process.communicate(timeout=5)
 
 
 def test_second_core_instance_is_blocked_before_database_start(tmp_path: Path) -> None:

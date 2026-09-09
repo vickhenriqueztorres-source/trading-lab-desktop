@@ -5,17 +5,51 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from strategy_lab.collect.backup import BackupError, run_backup
-from strategy_lab.collect.clock import Clock
-from strategy_lab.collect.iq_client import LAB_ROOT, FakeIQClient, IQClient, IQClientProtocol
+from strategy_lab.archive import OperationalArchiveRepository
+from strategy_lab.collect.backup import run_backup
+from strategy_lab.collect.canary import CanaryMismatch
+from strategy_lab.collect.clock import Clock, ClockError
+from strategy_lab.collect.credentials import (
+    keyring_credentials_available,
+    prompt_and_store_credentials,
+)
+from strategy_lab.collect.iq_client import (
+    LAB_ROOT,
+    FakeIQClient,
+    IQClient,
+    IQClientError,
+    IQClientProtocol,
+)
 from strategy_lab.collect.pg_repository import PostgresRepository
+from strategy_lab.collect.preflight import collection_preflight
+from strategy_lab.collect.recorded_canary import DEFAULT_RECORDED_CANARY, RecordedCanaryError
 from strategy_lab.collect.recorder import record_fixture
-from strategy_lab.collect.repository import FakeRepository
+from strategy_lab.collect.repository import FakeRepository, RepositoryError
 from strategy_lab.collect.runner import fake_fixture_path, run_collect, status_report, to_json
 from strategy_lab.research.dataset import ResearchDataset, coverage_report
+from strategy_lab.research.grammar import DEFAULT_TRIAL_BUDGET
+from strategy_lab.retention import (
+    FakeInventoryRepository,
+    InventoryRepository,
+    build_cleanup_plan,
+    inventory_json,
+    plan_from_json,
+    plan_json,
+    quota_status,
+)
+
+SAFE_REASON_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,79}", re.ASCII)
+
+
+def safe_reason(error: Exception) -> str:
+    """Expose only stable machine codes, never an upstream/driver message."""
+    reason = str(error)
+    return reason if SAFE_REASON_PATTERN.fullmatch(reason) else "COLLECT_ABORTED"
 
 
 def parse_epoch(text: str) -> int:
@@ -40,22 +74,72 @@ def main(argv: list[str] | None = None) -> int:
     record.add_argument("--from", dest="from_ts", required=True, type=parse_epoch)
     record.add_argument("--to", dest="to_ts", required=True, type=parse_epoch)
     record.add_argument("--output", type=Path)
+    canary = subcommands.add_parser(
+        "record-canary", help="Grava cinco velas reais para revisão; não grava o banco."
+    )
+    canary.add_argument("--asset", required=True)
+    canary.add_argument("--from", dest="from_ts", required=True, type=parse_epoch)
+    canary.add_argument("--output", type=Path, default=DEFAULT_RECORDED_CANARY)
+    preflight = subcommands.add_parser(
+        "collection-preflight", help="Verifica pré-requisitos locais sem acessar a corretora."
+    )
+    preflight.add_argument("--canary-file", type=Path, default=DEFAULT_RECORDED_CANARY)
     collect = subcommands.add_parser("collect", help="Executa coleta diaria do Strategy Lab.")
     collect.add_argument("--dry-run", action="store_true")
     collect.add_argument("--payout-only", action="store_true")
     collect.add_argument("--assets", nargs="+", default=["EURUSD-OTC"])
     collect.add_argument("--from", dest="from_ts", type=parse_epoch)
     collect.add_argument("--force-source", action="store_true")
+    collect.add_argument("--canary-file", type=Path, default=DEFAULT_RECORDED_CANARY)
+    credentials = subcommands.add_parser(
+        "credentials", help="Configura a credencial isolada de coleta no cofre do SO."
+    )
+    credentials.add_argument("action", choices=["status", "set"])
     status = subcommands.add_parser("status", help="Mostra saude da coleta.")
     status.add_argument("--dry-run", action="store_true")
     backup = subcommands.add_parser("backup", help="Backup criptografado do banco Strategy Lab.")
     backup.add_argument("--output-dir", type=Path)
+    backup.add_argument(
+        "--database-only",
+        action="store_true",
+        help="Exclusão explícita dos objetos frios; o padrão inclui DB e Storage.",
+    )
+    archive = subcommands.add_parser(
+        "archive", help="Planeja arquivo frio; exige --execute para remover dados quentes."
+    )
+    archive.add_argument("--execute", action="store_true")
+    archive.add_argument("--worker-id", default="strategy-lab-local")
+    retention = subcommands.add_parser(
+        "retention", help="Inventário e plano fechado de retenção (dry-run por padrão)."
+    )
+    retention.add_argument(
+        "--dry-run", action="store_true", help="Mantém o modo somente leitura (padrão)."
+    )
+    retention.add_argument(
+        "--execute", action="store_true", help="Aplica somente o plano fechado informado."
+    )
+    retention.add_argument(
+        "--plan-file", type=Path, help="Plano JSON revisado para execução explícita."
+    )
+    retention.add_argument("--output", type=Path, help="Grava o plano JSON no dry-run.")
+    retention.add_argument(
+        "--project-ref", default=os.environ.get("SUPABASE_PROJECT_REF", "staging-local")
+    )
+    retention.add_argument("--environment", choices=["staging", "production"], default="staging")
+    retention.add_argument("--confirm", default="", help="Token RETENTION-APPLY:<plan_hash>.")
+    retention.add_argument("--allow-production", action="store_true", help=argparse.SUPPRESS)
+    retention.add_argument("--quota-bytes", type=int, default=1_000_000_000)
+    retention.add_argument("--backlog-items", type=int, default=0)
+    retention.add_argument("--now", type=parse_epoch)
     research = subcommands.add_parser("research", help="Ferramentas de pesquisa offline.")
     research.add_argument("--coverage-report", action="store_true")
     research.add_argument("--synthetic", action="store_true", help="Gera candidatos sintéticos.")
     research.add_argument("--seed", type=int, default=1, help="Seed determinística para pesquisa.")
     research.add_argument(
-        "--max-candidates", type=int, default=5000, help="Limite máximo de candidatos."
+        "--max-candidates",
+        type=int,
+        default=DEFAULT_TRIAL_BUDGET,
+        help="Limite máximo de candidatos elegíveis por experimento.",
     )
     research.add_argument(
         "--active-manifest", type=Path, help="Manifesto ativo para identificar novas oportunidades."
@@ -68,6 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     research.add_argument("--candles-parquet")
     research.add_argument("--payouts-parquet")
     research.add_argument("--gaps-parquet")
+    research.add_argument("--sessions-parquet")
+    research.add_argument("--supabase", action="store_true")
+    research.add_argument("--timeframe", choices=["M1", "M5", "M15"], default="M1")
 
     publish = subcommands.add_parser("publish", help="Publica manifesto assinado no hub.")
     publish.add_argument("--run-id", required=True, help="ID da rodada de pesquisa.")
@@ -83,6 +170,61 @@ def main(argv: list[str] | None = None) -> int:
     publish.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
 
     args = parser.parse_args(argv)
+
+    if args.command == "collection-preflight":
+        readiness = collection_preflight(canary_path=args.canary_file, now_ts=Clock().now_ts())
+        print(to_json(readiness))
+        return 1 if readiness["blockers"] else 0
+
+    if args.command == "record-canary":
+        try:
+            clock = Clock()
+            clock.check_ntp()
+            recorded = record_fixture(
+                asset=args.asset,
+                from_ts=args.from_ts,
+                to_ts=args.from_ts + 300,
+                output=args.output,
+                now_ts=clock.now_ts(),
+            )
+        except Exception:
+            print(to_json({"event": "collection_canary_record_failed", "status": "failed"}))
+            return 1
+        print(to_json({"event": "collection_canary_recorded", **recorded}))
+        return 0
+
+    if args.command == "credentials":
+        if args.action == "status":
+            print(
+                to_json(
+                    {
+                        "event": "strategy_lab_collection_credentials_status",
+                        "configured": keyring_credentials_available(),
+                    }
+                )
+            )
+            return 0
+        try:
+            prompt_and_store_credentials()
+        except (Exception, KeyboardInterrupt):
+            print(
+                to_json(
+                    {
+                        "event": "strategy_lab_collection_credentials_failed",
+                        "status": "failed",
+                    }
+                )
+            )
+            return 1
+        print(
+            to_json(
+                {
+                    "event": "strategy_lab_collection_credentials_configured",
+                    "status": "ok",
+                }
+            )
+        )
+        return 0
 
     if args.command == "publish":
         if getattr(args, "yes", False):
@@ -190,6 +332,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     if args.command == "collect":
         try:
+            if not args.dry_run:
+                readiness = collection_preflight(
+                    canary_path=args.canary_file, now_ts=Clock().now_ts()
+                )
+                if readiness["blockers"]:
+                    print(to_json(readiness))
+                    return 1
             repository = (
                 FakeRepository()
                 if args.dry_run
@@ -214,7 +363,17 @@ def main(argv: list[str] | None = None) -> int:
                 payout_only=args.payout_only,
                 initial_from_ts=initial_from_ts,
                 check_ntp=not args.dry_run,
+                canary_path=None if args.dry_run else args.canary_file,
             )
+        except (
+            CanaryMismatch,
+            ClockError,
+            IQClientError,
+            RecordedCanaryError,
+            RepositoryError,
+        ) as exc:
+            print(to_json({"event": "strategy_lab_collect_failed", "reason": safe_reason(exc)}))
+            return 1
         except Exception:
             print(to_json({"event": "strategy_lab_collect_failed", "status": "failed"}))
             return 1
@@ -231,14 +390,146 @@ def main(argv: list[str] | None = None) -> int:
                 age_recipient=os.environ.get("STRATEGY_LAB_AGE_RECIPIENT", ""),
                 output_dir=args.output_dir,
             )
-        except BackupError:
+            cold_manifest: Path | None = None
+            if not args.database_only:
+                from strategy_lab.archive import backup_verified_objects, storage_from_env
+
+                records = _archive_repository().all_verified_objects()
+                if records:
+                    cold_manifest = backup_verified_objects(
+                        records, storage_from_env(), target.parent / target.stem
+                    )
+        except Exception:
             print(to_json({"event": "strategy_lab_backup_failed", "status": "failed"}))
             return 1
         print(
-            to_json({"event": "strategy_lab_backup_completed", "status": "ok", "path": str(target)})
+            to_json(
+                {
+                    "event": "strategy_lab_backup_completed",
+                    "status": "ok",
+                    "path": str(target),
+                    "cold_objects_manifest": None if cold_manifest is None else str(cold_manifest),
+                }
+            )
         )
         return 0
+    if args.command == "archive":
+        try:
+            from strategy_lab.archive import ArchiveExecutor, storage_from_env
+
+            archive_repository = _archive_repository()
+            planned_job = archive_repository.plan()
+            if not args.execute:
+                print(
+                    to_json(
+                        {
+                            "event": "strategy_lab_archive_plan",
+                            "status": "dry_run",
+                            "job_id": planned_job,
+                            "deletion_authorized": False,
+                        }
+                    )
+                )
+                return 0
+            archive_report = ArchiveExecutor(
+                archive_repository,
+                storage_from_env(),
+                worker_id=args.worker_id,
+            ).run_once()
+        except Exception:
+            print(to_json({"event": "strategy_lab_archive_failed", "status": "failed"}))
+            return 1
+        print(to_json({"event": "strategy_lab_archive", **asdict(archive_report)}))
+        return 0 if archive_report.status in {"idle", "completed"} else 1
+    if args.command == "retention":
+        try:
+            retention_repository = _retention_repository(args.project_ref, args.environment)
+            if not args.execute:
+                retention_snapshot = retention_repository.snapshot()
+                now_ts = args.now if args.now is not None else retention_snapshot.generated_at
+                plan = build_cleanup_plan(retention_snapshot, now_ts=now_ts)
+                quota = quota_status(
+                    retention_snapshot,
+                    quota_bytes=args.quota_bytes,
+                    backlog_items=args.backlog_items,
+                )
+                report = inventory_json(retention_snapshot, plan, quota)
+                report["status"] = "dry_run"
+                report["deletion_authorized"] = False
+                if args.output:
+                    args.output.parent.mkdir(parents=True, exist_ok=True)
+                    args.output.write_text(
+                        json.dumps(plan_json(plan), indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    report["plan_file"] = str(args.output)
+                print(to_json(report))
+                return 0
+            if args.plan_file is None:
+                raise ValueError("RETENTION_PLAN_FILE_REQUIRED")
+            plan = plan_from_json(json.loads(args.plan_file.read_text(encoding="utf-8")))
+            from strategy_lab.retention import apply_cleanup_plan
+
+            deleted = apply_cleanup_plan(
+                plan,
+                retention_repository,
+                project_ref=args.project_ref,
+                environment=args.environment,
+                confirmation_token=args.confirm,
+                allow_production=args.allow_production,
+            )
+            print(
+                to_json(
+                    {
+                        "event": "strategy_lab_retention_applied",
+                        "status": "ok",
+                        "deleted": deleted,
+                        "plan_hash": plan.plan_hash,
+                    }
+                )
+            )
+            return 0
+        except Exception as exc:
+            print(
+                to_json(
+                    {
+                        "event": "strategy_lab_retention_failed",
+                        "status": "failed",
+                        "reason": str(exc),
+                    }
+                )
+            )
+            return 1
     if args.command == "research":
+        from strategy_lab.research.dataset import timeframe_seconds
+
+        parquet_requested = bool(
+            args.candles_parquet
+            or args.payouts_parquet
+            or args.gaps_parquet
+            or args.sessions_parquet
+        )
+        parquet_complete = bool(args.candles_parquet and args.payouts_parquet)
+        selected_sources = (
+            int(bool(args.synthetic)) + int(bool(args.supabase)) + int(parquet_requested)
+        )
+        if (
+            selected_sources != 1
+            or (parquet_requested and not parquet_complete)
+            or (args.coverage_report and args.synthetic)
+            or (not args.synthetic and (args.from_ts is None or args.to_ts is None))
+        ):
+            print(
+                to_json(
+                    {
+                        "event": "strategy_lab_research_failed",
+                        "status": "failed",
+                        "reason": "RES_DATASET_SOURCE_REQUIRED",
+                    }
+                )
+            )
+            return 1
+        tf_s = timeframe_seconds(args.timeframe)
         if args.coverage_report:
             try:
                 dataset = (
@@ -246,25 +537,27 @@ def main(argv: list[str] | None = None) -> int:
                         args.candles_parquet,
                         args.payouts_parquet,
                         args.gaps_parquet,
+                        sessions_path=args.sessions_parquet,
                     )
-                    if args.candles_parquet and args.payouts_parquet
-                    else ResearchDataset.from_supabase(
-                        os.environ["SUPABASE_DB_URL"],
-                        args.assets,
-                        args.from_ts,
-                        args.to_ts,
-                    )
+                    if parquet_complete
+                    else _dataset_from_supabase(args.assets, args.from_ts, args.to_ts)
                 )
-                coverage_entries = coverage_report(dataset, args.assets, args.from_ts, args.to_ts)
+                coverage_entries = coverage_report(
+                    dataset,
+                    args.assets,
+                    args.from_ts,
+                    args.to_ts,
+                    timeframe_s=tf_s,
+                )
             except Exception:
                 print(to_json({"event": "strategy_lab_research_failed", "status": "failed"}))
                 return 1
             print(to_json({"event": "strategy_lab_coverage_report", "assets": coverage_entries}))
             return 0 if all(bool(item["accepted"]) for item in coverage_entries) else 1
 
-        import time
         from decimal import Decimal
 
+        from strategy_lab.research.dataset import synthetic_snapshot
         from strategy_lab.research.grammar import enumerate_candidates
         from strategy_lab.research.payout_lookup import PayoutLookup, PayoutPoint
         from strategy_lab.research.runner import run_research_pipeline
@@ -275,24 +568,46 @@ def main(argv: list[str] | None = None) -> int:
             register_synthetic_primitives,
         )
 
-        run_id = args.run_id or f"run_{args.seed}_{int(time.time())}"
-        out_dir = args.output_dir / run_id
+        run_id = args.run_id or f"run_{args.seed}_{int(datetime.now(tz=UTC).timestamp())}"
 
         active_keys: set[str] = set()
         if args.active_manifest and args.active_manifest.exists():
             manifest_data = json.loads(args.active_manifest.read_text(encoding="utf-8"))
             active_keys = {s["key"] for s in manifest_data.get("strategies", []) if "key" in s}
 
-        if args.candles_parquet and args.payouts_parquet:
-            dataset = ResearchDataset.from_parquet(
-                args.candles_parquet,
-                args.payouts_parquet,
-                args.gaps_parquet,
+        if not args.synthetic:
+            if len(args.assets) != 1:
+                print(
+                    to_json(
+                        {
+                            "event": "strategy_lab_research_failed",
+                            "status": "failed",
+                            "reason": "RES_MULTI_ASSET_REQUIRES_PARTITIONED_RUNS",
+                        }
+                    )
+                )
+                return 1
+            dataset = (
+                ResearchDataset.from_parquet(
+                    args.candles_parquet,
+                    args.payouts_parquet,
+                    args.gaps_parquet,
+                    sessions_path=args.sessions_parquet,
+                )
+                if parquet_complete
+                else _dataset_from_supabase(args.assets, args.from_ts, args.to_ts)
             )
-            candles = dataset.candles_for(args.assets[0], args.from_ts, args.to_ts)
+            bundle = dataset.bundle_for(
+                args.assets[0],
+                tf_s,
+                args.from_ts,
+                args.to_ts,
+                now_ts=int(datetime.now(tz=UTC).timestamp()),
+            )
             payout_lookup = PayoutLookup.from_rows(dataset.payouts.to_dicts())
+            out_dir = args.output_dir / run_id
             res = run_research_pipeline(
-                candles,
+                list(bundle.candles),
                 payout_lookup,
                 run_id=run_id,
                 assets=args.assets,
@@ -300,12 +615,19 @@ def main(argv: list[str] | None = None) -> int:
                 max_candidates=args.max_candidates,
                 output_dir=out_dir,
                 dataset=dataset,
+                dataset_snapshot=bundle.snapshot,
                 active_manifest_keys=active_keys,
             )
         else:
             # Default synthetic research run with 1 injected edge (R-RES-10 acceptance criteria)
             register_synthetic_primitives()
             candles = edge_series(seed=args.seed, length=2000, win_probability_pct=65)
+            snapshot = synthetic_snapshot(
+                candles,
+                asset="EURUSD-OTC",
+                timeframe_s=60,
+                seed=args.seed,
+            )
             payout_lookup = PayoutLookup(
                 [
                     PayoutPoint(
@@ -324,9 +646,10 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
             )
             candidates_pool = [edge_cand] + [
-                c for c in competing_res.candidates if c.asset == "EURUSD-OTC"
+                c for c in competing_res.candidates if c.asset == "EURUSD-OTC" and c.tf == "M1"
             ][:10]
 
+            out_dir = args.output_dir / "synthetic" / run_id
             res = run_research_pipeline(
                 candles,
                 payout_lookup,
@@ -335,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 max_candidates=args.max_candidates,
                 output_dir=out_dir,
+                dataset_snapshot=snapshot,
                 override_candidates=candidates_pool,
                 active_manifest_keys=active_keys,
                 enforce_holdout_pass=False,
@@ -349,6 +673,10 @@ def main(argv: list[str] | None = None) -> int:
                     "run_id": res.run_id,
                     "candidates_evaluated": res.candidates_count,
                     "approved_count": res.approved_count,
+                    "dataset_fingerprint": res.dataset_fingerprint,
+                    "dataset_origin": res.dataset_origin,
+                    "production_eligible": res.production_eligible,
+                    "grammar_audit": res.grammar_audit,
                     "ranking_md": str(res.ranking_md_path),
                     "candidates_json": str(res.candidates_json_path),
                 }
@@ -374,6 +702,45 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(json.dumps({"event": "iq_fixture_recorded", **result}))
     return 0
+
+
+def _dataset_from_supabase(assets: list[str], from_ts: int, to_ts: int) -> ResearchDataset:
+    from strategy_lab.archive import EnvironmentColdArchiveReader
+    from strategy_lab.archive_pg import PostgresArchiveRepository
+
+    db_url = os.environ["SUPABASE_DB_URL"]
+    archive_repository = PostgresArchiveRepository(db_url)
+    return ResearchDataset.from_supabase(
+        db_url,
+        assets,
+        from_ts,
+        to_ts,
+        cold_reader=EnvironmentColdArchiveReader(archive_repository),
+    )
+
+
+def _retention_repository(project_ref: str, environment: str) -> InventoryRepository:
+    base_url = os.environ.get("SUPABASE_URL", "")
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if base_url and service_key:
+        from strategy_lab.retention_rest import SupabaseRetentionInventory
+
+        return SupabaseRetentionInventory(base_url, service_key, project_ref, environment)
+    return FakeInventoryRepository(project_ref=project_ref, environment=environment)
+
+
+def _archive_repository() -> OperationalArchiveRepository:
+    db_url = os.environ.get("SUPABASE_DB_URL", "")
+    if db_url:
+        from strategy_lab.archive_pg import PostgresArchiveRepository
+
+        return PostgresArchiveRepository(db_url)
+    from strategy_lab.archive_rest import SupabaseRestArchiveRepository
+
+    return SupabaseRestArchiveRepository(
+        os.environ.get("SUPABASE_URL", ""),
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+    )
 
 
 if __name__ == "__main__":

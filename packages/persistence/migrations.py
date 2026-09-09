@@ -390,6 +390,26 @@ IQOPTION_EXECUTION_STATE = Migration(
     ),
 )
 
+OUTCOMES_V2_EVIDENCE = Migration(
+    version=10,
+    name="0010_outcomes_v2_evidence",
+    statements=(
+        "ALTER TABLE outcomes_queue ADD COLUMN event_id TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN recipe_revision INTEGER",
+        "ALTER TABLE outcomes_queue ADD COLUMN manifest_version INTEGER",
+        "ALTER TABLE outcomes_queue ADD COLUMN execution_semantics_version TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN primitives_version TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN asset TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN timeframe_s INTEGER",
+        "ALTER TABLE outcomes_queue ADD COLUMN product TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN account_environment TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN source TEXT",
+        "ALTER TABLE outcomes_queue ADD COLUMN signal_group_id TEXT",
+        "CREATE UNIQUE INDEX ux_outcomes_event_id ON outcomes_queue(event_id) "
+        "WHERE event_id IS NOT NULL",
+    ),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
@@ -400,6 +420,7 @@ MIGRATIONS = (
     SPRT_AND_OUTCOMES,
     MANIFEST_EXECUTION,
     IQOPTION_EXECUTION_STATE,
+    OUTCOMES_V2_EVIDENCE,
 )
 
 

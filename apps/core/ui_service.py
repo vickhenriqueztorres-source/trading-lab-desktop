@@ -12,11 +12,13 @@ from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
+from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.readiness import TradingReadinessSnapshot
 from apps.core.runtime import CoreRuntime
 from apps.core.worker_supervisor import WorkerHealthState
 from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
+from packages.domain.models import Broker
 from packages.observability.diagnostic import DiagnosticBundleResult
 from packages.protocol import (
     PROTOCOL_VERSION,
@@ -42,6 +44,7 @@ from packages.protocol import (
     UiHandshakeStatus,
     UiIqOptionAssetRank,
     UiIqOptionBotControlCommand,
+    UiIqOptionExecutionMetrics,
     UiIqOptionLoginAck,
     UiIqOptionLoginCommand,
     UiIqOptionRiskConfig,
@@ -219,6 +222,7 @@ class CoreUiProjectionBuilder:
         iqoption_bot_armed: Callable[[], bool] = lambda: False,
         iqoption_bot_reason: Callable[[], str] = lambda: "IQOPTION_BOT_DISARMED",
         iqoption_asset_ranking: Callable[[], tuple[UiIqOptionAssetRank, ...]] = lambda: (),
+        iqoption_execution_metrics: Callable[[], UiIqOptionExecutionMetrics | None] = lambda: None,
     ) -> None:
         self._runtime = runtime
         self._deriv_health = deriv_health
@@ -233,6 +237,7 @@ class CoreUiProjectionBuilder:
         self._iqoption_bot_armed = iqoption_bot_armed
         self._iqoption_bot_reason = iqoption_bot_reason
         self._iqoption_asset_ranking = iqoption_asset_ranking
+        self._iqoption_execution_metrics = iqoption_execution_metrics
 
     def trading_readiness(self) -> TradingReadinessSnapshot:
         gate = self._runtime.health_gate.get_snapshot()
@@ -345,7 +350,32 @@ class CoreUiProjectionBuilder:
         iq_state = self._iqoption_health()
         iq_balance = self._iqoption_balance()
         iq_clock = self._iqoption_clock()
-        iq_connected = iq_state is WorkerHealthState.READY and iq_balance is not None
+        # Transport availability and account synchronization are independent facts.
+        # A newly authenticated worker may be connected while its first balance
+        # snapshot is still pending; presenting that state as disconnected makes
+        # recovery diagnosis ambiguous and can encourage needless reconnects.
+        iq_connected = iq_state is WorkerHealthState.READY
+        iq_account_synced = iq_balance is not None
+        iq_armed = self._iqoption_bot_armed()
+        iq_scope = self._runtime.health_gate.state_for(
+            Broker.IQ_OPTION.value,
+            IQOPTION_PRACTICE_ACCOUNT_ID,
+        )
+        iq_clock_ready = iq_clock is not None and iq_clock.is_synced
+        iq_entry_ready = (
+            iq_connected and iq_account_synced and iq_clock_ready and iq_armed and iq_scope.is_open
+        )
+        iq_entry_blocker = (
+            "IQOPTION_CONNECTION_REQUIRED"
+            if not iq_connected
+            else "IQOPTION_BALANCE_SYNC_REQUIRED"
+            if not iq_account_synced
+            else "MD_CLOCK_UNTRUSTED"
+            if not iq_clock_ready
+            else self._iqoption_bot_reason()
+            if not iq_armed
+            else iq_scope.reason_code
+        )
 
         cards = [
             BrokerCardStatus(
@@ -398,11 +428,9 @@ class CoreUiProjectionBuilder:
                 ),
                 is_connected=iq_connected,
                 balance_minor_units=(
-                    iq_balance.balance_minor_units
-                    if iq_connected and iq_balance is not None
-                    else None
+                    iq_balance.balance_minor_units if iq_balance is not None else None
                 ),
-                currency=(iq_balance.currency if iq_connected and iq_balance is not None else None),
+                currency=(iq_balance.currency if iq_balance is not None else None),
                 clock_synced=iq_clock is not None and iq_clock.is_synced,
                 connection_label=(
                     "REAL — SOMENTE LEITURA"
@@ -607,10 +635,13 @@ class CoreUiProjectionBuilder:
                 )
             ),
             iqoption_risk_config=_to_ui_iqoption_config(self._iqoption_risk_config()),
-            iqoption_bot_armed=self._iqoption_bot_armed(),
+            iqoption_bot_armed=iq_armed,
             iqoption_bot_reason=self._iqoption_bot_reason(),
             deriv_bot_armed=self._deriv_bot_armed(),
             iqoption_asset_ranking=self._iqoption_asset_ranking(),
+            iqoption_execution_metrics=self._iqoption_execution_metrics(),
+            iqoption_entry_ready=iq_entry_ready,
+            iqoption_entry_blocker=iq_entry_blocker,
         )
 
     def _orders(self, *, since_utc: datetime | None = None) -> list[OrderSummary]:

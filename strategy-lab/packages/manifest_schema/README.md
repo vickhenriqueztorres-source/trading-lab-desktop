@@ -1,9 +1,20 @@
-# tl-manifest-schema 1.1.0 — R-MAN-1..7
+# tl-manifest-schema 1.2.0 — R-MAN-1..7
 
 Contrato local do Strategy Lab. Não é importado pelo aplicativo principal e não envia ordens.
 Pydantic strict + JSON Schema + Ed25519, com strings decimais preservadas byte a byte.
 O runtime depende apenas de pydantic, cryptography e do tl-primitives **deste Lab**.
 jsonschema é utilizado somente pelos testes.
+
+## Revisão aditiva 1.2 (receita, evidência e capabilities)
+
+Novos manifestos podem declarar `schema_revision: "1.2"`,
+`execution_semantics_version: "tl.candle-close.v2"`, evidência do dataset e política de
+telemetria opt-in. Cada entrada inclui revisão/fingerprint, composição F1..F5 fechada e requisitos
+de produto/volume; timeframe e warmup existentes completam a capability.
+
+Dataset sintético nunca pode publicar uma entrada `approved`. O consumidor avalia seus recursos
+com `assess_manifest_capabilities()` e falha fechado com reason code estável. O builder continua
+emitindo 1.1 até o rollout de leitores, engine e Hub estar concluído.
 
 ## Revisão aditiva 1.1 (warmup)
 

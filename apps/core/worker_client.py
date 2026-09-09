@@ -16,6 +16,7 @@ from packages.domain.market import (
     BrokerAccountBalance,
     BrokerCapabilities,
     BrokerClockSnapshot,
+    BrokerInstrumentCatalog,
     BrokerProposalQuote,
     ContractMetadata,
     MarketCandle,
@@ -206,6 +207,9 @@ class SocketWorkerClient:
         if response_timeout <= 0 or event_queue_size <= 0 or max_pending_requests <= 0:
             raise ValueError("timeouts and queue sizes must be positive")
         self.capabilities = capabilities
+        # Stable for this client lifetime; unlike id(self), never reused after
+        # replacement. Series caches and diagnostics fence by this generation.
+        self.generation = str(uuid4())
         self._worker_role = worker_role
         self._transport = transport
         self._response_timeout = response_timeout
@@ -789,6 +793,25 @@ class SocketWorkerClient:
         if not payout.is_finite() or not 0 < payout <= 1:
             raise ValueError("IQOPTION_PAYOUT_INVALID")
         return payout
+
+    def iqoption_instrument_catalog(self) -> BrokerInstrumentCatalog:
+        if self._worker_role is not EndpointRole.IQOPTION_WORKER:
+            raise ValueError("IQ Option catalogue requires IQ Option worker")
+        response = self._read_only_request(MessageType.BROKER_INSTRUMENT_CATALOG_REQUEST, {})
+        if response.message_type is not MessageType.BROKER_INSTRUMENT_CATALOG_RESPONSE:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_UNKNOWN_MESSAGE_TYPE,
+                DeliveryCertainty.NOT_SENT,
+                "IQ Option instrument catalogue response is invalid",
+            )
+        try:
+            return BrokerInstrumentCatalog.from_payload(response.payload)
+        except (TypeError, ValueError) as exc:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                DeliveryCertainty.NOT_SENT,
+                "IQ Option instrument catalogue payload is invalid",
+            ) from exc
 
     def broker_clock(self) -> BrokerClockSnapshot:
         response = self._read_only_request(MessageType.BROKER_CLOCK_REQUEST, {})

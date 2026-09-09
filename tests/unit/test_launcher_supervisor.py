@@ -151,6 +151,7 @@ def test_shutdown_timeout_escalates_to_terminate(tmp_path: Path) -> None:
 
     assert supervisor.stop_all(0.2) is False
     assert "terminate" in controller.events
+    assert "terminate_tree" in controller.events
     assert controller.process.poll() == 1
 
 
