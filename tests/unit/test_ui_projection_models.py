@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
 from apps.ui.view_model import DashboardViewModel
 from packages.protocol import (
+    MAX_FRAME_SIZE,
     BrokerCardStatus,
     HealthGateStatus,
     OrderSummary,
@@ -15,7 +18,9 @@ from packages.protocol import (
     UiDerivAssetRank,
     UiDerivStrategyStatus,
     UiGlobalState,
+    UiLogLevel,
     UiMultiStrategyMetrics,
+    UiOperationalLogEntry,
     UiProjectionSnapshot,
 )
 
@@ -98,6 +103,16 @@ def _snapshot() -> UiProjectionSnapshot:
         ),
         iqoption_entry_ready=False,
         iqoption_entry_blocker="PAYOUT_UNAVAILABLE",
+        operational_logs=(
+            UiOperationalLogEntry(
+                occurred_at_utc=datetime(2026, 9, 9, 12, 30, tzinfo=UTC),
+                level=UiLogLevel.WARNING,
+                source="IQOPTION",
+                event_name="health_gate_blocked",
+                reason_code="MD_CLOCK_UNTRUSTED",
+                detail="symbol=EURUSD-OTC",
+            ),
+        ),
     )
 
 
@@ -122,6 +137,58 @@ def test_ui_projection_round_trip_and_view_model_use_minor_units() -> None:
     assert snapshot.deriv_bot_armed is False
     assert snapshot.iqoption_entry_ready is False
     assert snapshot.iqoption_entry_blocker == "PAYOUT_UNAVAILABLE"
+    assert snapshot.operational_logs[0].reason_code == "MD_CLOCK_UNTRUSTED"
+
+
+def test_ui_projection_rejects_unbounded_or_multiline_operational_logs() -> None:
+    entry = UiOperationalLogEntry(
+        datetime(2026, 9, 9, 12, 30, tzinfo=UTC),
+        UiLogLevel.INFO,
+        "CORE",
+        "core_started",
+    )
+    with pytest.raises(ValueError, match="count is outside bounds"):
+        UiProjectionSnapshot(
+            UiGlobalState.READY,
+            False,
+            (HealthGateStatus("GLOBAL_ENTRY_GATE", True, None, "Ready"),),
+            (BrokerCardStatus("SIMULATED", UiAccountMode.PRACTICE, True, None, None, False),),
+            (),
+            0,
+            None,
+            operational_logs=(entry,) * 161,
+        )
+    with pytest.raises(ValueError, match="text is invalid"):
+        UiOperationalLogEntry(
+            datetime(2026, 9, 9, 12, 30, tzinfo=UTC),
+            UiLogLevel.ERROR,
+            "CORE",
+            "core_failed",
+            detail="line one\nline two",
+        )
+    with pytest.raises(TypeError, match="level is invalid"):
+        UiOperationalLogEntry(
+            datetime(2026, 9, 9, 12, 30, tzinfo=UTC),
+            "ERROR",  # type: ignore[arg-type]
+            "CORE",
+            "core_failed",
+        )
+
+
+def test_maximum_operational_log_projection_stays_inside_ipc_frame() -> None:
+    entry = UiOperationalLogEntry(
+        datetime(2026, 9, 9, 12, 30, tzinfo=UTC),
+        UiLogLevel.WARNING,
+        "IQOPTION",
+        "iqoption_operational_warning",
+        "IQOPTION_PAYOUT_UNAVAILABLE",
+        "symbol=EURUSD-OTC status=" + "A" * 340,
+    )
+    snapshot = replace(_snapshot(), operational_logs=(entry,) * 160)
+
+    encoded_payload = json.dumps(snapshot.to_payload(), separators=(",", ":")).encode()
+
+    assert len(encoded_payload) < MAX_FRAME_SIZE
 
 
 def test_legacy_projection_infers_deriv_state_only_when_explicit_field_is_absent() -> None:

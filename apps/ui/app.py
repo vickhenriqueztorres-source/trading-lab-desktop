@@ -32,6 +32,7 @@ from apps.ui.components import (
     IqOptionStrategyConfigWidget,
     IqOptionWorkspaceWidget,
     ManifestStrategyPanelWidget,
+    OperationalLogTerminal,
     OrderTableView,
     ResultsDashboardWidget,
     SettingsWorkspaceWidget,
@@ -284,10 +285,7 @@ class TradingLabMainWindow(QMainWindow):
         scroll.setWidget(content)
         return scroll
 
-    def _create_activity_page(self) -> QScrollArea:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+    def _create_activity_page(self) -> QWidget:
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -296,10 +294,18 @@ class TradingLabMainWindow(QMainWindow):
         self._activity_intro.setWordWrap(True)
         self._activity_intro.setObjectName("GuidanceText")
         layout.addWidget(self._activity_intro)
+
+        self._activity_tabs = QTabWidget()
+        orders_page = QWidget()
+        orders_layout = QVBoxLayout(orders_page)
+        orders_layout.setContentsMargins(0, 0, 0, 0)
         self._order_table_widget = OrderTableView()
-        layout.addWidget(self._order_table_widget, 1)
-        scroll.setWidget(content)
-        return scroll
+        orders_layout.addWidget(self._order_table_widget)
+        self._activity_tabs.addTab(orders_page, "")
+        self._log_terminal = OperationalLogTerminal()
+        self._activity_tabs.addTab(self._log_terminal, "")
+        layout.addWidget(self._activity_tabs, 1)
+        return content
 
     def _create_header_bar(self) -> QFrame:
         header = QFrame()
@@ -475,6 +481,7 @@ class TradingLabMainWindow(QMainWindow):
         self._risk_gauge.retranslate()
         self._health_pill_widget.retranslate()
         self._order_table_widget.retranslate()
+        self._log_terminal.retranslate()
         self._results_dashboard.retranslate()
         self._card_deriv.retranslate()
         self._card_iqoption.retranslate()
@@ -495,6 +502,8 @@ class TradingLabMainWindow(QMainWindow):
         self._main_tabs.setTabText(self._TAB_STRATEGIES, "📋 " + t("tabs.strategies"))
         self._main_tabs.setTabText(self._TAB_ACTIVITY, t("tabs.activity"))
         self._main_tabs.setTabText(self._TAB_SETTINGS, t("tabs.settings"))
+        self._activity_tabs.setTabText(0, t("activity.orders_tab"))
+        self._activity_tabs.setTabText(1, t("activity.logs_tab"))
 
     def _refresh_projection(self) -> None:
         connected = self._controller.connected
@@ -582,6 +591,7 @@ class TradingLabMainWindow(QMainWindow):
 
         # 6. Update Orders
         self._order_table_widget.update_orders(snapshot.active_orders)
+        self._log_terminal.update_entries(snapshot.operational_logs)
         self._results_dashboard.update_results(snapshot.active_orders)
         self._deriv_workspace.update_orders(snapshot.active_orders)
         self._deriv_workspace.update_risk(

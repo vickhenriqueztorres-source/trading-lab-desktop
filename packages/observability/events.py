@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,10 @@ class EventSink(Protocol):
 
 
 class NullEventSink:
+    @property
+    def recent_events(self) -> tuple[OperationalEvent, ...]:
+        return ()
+
     def emit(
         self,
         event_name: str,
@@ -51,6 +56,11 @@ class InMemoryEventSink:
     def events(self) -> tuple[OperationalEvent, ...]:
         with self._lock:
             return tuple(self._events)
+
+    @property
+    def recent_events(self) -> tuple[OperationalEvent, ...]:
+        with self._lock:
+            return tuple(self._events[-256:])
 
     def emit(
         self,
@@ -79,6 +89,12 @@ class PersistentJsonlEventSink:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
+        self._recent: deque[OperationalEvent] = deque(maxlen=256)
+
+    @property
+    def recent_events(self) -> tuple[OperationalEvent, ...]:
+        with self._lock:
+            return tuple(self._recent)
 
     def emit(
         self,
@@ -87,10 +103,17 @@ class PersistentJsonlEventSink:
         reason_code: str | None = None,
         **fields: EventValue,
     ) -> None:
+        occurred_at = datetime.now(UTC)
+        event = OperationalEvent(
+            event_name=event_name,
+            occurred_at=occurred_at,
+            reason_code=reason_code,
+            fields=tuple(sorted(fields.items())),
+        )
         record = {
             "event": event_name,
             "fields": dict(sorted(fields.items())),
-            "occurred_at": datetime.now(UTC).isoformat(),
+            "occurred_at": occurred_at.isoformat(),
             "reason_code": reason_code,
         }
         encoded = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
@@ -106,3 +129,4 @@ class PersistentJsonlEventSink:
                 stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
+            self._recent.append(event)

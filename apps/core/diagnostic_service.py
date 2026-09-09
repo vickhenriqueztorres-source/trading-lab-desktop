@@ -11,7 +11,7 @@ from packages.observability.diagnostic import (
     DiagnosticBundleResult,
     DiagnosticContext,
 )
-from packages.observability.events import InMemoryEventSink, OperationalEvent
+from packages.observability.events import OperationalEvent
 
 if TYPE_CHECKING:
     from apps.core.runtime import CoreRuntime
@@ -80,11 +80,14 @@ class CoreDiagnosticService:
         except Exception as exc:
             risk_metrics = {"error": str(exc)}
 
-        # 3. Events from InMemoryEventSink
+        # 3. Bounded events retained by the configured sink
         recent_events: Sequence[OperationalEvent] = ()
         event_sink = self._runtime.event_sink
-        if isinstance(event_sink, InMemoryEventSink):
-            recent_events = event_sink.events
+        candidate_events = getattr(event_sink, "recent_events", ())
+        if isinstance(candidate_events, tuple) and all(
+            isinstance(item, OperationalEvent) for item in candidate_events
+        ):
+            recent_events = candidate_events
 
         # 4. Environment & Process tree info
         process_tree: list[dict[str, Any]] = []

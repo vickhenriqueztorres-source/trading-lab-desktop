@@ -65,7 +65,7 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 | Seleção automática de ativo | Implementada para Deriv (R_10 a R_100) e IQ Option (Radar com todos os pares OTC/Forex) |
 | Martingale | Opcional, delimitado, desativado por padrão |
 | Persistência financeira | SQLite/WAL com writer único, outbox e reconciliação |
-| Diagnóstico | ZIP local redigido, limitado e escaneado contra segredos |
+| Diagnóstico | Terminal UI ao vivo e ZIP local, ambos redigidos, limitados e sem segredos |
 | Atualização | Componentes de verificação/rollback existem; distribuição comercial não configurada |
 | Assinatura Authenticode | Não implementada |
 
@@ -87,6 +87,7 @@ visão consolidada da v1.9.11:
 - [Pipeline de market data](MARKET_DATA_PIPELINE.md)
 - [Candle fechado e replay](CLOSED_CANDLE_REPLAY.md)
 - [Observabilidade](OBSERVABILITY.md)
+- [Terminal de logs operacionais na UI](UI_LOG_TERMINAL_20260909.md)
 - [Códigos de erro e saúde](ERROR_AND_HEALTH_CODES.md)
 - [Runbook operacional histórico](OPERATIONS_RUNBOOK.md)
 - [Processo de release](RELEASE_PROCESS.md)

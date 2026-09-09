@@ -24,6 +24,8 @@ _MAX_DERIV_ASSET_RANKS = 16
 # Turbo and Digital markets are discovered dynamically. Keep a hard IPC bound,
 # but size it for the broker catalogue rather than a hand-written shortlist.
 _MAX_IQOPTION_ASSET_RANKS = 512
+_MAX_UI_LOG_ENTRIES = 160
+_MAX_UI_LOG_DETAIL = 384
 
 
 class UiHandshakeStatus(StrEnum):
@@ -37,6 +39,12 @@ class UiGlobalState(StrEnum):
     SAFE_STOPPED = "SAFE_STOPPED"
     RECONCILING = "RECONCILING"
     RISK_LOCKED = "RISK_LOCKED"
+
+
+class UiLogLevel(StrEnum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
 
 class UiAccountMode(StrEnum):
@@ -543,6 +551,72 @@ class OrderSummary:
                 created,
                 broker_order_id,
                 realized_pnl,
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiOperationalLogEntry:
+    """Bounded, sanitised operational event safe for presentation by the UI."""
+
+    occurred_at_utc: datetime
+    level: UiLogLevel
+    source: str
+    event_name: str
+    reason_code: str | None = None
+    detail: str | None = None
+
+    def __post_init__(self) -> None:
+        require_aware_utc(self.occurred_at_utc, "occurred_at_utc")
+        if not isinstance(self.level, UiLogLevel):
+            raise TypeError("UI operational log level is invalid")
+        for identifier, maximum in (
+            (self.source, 32),
+            (self.event_name, 96),
+        ):
+            if not identifier or len(identifier) > maximum or not identifier.isprintable():
+                raise ValueError("UI operational log identifier is invalid")
+        for text_value, maximum in (
+            (self.reason_code, 128),
+            (self.detail, _MAX_UI_LOG_DETAIL),
+        ):
+            if text_value is not None and (
+                not text_value or len(text_value) > maximum or not text_value.isprintable()
+            ):
+                raise ValueError("UI operational log text is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "detail": self.detail,
+            "event_name": self.event_name,
+            "level": self.level.value,
+            "occurred_at_utc": self.occurred_at_utc.isoformat(),
+            "reason_code": self.reason_code,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiOperationalLogEntry:
+        _exact(
+            payload,
+            {
+                "detail",
+                "event_name",
+                "level",
+                "occurred_at_utc",
+                "reason_code",
+                "source",
+            },
+        )
+        try:
+            return cls(
+                occurred_at_utc=datetime.fromisoformat(_string(payload, "occurred_at_utc", 64)),
+                level=UiLogLevel(_string(payload, "level", 16)),
+                source=_string(payload, "source", 32),
+                event_name=_string(payload, "event_name", 96),
+                reason_code=_optional_string(payload, "reason_code", 128),
+                detail=_optional_string(payload, "detail", _MAX_UI_LOG_DETAIL),
             )
         except ValueError as exc:
             raise _invalid() from exc
@@ -1642,6 +1716,7 @@ class UiProjectionSnapshot:
     iqoption_execution_metrics: UiIqOptionExecutionMetrics | None = None
     iqoption_entry_ready: bool = False
     iqoption_entry_blocker: str | None = None
+    operational_logs: tuple[UiOperationalLogEntry, ...] = ()
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.health_gates) <= _MAX_GATES:
@@ -1680,6 +1755,8 @@ class UiProjectionSnapshot:
             raise ValueError("Deriv asset ranking count is outside bounds")
         if len(self.iqoption_asset_ranking) > _MAX_IQOPTION_ASSET_RANKS:
             raise ValueError("IQ Option asset ranking count is outside bounds")
+        if len(self.operational_logs) > _MAX_UI_LOG_ENTRIES:
+            raise ValueError("UI operational log count is outside bounds")
         for value in (
             self.digit_martingale_step,
             self.digit_next_stake_minor_units,
@@ -1762,6 +1839,7 @@ class UiProjectionSnapshot:
             ),
             "iqoption_entry_ready": self.iqoption_entry_ready,
             "iqoption_entry_blocker": self.iqoption_entry_blocker,
+            "operational_logs": [item.to_payload() for item in self.operational_logs],
         }
 
     @classmethod
@@ -1799,6 +1877,7 @@ class UiProjectionSnapshot:
             "iqoption_execution_metrics",
             "iqoption_entry_ready",
             "iqoption_entry_blocker",
+            "operational_logs",
         }
         actual_keys = set(payload)
         if not (
@@ -1838,6 +1917,7 @@ class UiProjectionSnapshot:
         iqoption_execution_metrics_payload = payload.get("iqoption_execution_metrics")
         iqoption_entry_ready = payload.get("iqoption_entry_ready", False)
         iqoption_entry_blocker = payload.get("iqoption_entry_blocker")
+        operational_logs_payload = payload.get("operational_logs", [])
         if (
             not isinstance(safe_stop, bool)
             or type(pnl) is not int
@@ -1870,6 +1950,7 @@ class UiProjectionSnapshot:
             or not _bounded_sequence(deriv_strategies_payload, 0, _MAX_DERIV_STRATEGIES)
             or not _bounded_sequence(deriv_asset_ranking_payload, 0, _MAX_DERIV_ASSET_RANKS)
             or not _bounded_sequence(iqoption_asset_ranking_payload, 0, _MAX_IQOPTION_ASSET_RANKS)
+            or not _bounded_sequence(operational_logs_payload, 0, _MAX_UI_LOG_ENTRIES)
         ):
             raise _invalid()
         try:
@@ -1941,6 +2022,10 @@ class UiProjectionSnapshot:
                 ),
                 iqoption_entry_ready,
                 iqoption_entry_blocker,
+                tuple(
+                    UiOperationalLogEntry.from_payload(_mapping(item))
+                    for item in operational_logs_payload
+                ),
             )
         except ValueError as exc:
             raise _invalid() from exc

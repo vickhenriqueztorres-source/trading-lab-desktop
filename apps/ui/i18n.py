@@ -327,6 +327,44 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "y en reconciliación permanecen visibles aquí."
         ),
     },
+    "activity.orders_tab": {"en": "Orders", "es": "Órdenes"},
+    "activity.logs_tab": {"en": "Live logs", "es": "Logs en vivo"},
+    "logs.title": {
+        "en": "Operational log terminal",
+        "es": "Terminal de logs operativos",
+    },
+    "logs.count": {
+        "en": "{visible} visible / {total} received",
+        "es": "{visible} visibles / {total} recibidos",
+    },
+    "logs.search": {
+        "en": "Search event, reason, symbol or order…",
+        "es": "Buscar evento, motivo, activo u orden…",
+    },
+    "logs.pause": {"en": "Pause", "es": "Pausar"},
+    "logs.resume": {"en": "Resume", "es": "Reanudar"},
+    "logs.copy": {"en": "Copy visible", "es": "Copiar visibles"},
+    "logs.clear": {"en": "Clear view", "es": "Limpiar vista"},
+    "logs.notice": {
+        "en": (
+            "Live, bounded projection of the current Core session. Credentials and raw broker "
+            "payloads are never included. Clearing affects this view only."
+        ),
+        "es": (
+            "Proyección en vivo y limitada de la sesión actual del Core. Nunca incluye "
+            "credenciales ni payloads brutos del corredor. Limpiar solo afecta esta vista."
+        ),
+    },
+    "logs.level.all": {"en": "All levels", "es": "Todos los niveles"},
+    "logs.level.info": {"en": "Info", "es": "Información"},
+    "logs.level.warning": {"en": "Warnings", "es": "Alertas"},
+    "logs.level.error": {"en": "Errors", "es": "Errores"},
+    "logs.source.all": {"en": "All sources", "es": "Todos los orígenes"},
+    "logs.source.core": {"en": "Core", "es": "Core"},
+    "logs.source.deriv": {"en": "Deriv", "es": "Deriv"},
+    "logs.source.iqoption": {"en": "IQ Option", "es": "IQ Option"},
+    "logs.source.worker": {"en": "Workers", "es": "Workers"},
+    "logs.source.other": {"en": "Other", "es": "Otros"},
     "broker.deriv.intro": {
         "en": (
             "Deriv is monitored independently. A Deriv failure does not hide the IQ Option "

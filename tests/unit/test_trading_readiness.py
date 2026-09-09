@@ -88,3 +88,5 @@ def test_operational_journal_persists_redacted_lifecycle_and_rotates(tmp_path: P
     current = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert current[-1]["event"] == "recovery_completed"
     assert current[-1]["fields"] == {"armed": False, "generation": 2}
+    assert sink.recent_events[-1].event_name == "recovery_completed"
+    assert len(sink.recent_events) == 3

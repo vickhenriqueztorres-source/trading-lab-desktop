@@ -22,9 +22,11 @@ arbitrários.
 Sinks atuais:
 
 - `NullEventSink`: descarta eventos explicitamente;
-- `InMemoryEventSink`: collector thread-safe, bounded apenas pelo ciclo de vida do teste/harness.
+- `InMemoryEventSink`: collector thread-safe para teste/harness, com projeção recente limitada;
+- `PersistentJsonlEventSink`: journal local rotativo e append-only, com anel em memória limitado aos
+  256 eventos emitidos na sessão atual.
 
-Não existe sink remoto, arquivo de log de produção ou analytics nesta fase.
+Não existe sink remoto ou analytics. O journal local não é lido diretamente pela UI.
 
 ## 3. Categorias de eventos
 
@@ -104,7 +106,19 @@ Snapshots de shadow/soak incluem estado, health, subscriptions, ciclos, falhas, 
 recursos. Eles são imutáveis e bounded. Relatórios temporais/matriz serializam somente essas
 projeções redigidas; nunca comandos financeiros.
 
-### 7.1 Publicação e retenção de relatórios de soak
+### 7.1 Terminal de logs da UI
+
+A aba `Atividade > Logs en vivo` apresenta até 160 eventos recentes da sessão corrente. A UI
+recebe essa informação somente dentro de `UiProjectionSnapshot`; não lê banco, journal ou worker.
+Cada linha contém horário local, nível visual derivado, origem, nome do evento, `reason_code` e no
+máximo dez campos de uma allowlist fechada.
+
+Campos fora da allowlist, valores com caracteres não permitidos, payload bruto, e-mail, senha,
+token, cookie, sessão e exceção externa não atravessam essa projeção. Os filtros de nível/origem,
+busca, pausa, cópia e limpeza são exclusivamente visuais. Limpar não remove o journal nem altera
+estado financeiro. Pausar não pausa Core, workers, estratégias ou acompanhamento de ordens.
+
+### 7.2 Publicação e retenção de relatórios de soak
 
 `atomic_write_json` serializa JSON UTF-8 determinístico, rejeita `NaN`/infinito e publica por
 arquivo temporário único no mesmo diretório, `flush`, `fsync` e `os.replace`. Falha de
@@ -154,7 +168,7 @@ Implementado na Fase 3 (Fatia 3.1) via `DiagnosticBundleBuilder` (`packages/obse
   - `environment.json`: Sistema operacional, versão do Python, uptime do processo e árvore de processos (Launcher/Worker).
   - `health_gates.json`: Snapshot estruturado dos Health Gates (global e por corretora/conta).
   - `risk_summary.json`: Métricas consolidadas de risco global (exposição, stop loss diário, perdas consecutivas, estado de risco).
-  - `recent_events.json`: Lista delimitada (bounded, padrão 1000) de `OperationalEvent` recentes emitidos para `InMemoryEventSink`.
+  - `recent_events.json`: lista delimitada dos `OperationalEvent` recentes retidos pelo sink ativo.
 - **Exclusões Estritas e Invariantes de Segurança**:
   - Proibição absoluta de inclusão de bancos SQLite (`state.db`, `strategy_data.db`, `*.db-wal`), arquivos de vault (`.vault`), chaves Ed25519/RSA/PEM, tokens de sessão ou cookies.
   - **Fail-Closed Security Scan**: Antes da compactação final em `.zip`, todo o diretório temporário passa por varredura com `SecretScanner`. Se qualquer padrão sensível for detectado (`report.is_clean == False`), a geração é imediatamente abortada, o diretório temporário é destruído (`shutil.rmtree`) e uma exceção `DiagnosticSecurityViolationError` é lançada.
@@ -186,9 +200,12 @@ Consulte [OPERATIONS_RUNBOOK.md](OPERATIONS_RUNBOOK.md).
   material;
 - geração de pacotes de diagnóstico redigidos (`tests/unit/test_diagnostic_bundle.py`);
 - exportação e validação ponta a ponta via IPC/UI (`tests/integration/test_diagnostic_ui_export.py`).
+- contrato, allowlist, limite e classificação da projeção do terminal;
+- filtros, pausa, limpeza local e retomada do componente Qt em modo headless.
 
 ## 12. Limitações
 
-- sink in-memory não possui persistência em disco de longo prazo;
+- o terminal mostra somente os eventos emitidos desde o startup atual do Core; o histórico rotativo
+  permanece disponível apenas no pacote de diagnóstico sanitizado;
 - não há envio automático de telemetria remota por design de privacidade e isolamento;
 - o pacote de diagnóstico é estritamente local (`reports/diagnostics/`), cabendo ao usuário o compartilhamento voluntário com o suporte.

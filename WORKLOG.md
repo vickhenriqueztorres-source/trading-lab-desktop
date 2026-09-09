@@ -5778,3 +5778,24 @@ Validação:
 - Smoke portátil headless com perfil novo e worker simulado: exit 0, nenhum processo residual,
   SQLite quick_check=ok; trade_intents, risk_reservations, outbox_messages e orders todos zero.
   O smoke não conectou à IQ Option nem validou a aceitação de uma operação externa.
+
+## 2026-09-09 — Terminal de logs operacionais na UI
+
+- Adicionado `Atividade > Logs en vivo`, separado da tabela de ordens, com busca, filtros por nível
+  e origem, pausa/retomada, cópia das linhas visíveis e limpeza exclusivamente local.
+- O Core projeta até 160 eventos recentes por IPC. O sink persistente mantém anel thread-safe de
+  256 eventos da sessão; a UI continua sem acesso direto ao journal, SQLite ou workers.
+- A fronteira usa allowlist fechada de campos escalares, normalização bounded e exclusão de senha,
+  token, cookie, autorização, sessão, e-mail, payload bruto e exceção externa. Severidade é apenas
+  visual e não altera Health Gates nem estado financeiro.
+- Testes novos cobrem round-trip e limites do protocolo, segredo/campo não permitido, origem e
+  severidade, filtros Qt, pausa sem perda, limpeza local e retomada. Requisitos: R-OBS-001/002/003,
+  R-UI-003, R-SEC-001 e R-TEST-001. Detalhes em `docs/UI_LOG_TERMINAL_20260909.md`.
+- Validação final: 1.376 passed, 4 skipped; Ruff/format, mypy (311), compileall, diff-check e
+  scanner aprovados. Onedir com 548 arquivos e portátil com 963 entradas passaram integridade e
+  health-check. Artefato `dist/ui-log-terminal-r2-20260909/TradingLab-Desktop-v1.9.11-UI-LOG-TERMINAL.exe`,
+  SHA-256 `10BC4BFCD3559235A8F4983FB7A89A99EE98DA0E8C2C95A75A30AF7B98238E87`.
+- A primeira tentativa de PyInstaller em uma pasta de saída longa atingiu o limite de caminho do
+  Windows durante `COLLECT`; a recompilação canônica em `dist/log` concluiu sem alteração de código.
+- O portátil R1 foi supersedido após endurecer a validação runtime do nível do evento; R2 é o
+  artefato final e repetiu scanner, integridade e health-check com zero processo residual.

@@ -20,6 +20,7 @@ from apps.core.worker_supervisor import WorkerHealthState
 from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
 from packages.domain.models import Broker
 from packages.observability.diagnostic import DiagnosticBundleResult
+from packages.observability.events import OperationalEvent
 from packages.protocol import (
     PROTOCOL_VERSION,
     BrokerCardStatus,
@@ -48,7 +49,9 @@ from packages.protocol import (
     UiIqOptionLoginAck,
     UiIqOptionLoginCommand,
     UiIqOptionRiskConfig,
+    UiLogLevel,
     UiMultiStrategyMetrics,
+    UiOperationalLogEntry,
     UiProjectionSnapshot,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
@@ -75,6 +78,35 @@ _RISK_LOCK_REASONS = {
     "HG_RECONCILIATION_UNAVAILABLE",
 }
 _RECONCILING_REASONS = {"HG_RECONCILIATION_REQUIRED"}
+_UI_LOG_FIELD_ALLOWLIST = frozenset(
+    {
+        "armed",
+        "attempt",
+        "broker",
+        "component",
+        "count",
+        "duration_ms",
+        "generation",
+        "latency_ms",
+        "market",
+        "message_type",
+        "mode",
+        "operation",
+        "order_id",
+        "process_id",
+        "product",
+        "scope",
+        "state",
+        "status",
+        "strategy_id",
+        "symbol",
+        "worker_type",
+    }
+)
+_UI_LOG_VALUE_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:/+-"
+)
+_UI_LOG_LIMIT = 160
 _HEALTH_DESCRIPTIONS = {
     "HG_SAFE_STOP": (
         "Novas entradas pausadas pelo operador; ordens existentes continuam acompanhadas."
@@ -100,6 +132,108 @@ _HEALTH_DESCRIPTIONS = {
     ),
     "HG_COOLDOWN_ACTIVE": "Pausa obrigatória pós-perda ativa.",
 }
+
+
+def _safe_ui_log_token(value: object, *, maximum: int) -> str | None:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if type(value) is int:
+        return str(value)
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate or len(candidate) > maximum:
+        return None
+    if not all(character in _UI_LOG_VALUE_CHARS for character in candidate):
+        return None
+    return candidate
+
+
+def _normalise_ui_log_identifier(value: str, *, fallback: str, maximum: int) -> str:
+    cleaned = "".join(
+        character if character in _UI_LOG_VALUE_CHARS else "_" for character in value.strip()
+    )[:maximum]
+    return cleaned or fallback
+
+
+def _ui_log_level(event: OperationalEvent) -> UiLogLevel:
+    text = f"{event.event_name} {event.reason_code or ''}".upper()
+    if any(
+        marker in text for marker in ("CRASH", "ERROR", "FAILED", "FATAL", "REJECTED", "UNKNOWN")
+    ):
+        return UiLogLevel.ERROR
+    if any(
+        marker in text
+        for marker in (
+            "BLOCKED",
+            "DEGRADED",
+            "DISCONNECT",
+            "DENIED",
+            "STALE",
+            "SUSPENDED",
+            "TIMEOUT",
+            "UNAVAILABLE",
+            "UNTRUSTED",
+        )
+    ):
+        return UiLogLevel.WARNING
+    return UiLogLevel.INFO
+
+
+def _ui_log_source(event: OperationalEvent) -> str:
+    fields = dict(event.fields)
+    for key in ("broker", "component", "worker_type"):
+        candidate = _safe_ui_log_token(fields.get(key), maximum=32)
+        if candidate is not None:
+            return candidate.upper()
+    name = event.event_name.upper()
+    if "IQOPTION" in name or "IQ_OPTION" in name:
+        return "IQOPTION"
+    if "DERIV" in name:
+        return "DERIV"
+    if "WORKER" in name:
+        return "WORKER"
+    return "CORE"
+
+
+def _to_ui_operational_log(event: OperationalEvent) -> UiOperationalLogEntry:
+    details: list[str] = []
+    for key, value in event.fields:
+        if key not in _UI_LOG_FIELD_ALLOWLIST:
+            continue
+        safe_value = _safe_ui_log_token(value, maximum=64)
+        if safe_value is not None:
+            details.append(f"{key}={safe_value}")
+        if len(details) >= 10:
+            break
+    reason_code = None
+    if event.reason_code is not None:
+        reason_code = _normalise_ui_log_identifier(
+            event.reason_code,
+            fallback="REASON_REDACTED",
+            maximum=128,
+        )
+    return UiOperationalLogEntry(
+        occurred_at_utc=event.occurred_at,
+        level=_ui_log_level(event),
+        source=_ui_log_source(event),
+        event_name=_normalise_ui_log_identifier(
+            event.event_name,
+            fallback="operational_event",
+            maximum=96,
+        ),
+        reason_code=reason_code,
+        detail=" ".join(details) or None,
+    )
+
+
+def _ui_operational_logs(runtime: CoreRuntime) -> tuple[UiOperationalLogEntry, ...]:
+    sink = getattr(runtime, "event_sink", None)
+    recent = getattr(sink, "recent_events", ())
+    if not isinstance(recent, tuple):
+        return ()
+    events = tuple(item for item in recent if isinstance(item, OperationalEvent))
+    return tuple(_to_ui_operational_log(item) for item in events[-_UI_LOG_LIMIT:])
 
 
 def _to_ui_digit_config(config: DigitRiskConfig) -> UiDigitRiskConfig:
@@ -642,6 +776,7 @@ class CoreUiProjectionBuilder:
             iqoption_execution_metrics=self._iqoption_execution_metrics(),
             iqoption_entry_ready=iq_entry_ready,
             iqoption_entry_blocker=iq_entry_blocker,
+            operational_logs=_ui_operational_logs(self._runtime),
         )
 
     def _orders(self, *, since_utc: datetime | None = None) -> list[OrderSummary]:
