@@ -91,8 +91,17 @@ class UiController:
         self.refresh()
         return ack
 
-    def login_iqoption(self, account_mode: str) -> UiIqOptionLoginAck:
-        ack = self._client.login_iqoption(account_mode)
+    def login_iqoption(
+        self,
+        account_mode: str,
+        *,
+        source: str = "manual",
+    ) -> UiIqOptionLoginAck:
+        ack = (
+            self._client.login_iqoption(account_mode)
+            if source == "manual"
+            else self._client.login_iqoption(account_mode, source=source)
+        )
         if ack.connected:
             self.refresh()
         return ack

@@ -16,6 +16,7 @@ from packages.brokers.iqoption.fake_transport import (
     FakeIQOptionTransport,
 )
 from packages.brokers.iqoption.session import IQOptionPracticeSession
+from packages.brokers.iqoption.ssid_store import SsidStore, StoredSession
 from packages.brokers.iqoption.validators import (
     validate_iqoption_account,
     validate_iqoption_order_command,
@@ -33,6 +34,8 @@ __all__ = [
     "IQOptionCredentials",
     "IQOptionExternalError",
     "IQOptionPracticeSession",
+    "SsidStore",
+    "StoredSession",
     "validate_iqoption_account",
     "validate_iqoption_order_command",
 ]

@@ -10,6 +10,7 @@ from packages.brokers.iqoption.community_read_only import (
     IQOptionCommunityReadOnlySession,
 )
 from packages.brokers.iqoption.credentials import IQOptionCredentialVault
+from packages.brokers.iqoption.ssid_store import SsidStore
 
 
 def main() -> int:
@@ -23,6 +24,12 @@ def main() -> int:
         required=True,
         choices=tuple(item.value for item in IQOptionAccountMode),
     )
+    parser.add_argument(
+        "--http-login-policy",
+        choices=("allow", "deny"),
+        default="allow",
+        help="Whether this worker may use broker HTTP login after cached-session recovery",
+    )
     arguments = parser.parse_args()
 
     try:
@@ -32,10 +39,16 @@ def main() -> int:
         mode = IQOptionAccountMode(arguments.account_mode)
         if credentials.account_mode != mode.value:
             return 5
+        ssid_store = SsidStore(arguments.vault_dir)
+        stored_session = ssid_store.load(mode.value)
         session = IQOptionCommunityReadOnlySession(
             credentials.email,
             credentials.password,
             mode,
+            initial_ssid=None if stored_session is None else stored_session.ssid,
+            allow_http_login=arguments.http_login_policy == "allow",
+            on_ssid_ready=lambda ssid: ssid_store.save(ssid, mode.value),
+            on_ssid_invalid=lambda: ssid_store.clear(mode.value),
         )
         server = IQOptionReadOnlyWorkerServer(
             arguments.host,

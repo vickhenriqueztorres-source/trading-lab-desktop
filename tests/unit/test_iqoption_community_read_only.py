@@ -1179,3 +1179,48 @@ def test_clock_remains_synchronized_over_time_and_heartbeat() -> None:
         assert clock_hb.offset_milliseconds == 0
     finally:
         session.close()
+
+
+def test_initial_ssid_reconnects_without_http_login_and_refreshes_store_hook() -> None:
+    websocket = FakeWebSocket(_messages())
+    saved: list[str] = []
+
+    def forbidden_login(_email: str, _password: SecretValue, _timeout: float) -> SecretValue:
+        raise AssertionError("HTTP login must not run for a valid cached SSID")
+
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text("secret"),
+        IQOptionAccountMode.PRACTICE,
+        login=forbidden_login,
+        websocket_factory=lambda: websocket,
+        initial_ssid=SecretValue.from_text("cached-session"),
+        allow_http_login=False,
+        on_ssid_ready=lambda value: saved.append(value.reveal_text()),
+    )
+    try:
+        assert session.connect().connected
+        assert saved == ["cached-session"]
+    finally:
+        session.close()
+
+
+def test_rejected_initial_ssid_is_cleared_without_http_fallback() -> None:
+    messages = _messages()
+    messages[0] = {"name": "authenticated", "msg": False}
+    invalidated: list[bool] = []
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text("secret"),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected HTTP login")),
+        websocket_factory=lambda: FakeWebSocket(messages),
+        initial_ssid=SecretValue.from_text("expired-session"),
+        allow_http_login=False,
+        on_ssid_invalid=lambda: invalidated.append(True),
+    )
+
+    with pytest.raises(IQOptionExternalError, match="IQOPTION_AUTH_FAILED"):
+        session.connect()
+
+    assert invalidated == [True]

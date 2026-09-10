@@ -61,21 +61,33 @@ class UiDigitRiskConfigStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class UiIqOptionLoginCommand:
     account_mode: str
+    source: str = "manual"
 
     def __post_init__(self) -> None:
         normalized = self.account_mode.strip().lower()
         if normalized not in {"practice", "real", "saved"}:
             raise ValueError("IQ Option account mode is invalid")
+        normalized_source = self.source.strip().lower()
+        if normalized_source not in {"auto", "manual"}:
+            raise ValueError("IQ Option login source is invalid")
         object.__setattr__(self, "account_mode", normalized)
+        object.__setattr__(self, "source", normalized_source)
 
     def to_payload(self) -> dict[str, object]:
-        return {"account_mode": self.account_mode}
+        payload: dict[str, object] = {"account_mode": self.account_mode}
+        if self.source != "manual":
+            payload["source"] = self.source
+        return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionLoginCommand:
-        _exact(payload, {"account_mode"})
+        if set(payload) not in ({"account_mode"}, {"account_mode", "source"}):
+            raise _invalid()
         try:
-            return cls(_string(payload, "account_mode", 16))
+            return cls(
+                _string(payload, "account_mode", 16),
+                "manual" if "source" not in payload else _string(payload, "source", 8),
+            )
         except ValueError as exc:
             raise _invalid() from exc
 
@@ -85,29 +97,50 @@ class UiIqOptionLoginAck:
     accepted: bool
     connected: bool
     reason_code: str
+    retry_after_seconds: int = 0
+    attempts_in_window: int = 0
 
     def __post_init__(self) -> None:
         if not self.reason_code or len(self.reason_code) > 64:
             raise ValueError("IQ Option login reason is invalid")
         if self.connected and not self.accepted:
             raise ValueError("connected login must be accepted")
+        if self.retry_after_seconds < 0 or self.attempts_in_window < 0:
+            raise ValueError("IQ Option login retry metadata is invalid")
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "accepted": self.accepted,
             "connected": self.connected,
             "reason_code": self.reason_code,
         }
+        if self.retry_after_seconds or self.attempts_in_window:
+            payload["retry_after_seconds"] = self.retry_after_seconds
+            payload["attempts_in_window"] = self.attempts_in_window
+        return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> UiIqOptionLoginAck:
-        _exact(payload, {"accepted", "connected", "reason_code"})
+        base_fields = {"accepted", "connected", "reason_code"}
+        extended_fields = {*base_fields, "retry_after_seconds", "attempts_in_window"}
+        if set(payload) not in (base_fields, extended_fields):
+            raise _invalid()
         accepted = payload.get("accepted")
         connected = payload.get("connected")
         if not isinstance(accepted, bool) or not isinstance(connected, bool):
             raise _invalid()
+        retry_after = payload.get("retry_after_seconds", 0)
+        attempts = payload.get("attempts_in_window", 0)
+        if type(retry_after) is not int or type(attempts) is not int:
+            raise _invalid()
         try:
-            return cls(accepted, connected, _string(payload, "reason_code", 64))
+            return cls(
+                accepted,
+                connected,
+                _string(payload, "reason_code", 64),
+                retry_after,
+                attempts,
+            )
         except ValueError as exc:
             raise _invalid() from exc
 

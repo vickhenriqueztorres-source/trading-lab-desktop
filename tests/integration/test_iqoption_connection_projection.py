@@ -614,7 +614,7 @@ def test_iq_recovery_preserves_deriv_entry_authority(
         service.emergency_shutdown()
 
 
-def test_core_connection_guard_blocks_fourth_external_session_start(
+def test_worker_start_failure_does_not_spend_http_login_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -646,9 +646,9 @@ def test_core_connection_guard_blocks_fourth_external_session_start(
     finally:
         service.emergency_shutdown()
 
-    assert [item[2] for item in results[:3]] == ["IQOPTION_NETWORK_UNREACHABLE"] * 3
-    assert results[3] == (False, False, "IQOPTION_CONNECTION_QUARANTINED")
-    assert starts == 3
+    assert [item[2] for item in results] == ["IQOPTION_NETWORK_UNREACHABLE"] * 4
+    assert starts == 4
+    assert service._iqoption_connection_safety.snapshot().attempts_in_window == 0
 
 
 def test_iqoption_connector_cannot_attach_after_shutdown_begins(

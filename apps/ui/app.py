@@ -1149,8 +1149,11 @@ class TradingLabMainWindow(QMainWindow):
             "IQOPTION_2FA_REQUIRED": "A conta exige autenticação em dois fatores.",
             "IQOPTION_RATE_LIMITED": "Muitas tentativas. Aguarde e tente novamente.",
             "IQOPTION_CONNECTION_QUARANTINED": (
-                "Limite preventivo de conexão atingido. Aguarde 15 minutos antes de tentar "
-                "novamente. Reiniciar o aplicativo não remove essa proteção."
+                "Reconexão automática em andamento. O bot continua armado; "
+                "use Reconectar agora para uma tentativa manual independente."
+            ),
+            "IQOPTION_MANUAL_LOGIN_THROTTLED": (
+                "Reconectar agora já foi solicitado. Aguarde até 2 minutos para repetir."
             ),
             "IQOPTION_CONNECTION_SAFETY_STATE_INVALID": (
                 "O estado local de proteção da conexão não pôde ser validado. "
@@ -1186,6 +1189,18 @@ class TradingLabMainWindow(QMainWindow):
             ),
         }.get(reason_code, f"Não foi possível conectar: {reason_code}")
         self._iqoption_workspace.set_iqoption_login_status(error_message)
+        if isinstance(outcome, UiIqOptionLoginAck) and outcome.retry_after_seconds > 0:
+            self._iqoption_workspace.set_iqoption_reconnect_wait(
+                outcome.retry_after_seconds,
+                outcome.attempts_in_window,
+            )
+        if reason_code in {
+            "IQOPTION_CONNECTION_QUARANTINED",
+            "IQOPTION_MANUAL_LOGIN_THROTTLED",
+            "IQOPTION_WEBSOCKET_RECONNECT_LIMIT_REACHED",
+            "IQOPTION_CONNECTION_IN_PROGRESS",
+        }:
+            return
         QMessageBox.warning(self, "Login IQ Option", error_message)
 
     def _start_iqoption_saved_login(self) -> None:
@@ -1217,7 +1232,7 @@ class TradingLabMainWindow(QMainWindow):
 
         def reconnect() -> None:
             try:
-                result: object = self._controller.login_iqoption("saved")
+                result: object = self._controller.login_iqoption("saved", source="auto")
             except (OSError, RuntimeError, ValueError, UiIpcError) as exc:
                 result = exc
             self._iqoption_saved_login_finished.emit(result)

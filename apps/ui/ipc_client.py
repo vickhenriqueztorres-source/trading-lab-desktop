@@ -182,11 +182,16 @@ class UiIpcClient:
             MessageType.UI_RESET_DIGIT_TEST_SESSION_ACK,
         )
 
-    def login_iqoption(self, account_mode: str) -> UiIqOptionLoginAck:
+    def login_iqoption(
+        self,
+        account_mode: str,
+        *,
+        source: str = "manual",
+    ) -> UiIqOptionLoginAck:
         response = self._round_trip(
             MessageType.UI_IQOPTION_LOGIN_COMMAND,
             MessageType.UI_IQOPTION_LOGIN_ACK,
-            payload=UiIqOptionLoginCommand(account_mode).to_payload(),
+            payload=UiIqOptionLoginCommand(account_mode, source).to_payload(),
             # The Core allows a bounded HTTP fallback, WebSocket opening and a
             # separate account-confirmation phase.  Keep the UI IPC envelope
             # outside that worker deadline; this runs on the UI background

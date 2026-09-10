@@ -5910,3 +5910,35 @@ Validação:
   zero intents, reservas, outbox e ordens. Artefato:
   `dist/iq-connection-resilience-final-20260910/TradingLab-Desktop-v1.9.11-IQ-CONNECTION-RESILIENCE-FINAL.exe`;
   SHA-256 `262BB447114C317AE2FA04AC8BD4501E89385EAE737FBBD142355A7D2D4AC26C`.
+
+## 2026-09-10 — Persistência SSID e orçamento HTTP separado da recuperação IQ Option
+
+- O SSID validado passou a ser persistido por modo de conta no cofre DPAPI CurrentUser, com TTL de
+  20 horas e escrita atômica já garantida pelo vault. O valor continua restrito ao worker: não
+  atravessa Core, IPC, argv, ambiente, projeção nem logs. Rejeição explícita limpa a sessão; timeout
+  preserva o cache.
+- Todo connect e respawn tenta primeiro um worker com login HTTP proibido. Worker morto,
+  `IPC_CONNECTION_LOST` e `WORKER_NOT_READY` agora reutilizam a sessão cifrada; somente ausência ou
+  rejeição do SSID libera fallback HTTP. Falha de startup do worker não consome tentativa HTTP.
+- O limitador foi dividido em bucket automático persistente (3/15 min) e manual em memória (1/2
+  min). Um clique humano admitido limpa quarentena automática antiga. Origem `auto/manual` passou a
+  integrar o protocolo UI sem transportar segredos.
+- Clock e payout são gates fail-closed de entrada e não chamam recuperação de sessão. Probe de
+  relógio passou a 5 s; keepalive WebSocket passou a 25/40 s. UI substituiu o modal da quarentena
+  por estado inline, contagem regressiva, `Reconectar agora` e badge `BOT ARMADO · RECONECTANDO`.
+- Testes novos cobrem store/TTL/corrupção, buckets separados, respawn por cache, fallback HTTP único,
+  exceção de clock sem teardown, UI inline e validador do drill manual. A expectativa antiga que
+  contava falha de criação do worker como tentativa HTTP foi substituída pelo contrato correto de
+  orçamento baseado em login realmente permitido.
+- Validação final: 1.408 passed, 4 skipped, 0 failed em 432,99 s; 59 testes focados e 15 de
+  integração IQ também passaram. Ruff/format (531 arquivos), mypy (313 arquivos), compileall,
+  diff-check e scanner do repositório passaram. O callback de limpeza temporária do pytest ainda
+  emite `WinError 5` após o exit 0, sem alterar o resultado.
+- Build canônico PyInstaller 6.22.2 aprovado com 550 arquivos no manifesto, scanner zero segredos,
+  integridade e health-check interno aprovados. Portátil com 992 entradas, recurso único
+  `TradingLab.payload.zip`, ProductVersion 1.9.11 e 59.222.528 bytes. Artefato:
+  `dist/iq-ssid-portable-final-20260910/TradingLab-Desktop-v1.9.11-IQ-SSID-PERSISTENCE-FINAL.exe`;
+  SHA-256 `A9549E0A0425CE39040D97463E3072CF983FDD46A5CF32B2DD974F6E9BB2C6C1`.
+- O caos manual de Wi-Fi/suspensão/kill/restart no EXE permanece gate externo e não foi declarado
+  como executado. O smoke do invólucro portátil não foi iniciado porque outra versão do aplicativo
+  estava aberta sob o mutex único; a pasta onedir incorporada passou o health-check canônico.

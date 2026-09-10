@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import secrets
 import socket
 import threading
@@ -9,6 +10,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
@@ -846,7 +848,8 @@ class CoreUiProjectionService:
             Callable[[DigitRiskConfig], tuple[bool, str | None]] | None
         ) = None,
         digit_test_session_reset: Callable[[], tuple[bool, str]] | None = None,
-        iqoption_login: Callable[[str], tuple[bool, bool, str]] | None = None,
+        iqoption_login: Callable[[str, str], tuple[bool, bool, str]] | None = None,
+        iqoption_login_status: Callable[[], tuple[int, int]] | None = None,
         iqoption_risk_config_update: (
             Callable[[IqOptionRiskConfig], tuple[bool, str | None]] | None
         ) = None,
@@ -868,6 +871,10 @@ class CoreUiProjectionService:
         self._digit_risk_config_update = digit_risk_config_update
         self._digit_test_session_reset = digit_test_session_reset
         self._iqoption_login = iqoption_login
+        self._iqoption_login_status = iqoption_login_status
+        self._iqoption_login_accepts_source = (
+            iqoption_login is not None and len(inspect.signature(iqoption_login).parameters) >= 2
+        )
         self._iqoption_risk_config_update = iqoption_risk_config_update
         self._iqoption_bot_control = iqoption_bot_control
         self._request_timeout = request_timeout
@@ -1136,8 +1143,28 @@ class CoreUiProjectionService:
                 )
             else:
                 try:
-                    accepted, connected, reason = self._iqoption_login(iq_command.account_mode)
-                    iq_ack = UiIqOptionLoginAck(accepted, connected, reason)
+                    if self._iqoption_login_accepts_source:
+                        accepted, connected, reason = self._iqoption_login(
+                            iq_command.account_mode,
+                            iq_command.source,
+                        )
+                    else:
+                        legacy_login = cast(
+                            Callable[[str], tuple[bool, bool, str]],
+                            self._iqoption_login,
+                        )
+                        accepted, connected, reason = legacy_login(iq_command.account_mode)
+                    retry_after = 0
+                    attempts = 0
+                    if not connected and self._iqoption_login_status is not None:
+                        retry_after, attempts = self._iqoption_login_status()
+                    iq_ack = UiIqOptionLoginAck(
+                        accepted,
+                        connected,
+                        reason,
+                        retry_after,
+                        attempts,
+                    )
                 except (OSError, RuntimeError, ValueError):
                     iq_ack = UiIqOptionLoginAck(
                         accepted=False,

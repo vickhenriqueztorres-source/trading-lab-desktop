@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -69,6 +69,11 @@ class IqOptionWorkspaceWidget(QWidget):
         self._orders: tuple[OrderSummary, ...] = ()
         self._bot_armed = False
         self._bot_reason = "IQOPTION_BOT_DISARMED"
+        self._reconnect_remaining_seconds = 0
+        self._reconnect_attempts = 0
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setInterval(1_000)
+        self._reconnect_timer.timeout.connect(self._tick_reconnect_countdown)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 14, 18, 14)
@@ -299,7 +304,14 @@ class IqOptionWorkspaceWidget(QWidget):
             self._automation_pill.setText("● BOT ATIVO")
             self._automation_pill.setObjectName("StatusPillOnline")
         elif armed:
-            self._automation_pill.setText("● BOT LIGADO · ENTRADAS BLOQUEADAS")
+            if reason in {
+                "TRANSPORT_DOWN",
+                "IQOPTION_CONNECTION_QUARANTINED",
+                "IQOPTION_CONNECTION_IN_PROGRESS",
+            }:
+                self._automation_pill.setText("● BOT ARMADO · RECONECTANDO")
+            else:
+                self._automation_pill.setText("● BOT LIGADO · ENTRADAS BLOQUEADAS")
             self._automation_pill.setObjectName("StatusPillOffline")
         else:
             self._automation_pill.setText("○ BOT EM ESPERA")
@@ -347,7 +359,33 @@ class IqOptionWorkspaceWidget(QWidget):
             self._iqoption_login_status.setText(message)
 
     def set_iqoption_login_status(self, message: str) -> None:
+        self._reconnect_timer.stop()
+        self._reconnect_remaining_seconds = 0
+        if self._iqoption_login_button is not None:
+            self._iqoption_login_button.setText("🔑 " + t("iq_option.login.button"))
         self._iqoption_login_status.setText(message)
+
+    def set_iqoption_reconnect_wait(self, seconds: int, attempts: int) -> None:
+        self._reconnect_remaining_seconds = max(0, seconds)
+        self._reconnect_attempts = max(0, attempts)
+        if self._iqoption_login_button is not None:
+            self._iqoption_login_button.setText("↻ Reconectar agora")
+        self._render_reconnect_countdown()
+        if self._reconnect_remaining_seconds > 0:
+            self._reconnect_timer.start()
+
+    def _tick_reconnect_countdown(self) -> None:
+        self._reconnect_remaining_seconds = max(0, self._reconnect_remaining_seconds - 1)
+        self._render_reconnect_countdown()
+        if self._reconnect_remaining_seconds == 0:
+            self._reconnect_timer.stop()
+
+    def _render_reconnect_countdown(self) -> None:
+        minutes, seconds = divmod(self._reconnect_remaining_seconds, 60)
+        self._iqoption_login_status.setText(
+            f"Reconexão automática em {minutes:02d}:{seconds:02d} · "
+            f"tentativas {self._reconnect_attempts}/3 · SSID gerenciado pelo worker"
+        )
 
     def tab_label(self) -> str:
         if self._last_status is None:

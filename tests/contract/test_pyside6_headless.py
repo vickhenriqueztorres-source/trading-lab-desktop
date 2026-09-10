@@ -179,7 +179,7 @@ def test_saved_iqoption_practice_login_runs_without_password_dialog(qapp: QAppli
         qapp.processEvents()
         time.sleep(0.01)
 
-    mock_controller.login_iqoption.assert_called_once_with("saved")
+    mock_controller.login_iqoption.assert_called_once_with("saved", source="auto")
     assert "reconectada" in window._iqoption_workspace._iqoption_login_status.text().lower()
     window.close()
 

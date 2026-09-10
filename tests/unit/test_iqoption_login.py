@@ -47,6 +47,18 @@ def test_iqoption_login_ack_rejects_inconsistent_connected_state() -> None:
         UiIqOptionLoginAck(False, True, "BAD")
 
 
+def test_iqoption_login_ack_round_trips_retry_countdown() -> None:
+    ack = UiIqOptionLoginAck(
+        False,
+        False,
+        "IQOPTION_CONNECTION_QUARANTINED",
+        retry_after_seconds=341,
+        attempts_in_window=3,
+    )
+
+    assert UiIqOptionLoginAck.from_payload(ack.to_payload()) == ack
+
+
 def test_iqoption_vault_round_trip_is_scoped_to_practice(monkeypatch: pytest.MonkeyPatch) -> None:
     values: dict[str, SecretValue] = {}
 

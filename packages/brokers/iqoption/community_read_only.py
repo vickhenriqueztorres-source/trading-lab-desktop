@@ -62,7 +62,7 @@ IQOPTION_WEBSOCKET_RECONNECT_WINDOW_SECONDS = 15 * 60
 IQOPTION_DIGITAL_CATALOG_RETRY_SECONDS = 15 * 60.0
 IQOPTION_CLOCK_MAX_AGE_SECONDS = 30.0
 IQOPTION_CLOCK_PROBE_INTERVAL_SECONDS = 10.0
-IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS = 2.0
+IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS = 5.0
 IQOPTION_CLOCK_REFRESH_TIMEOUT_SECONDS = 2.0
 
 # Legacy bootstrap only. The first successful session catalogue atomically
@@ -219,8 +219,8 @@ def _websocket_factory() -> IQOptionWebSocket:
                 url,
                 open_timeout=10,
                 close_timeout=3,
-                ping_interval=20,
-                ping_timeout=20,
+                ping_interval=25,
+                ping_timeout=40,
                 max_size=IQOPTION_MAX_MESSAGE_BYTES,
                 max_queue=4,
                 proxy=True,
@@ -248,6 +248,10 @@ class IQOptionCommunityReadOnlySession:
         websocket_factory: WebSocketFactory = _websocket_factory,
         monotonic: Callable[[], float] = time.monotonic,
         wall_time: Callable[[], float] = time.time,
+        initial_ssid: SecretValue | None = None,
+        allow_http_login: bool = True,
+        on_ssid_ready: Callable[[SecretValue], None] | None = None,
+        on_ssid_invalid: Callable[[], None] | None = None,
     ) -> None:
         self._email = email
         self._password = password
@@ -256,6 +260,9 @@ class IQOptionCommunityReadOnlySession:
         self._websocket_factory = websocket_factory
         self._monotonic = monotonic
         self._wall_time = wall_time
+        self._allow_http_login = allow_http_login
+        self._on_ssid_ready = on_ssid_ready
+        self._on_ssid_invalid = on_ssid_invalid
         self._lock = threading.Lock()
         self._connect_lock = threading.Lock()
         self._clock_query_lock = threading.Lock()
@@ -272,9 +279,9 @@ class IQOptionCommunityReadOnlySession:
         self._disconnected = threading.Event()
         self._websocket: IQOptionWebSocket | None = None
         self._reader: threading.Thread | None = None
-        # SSID is deliberately process-memory-only.  It is reused after a
-        # transport drop and is never serialized, logged or returned to Core.
-        self._session_cookie: SecretValue | None = None
+        # The worker may receive this only from its DPAPI CurrentUser vault.
+        # It is never serialized over IPC, logged or returned to Core.
+        self._session_cookie: SecretValue | None = initial_ssid
         self._websocket_reconnect_epochs: list[float] = []
         self._authenticated = False
         self._profile: dict[str, object] | None = None
@@ -321,10 +328,13 @@ class IQOptionCommunityReadOnlySession:
             if self.is_connected:
                 return self.snapshot()
             cached_cookie = self._session_cookie
+            cached_rejected = False
             if cached_cookie is not None:
                 self._reserve_websocket_reconnect()
                 try:
-                    return self._connect_websocket(cached_cookie, timeout)
+                    snapshot = self._connect_websocket(cached_cookie, timeout)
+                    self._notify_ssid_ready(cached_cookie)
+                    return snapshot
                 except IQOptionExternalError as exc:
                     # Only an explicit broker rejection proves the SSID is no
                     # longer usable.  Network and timeout failures must not
@@ -332,14 +342,24 @@ class IQOptionCommunityReadOnlySession:
                     if exc.reason_code != "IQOPTION_AUTH_FAILED":
                         raise
                     self._session_cookie = None
+                    self._notify_ssid_invalid()
+                    cached_rejected = True
+
+            if not self._allow_http_login:
+                raise IQOptionExternalError(
+                    "IQOPTION_AUTH_FAILED" if cached_rejected else "IQOPTION_SSID_UNAVAILABLE"
+                )
 
             session_cookie = self._login(self._email, self._password, timeout)
             self._session_cookie = session_cookie
             try:
-                return self._connect_websocket(session_cookie, timeout)
+                snapshot = self._connect_websocket(session_cookie, timeout)
+                self._notify_ssid_ready(session_cookie)
+                return snapshot
             except IQOptionExternalError as exc:
                 if exc.reason_code == "IQOPTION_AUTH_FAILED":
                     self._session_cookie = None
+                    self._notify_ssid_invalid()
                 raise
 
     def reconnect(self, timeout: float = 8.0) -> IQOptionConnectionSnapshot:
@@ -355,11 +375,24 @@ class IQOptionCommunityReadOnlySession:
                 raise IQOptionExternalError("IQOPTION_AUTH_FAILED")
             self._reserve_websocket_reconnect()
             try:
-                return self._connect_websocket(session_cookie, timeout)
+                snapshot = self._connect_websocket(session_cookie, timeout)
+                self._notify_ssid_ready(session_cookie)
+                return snapshot
             except IQOptionExternalError as exc:
                 if exc.reason_code == "IQOPTION_AUTH_FAILED":
                     self._session_cookie = None
+                    self._notify_ssid_invalid()
                 raise
+
+    def _notify_ssid_ready(self, session_cookie: SecretValue) -> None:
+        callback = self._on_ssid_ready
+        if callback is not None:
+            callback(session_cookie)
+
+    def _notify_ssid_invalid(self) -> None:
+        callback = self._on_ssid_invalid
+        if callback is not None:
+            callback()
 
     def _connect_websocket(
         self,

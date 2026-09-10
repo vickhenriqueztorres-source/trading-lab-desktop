@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import random
 import sys
@@ -8,6 +9,7 @@ import time
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal, cast
 
 from apps.auth_agent.core_gate import CoreLeaseEntryAuthorizer, DerivTokenEntryAuthorizer
 from apps.core.auth_supervisor import AuthAgentSupervisor
@@ -31,6 +33,7 @@ from apps.core.iqoption_auto_trader import (
 from apps.core.iqoption_candidates import TIMEFRAMES
 from apps.core.iqoption_connection_safety import (
     IQOptionConnectionSafetyController,
+    IQOptionConnectionSafetyDecision,
     IQOptionConnectionSafetyStateError,
     IQOptionConnectionSafetyStore,
     IQOptionMessageBudget,
@@ -212,6 +215,7 @@ class CoreLifecycleService:
             "TRANSPORT_DOWN" if self._iqoption_bot_armed else "IQOPTION_BOT_DISARMED"
         )
         self._iqoption_message_budget = IQOptionMessageBudget()
+        self._iqoption_last_admission: IQOptionConnectionSafetyDecision | None = None
         self._iqoption_auto_trader = IqOptionAutoTrader(
             supervisor_provider=lambda: self._iqoption,
             runtime_provider=lambda: self._runtime,
@@ -441,7 +445,11 @@ class CoreLifecycleService:
                     deriv_demo_connect=self.connect_deriv_selected_account,
                     digit_risk_config_update=self._update_digit_risk_config,
                     digit_test_session_reset=self.reset_digit_test_session,
-                    iqoption_login=self.connect_iqoption_selected_account,
+                    iqoption_login=lambda mode, source: self.connect_iqoption_selected_account(
+                        mode,
+                        source=cast(Literal["auto", "manual"], source),
+                    ),
+                    iqoption_login_status=self._iqoption_login_ui_status,
                     iqoption_risk_config_update=self.update_iqoption_risk_config,
                     iqoption_bot_control=self.control_iqoption_bot,
                 )
@@ -684,7 +692,11 @@ class CoreLifecycleService:
                     if self._iqoption_recovery_stop.wait(safety.retry_after_seconds):
                         return
                     continue
-            accepted, connected, reason = self.connect_iqoption_selected_account("saved")
+            accepted, connected, reason = self._invoke_iqoption_connect(
+                "saved",
+                source="auto",
+                cached_preflight_done=True,
+            )
             if accepted and connected and not self._iqoption_session_invalidated:
                 self._iqoption_bot_reason = (
                     "IQOPTION_BOT_ARMED"
@@ -722,16 +734,18 @@ class CoreLifecycleService:
             return
 
     def _try_reconnect_iqoption_websocket(self) -> tuple[bool, str, bool, float]:
-        """Reuse the worker's in-memory SSID before considering another HTTP login."""
+        """Reuse an in-memory or DPAPI-cached SSID before any HTTP login."""
 
         supervisor = getattr(self, "_iqoption", None)
         runtime = getattr(self, "_runtime", None)
-        if supervisor is None or runtime is None:
-            return False, "WORKER_NOT_READY", False, 0.0
+        if runtime is None:
+            return False, "WORKER_NOT_READY", True, 0.0
+        if supervisor is None:
+            return self._respawn_iqoption_from_cached_session()
         client = supervisor.client
         reconnect = getattr(client, "iqoption_reconnect_session", None)
         if not getattr(client, "is_ready", True) or not callable(reconnect):
-            return False, "WORKER_NOT_READY", False, 0.0
+            return self._respawn_iqoption_from_cached_session()
         try:
             reconnect()
             balance = client.broker_balance()
@@ -753,11 +767,11 @@ class CoreLifecycleService:
                 )
         except WorkerDispatchError as exc:
             reason = exc.code.value
+            if reason in {"IPC_CONNECTION_LOST", "WORKER_CRASHED", "WORKER_NOT_READY"}:
+                return self._respawn_iqoption_from_cached_session()
             retry_same = reason not in {
                 "IQOPTION_AUTH_FAILED",
-                "IPC_CONNECTION_LOST",
-                "WORKER_CRASHED",
-                "WORKER_NOT_READY",
+                "IQOPTION_SSID_UNAVAILABLE",
             }
             raw_retry_after = exc.details.get("retry_after_seconds", 0.0)
             retry_after = (
@@ -779,6 +793,44 @@ class CoreLifecycleService:
                 "IQOPTION_BOT_ARMED" if clock is not None else "MD_CLOCK_UNTRUSTED"
             )
         return True, "IQOPTION_WEBSOCKET_SESSION_REUSED", False, 0.0
+
+    def _respawn_iqoption_from_cached_session(self) -> tuple[bool, str, bool, float]:
+        """Replace an unusable worker without permitting an HTTP login."""
+
+        accepted, connected, reason = self._invoke_iqoption_connect(
+            "saved",
+            source="auto",
+            cached_only=True,
+        )
+        if accepted and connected:
+            return True, "IQOPTION_WEBSOCKET_SESSION_REUSED", False, 0.0
+        may_use_http = reason in {"IQOPTION_AUTH_FAILED", "IQOPTION_SSID_UNAVAILABLE"}
+        return False, reason, not may_use_http, 0.0
+
+    def _invoke_iqoption_connect(
+        self,
+        account_mode: str,
+        *,
+        source: Literal["auto", "manual"],
+        cached_only: bool = False,
+        cached_preflight_done: bool = False,
+    ) -> tuple[bool, bool, str]:
+        """Call the connector while retaining compatibility with legacy test adapters."""
+
+        connector = self.connect_iqoption_selected_account
+        parameters = inspect.signature(connector).parameters
+        if "cached_only" not in parameters:
+            if cached_only:
+                return False, False, "IQOPTION_SSID_UNAVAILABLE"
+            return connector(account_mode)
+        if "_cached_preflight_done" in parameters:
+            return connector(
+                account_mode,
+                source=source,
+                cached_only=cached_only,
+                _cached_preflight_done=cached_preflight_done,
+            )
+        return connector(account_mode, source=source, cached_only=cached_only)
 
     def safe_stop(
         self,
@@ -877,7 +929,14 @@ class CoreLifecycleService:
         with self._deriv_switch_lock:
             return self._connect_deriv_selected_account_locked()
 
-    def connect_iqoption_selected_account(self, account_mode: str) -> tuple[bool, bool, str]:
+    def connect_iqoption_selected_account(
+        self,
+        account_mode: str,
+        *,
+        source: Literal["auto", "manual"] = "auto",
+        cached_only: bool = False,
+        _cached_preflight_done: bool = False,
+    ) -> tuple[bool, bool, str]:
         """Start the isolated read-only connector for an explicit IQ Option balance."""
 
         normalized_mode = account_mode.strip().lower()
@@ -905,6 +964,22 @@ class CoreLifecycleService:
         # UI must remain responsive and can report the in-progress state.
         if self._iqoption_connecting is not None:
             return False, False, "IQOPTION_CONNECTION_IN_PROGRESS"
+        if not cached_only:
+            self._iqoption_last_admission = None
+
+        # Determine whether HTTP is actually needed before reserving either
+        # login budget. A valid DPAPI session therefore costs zero HTTP admits.
+        if not cached_only and not _cached_preflight_done:
+            cached_result = self.connect_iqoption_selected_account(
+                normalized_mode,
+                source=source,
+                cached_only=True,
+                _cached_preflight_done=True,
+            )
+            if cached_result[0] and cached_result[1]:
+                return cached_result
+            if cached_result[2] not in {"IQOPTION_AUTH_FAILED", "IQOPTION_SSID_UNAVAILABLE"}:
+                return cached_result
 
         with self._iqoption_switch_lock:
             if (
@@ -949,23 +1024,32 @@ class CoreLifecycleService:
                         else "IQOPTION_REAL_ALREADY_CONNECTED",
                     )
             connection_safety = self._iqoption_connection_safety
-            if connection_safety is None:
+            if connection_safety is None and not cached_only:
                 return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
-            try:
-                admission = connection_safety.admit_http_login()
-            except IQOptionConnectionSafetyStateError:
-                self._iqoption_connection_safety = None
-                return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
-            if not admission.allowed:
-                runtime = self._require_runtime()
-                runtime.event_sink.emit(
-                    "iqoption_connection_quarantine",
-                    reason_code=admission.reason_code,
-                    attempts_in_window=admission.attempts_in_window,
-                    retry_after_seconds=admission.retry_after_seconds,
-                )
-                return False, False, admission.reason_code
+            if not cached_only:
+                assert connection_safety is not None
+                try:
+                    admission = connection_safety.admit_http_login(source=source)
+                    self._iqoption_last_admission = admission
+                except IQOptionConnectionSafetyStateError:
+                    self._iqoption_connection_safety = None
+                    return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
+                if not admission.allowed:
+                    runtime = self._require_runtime()
+                    runtime.event_sink.emit(
+                        "iqoption_connection_quarantine",
+                        reason_code=admission.reason_code,
+                        attempts_in_window=admission.attempts_in_window,
+                        retry_after_seconds=admission.retry_after_seconds,
+                    )
+                    return False, False, admission.reason_code
             runtime = self._require_runtime()
+            if not cached_only:
+                runtime.event_sink.emit(
+                    "iqoption_http_login",
+                    source=source,
+                    attempts_in_window=admission.attempts_in_window,
+                )
             self._iqoption_auto_trader.on_transport_down("IQOPTION_CONNECTION_CHANGE")
             runtime.detach_iqoption_worker()
             previous = self._iqoption
@@ -977,7 +1061,7 @@ class CoreLifecycleService:
 
             supervisor = ReadOnlyWorkerSupervisor(
                 runtime.health_gate,
-                self._iqoption_spec(normalized_mode),
+                self._iqoption_spec(normalized_mode, allow_http_login=not cached_only),
                 handshake_timeout=_IQOPTION_WORKER_HANDSHAKE_TIMEOUT_SECONDS,
                 response_timeout=_IQOPTION_WORKER_RESPONSE_TIMEOUT_SECONDS,
                 heartbeat_timeout=_IQOPTION_WORKER_HEARTBEAT_TIMEOUT_SECONDS,
@@ -1026,12 +1110,14 @@ class CoreLifecycleService:
             except WorkerDispatchError as exc:
                 runtime.detach_iqoption_worker()
                 supervisor.shutdown(1.0)
-                self._record_iqoption_connection_failure(exc.code.value)
+                if not cached_only:
+                    self._record_iqoption_connection_failure(exc.code.value)
                 return False, False, exc.code.value
             except ProtocolError as exc:
                 runtime.detach_iqoption_worker()
                 supervisor.shutdown(1.0)
-                self._record_iqoption_connection_failure(exc.code.value)
+                if not cached_only:
+                    self._record_iqoption_connection_failure(exc.code.value)
                 return False, False, exc.code.value
             except RuntimeError as exc:
                 runtime.detach_iqoption_worker()
@@ -1042,24 +1128,28 @@ class CoreLifecycleService:
                     for character in reason
                 ):
                     reason = "IQOPTION_CONNECT_FAILED"
-                self._record_iqoption_connection_failure(reason)
+                if not cached_only:
+                    self._record_iqoption_connection_failure(reason)
                 return False, False, reason
             except (OSError, ValueError):
                 runtime.detach_iqoption_worker()
                 supervisor.shutdown(1.0)
-                self._record_iqoption_connection_failure("IQOPTION_CONNECT_FAILED")
+                if not cached_only:
+                    self._record_iqoption_connection_failure("IQOPTION_CONNECT_FAILED")
                 return False, False, "IQOPTION_CONNECT_FAILED"
             finally:
                 if self._iqoption_connecting is supervisor:
                     self._iqoption_connecting = None
 
-            try:
-                connection_safety.record_success()
-            except IQOptionConnectionSafetyStateError:
-                runtime.detach_iqoption_worker()
-                supervisor.shutdown(1.0)
-                self._iqoption_connection_safety = None
-                return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
+            if not cached_only:
+                assert connection_safety is not None
+                try:
+                    connection_safety.record_success()
+                except IQOptionConnectionSafetyStateError:
+                    runtime.detach_iqoption_worker()
+                    supervisor.shutdown(1.0)
+                    self._iqoption_connection_safety = None
+                    return False, False, "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
             self._iqoption = supervisor
             self._iqoption_balance = balance
             self._iqoption_clock = clock
@@ -1091,6 +1181,19 @@ class CoreLifecycleService:
                 if normalized_mode == "practice"
                 else "IQOPTION_REAL_READ_ONLY_CONNECTED",
             )
+
+    def _iqoption_login_ui_status(self) -> tuple[int, int]:
+        admission = getattr(self, "_iqoption_last_admission", None)
+        if admission is not None:
+            return admission.retry_after_seconds, admission.attempts_in_window
+        controller = self._iqoption_connection_safety
+        if controller is None:
+            return 0, 0
+        try:
+            snapshot = controller.snapshot()
+        except IQOptionConnectionSafetyStateError:
+            return 0, 0
+        return snapshot.retry_after_seconds, snapshot.attempts_in_window
 
     def _record_iqoption_connection_failure(self, reason_code: str) -> None:
         controller = self._iqoption_connection_safety
@@ -1769,7 +1872,12 @@ class CoreLifecycleService:
             allow_real_financial_submission=False,
         )
 
-    def _iqoption_spec(self, account_mode: str) -> ReadOnlyWorkerSpec:
+    def _iqoption_spec(
+        self,
+        account_mode: str,
+        *,
+        allow_http_login: bool = True,
+    ) -> ReadOnlyWorkerSpec:
         return ReadOnlyWorkerSpec(
             module="apps.iqoption_connection_worker",
             role=EndpointRole.IQOPTION_WORKER,
@@ -1777,6 +1885,8 @@ class CoreLifecycleService:
             extra_arguments=(
                 "--vault-dir",
                 str(self._profile_dir / "broker_credentials"),
+                "--http-login-policy",
+                "allow" if allow_http_login else "deny",
                 "--account-mode",
                 account_mode,
             ),

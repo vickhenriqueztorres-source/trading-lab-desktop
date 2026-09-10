@@ -32,11 +32,11 @@ para o relógio local.
 ## Timeouts e recuperação
 
 - Leituras correlacionadas que expiram permanecem isoladas e não provocam login.
-- A consulta global de payout continua single-flight. Se expirar, a geração ambígua é aposentada
-  para impedir que uma resposta tardia seja aceita pela consulta seguinte.
+- A consulta global de payout continua single-flight e falha fechada. Timeout de payout não tem
+  autoridade para substituir sessão nem iniciar login.
 - Ordem com resultado desconhecido segue para reconciliação e nunca é reenviada automaticamente.
-- Queda real ou geração ambígua usa primeiro o comando IPC de reconexão no mesmo worker, com o
-  SSID mantido exclusivamente em memória.
+- Queda real usa primeiro o comando IPC de reconexão no mesmo worker. Se o worker morreu, o
+  substituto recupera o SSID cifrado diretamente do cofre DPAPI CurrentUser.
 - Login HTTP só é considerado quando não há sessão reutilizável ou quando a corretora rejeita
   explicitamente o SSID.
 
@@ -44,6 +44,11 @@ O orçamento WebSocket é independente da quarentena de login HTTP. Quando o lim
 atingido, o worker informa o tempo restante; o Core espera de forma interrompível e acorda
 automaticamente. O backoff progressivo recebe jitter de 10%. O histórico não é zerado por uma
 conexão curta: ele expira naturalmente na janela de 15 minutos.
+
+O Core nunca recebe o SSID. Todo start executa primeiro com política `deny` para login HTTP; apenas
+ausência ou rejeição da sessão habilita a etapa seguinte, após admissão explícita `auto` ou
+`manual`. Assim, reiniciar o EXE, reciclar o worker ou perder IPC custa zero logins quando a sessão
+de 20 horas ainda é aceita pelo broker.
 
 ## Evidência automatizada
 

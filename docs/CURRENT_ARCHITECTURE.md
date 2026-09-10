@@ -199,11 +199,12 @@ reconciliação, descarta sinais anteriores à recuperação e retorna a `ARMED`
 Conta Real salva exige confirmação explícita e o conector compilado desta revisão permanece somente
 leitura; nenhum teste externo Real é autorizado por esta arquitetura operacional.
 
-O `IQOptionConnectionSafetyController` limita inícios externos de sessão e persiste o orçamento no
-profile. O worker mantém o SSID apenas em memória e o reutiliza em até cinco recuperações WebSocket,
-sem repetir login HTTP por timeout de transporte. Falhas de autenticação, 2FA e rate limit abrem
-quarentena preventiva. O `IQOptionMessageBudget` limita as leituras de mercado e preserva capacidade
-separada para eventos e reconciliação. A política completa está em
+O `IQOptionConnectionSafetyController` separa o orçamento automático persistente do orçamento
+manual em memória. O worker mantém o SSID em memória e em cofre DPAPI CurrentUser com TTL de 20
+horas. Todo worker novo tenta essa sessão com login HTTP proibido; somente ausência/rejeição segue
+para uma admissão HTTP. Falhas de autenticação, 2FA e rate limit abrem quarentena preventiva. O
+`IQOptionMessageBudget` limita as leituras de mercado e preserva capacidade separada para eventos e
+reconciliação. A política completa está em
 `docs/IQOPTION_CONNECTION_SAFETY.md`.
 
 ## 11. IPC v1

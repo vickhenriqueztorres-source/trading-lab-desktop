@@ -19,12 +19,12 @@ def test_login_limit_is_persistent_across_controller_restart(tmp_path: Path) -> 
     store = IQOptionConnectionSafetyStore(tmp_path)
     first = IQOptionConnectionSafetyController(store, wall_time=lambda: now[0])
 
-    assert first.admit_http_login().allowed is True
-    assert first.admit_http_login().allowed is True
-    assert first.admit_http_login().allowed is True
+    assert first.admit_http_login(source="auto").allowed is True
+    assert first.admit_http_login(source="auto").allowed is True
+    assert first.admit_http_login(source="auto").allowed is True
 
     restarted = IQOptionConnectionSafetyController(store, wall_time=lambda: now[0])
-    denied = restarted.admit_http_login()
+    denied = restarted.admit_http_login(source="auto")
     assert denied.allowed is False
     assert denied.reason_code == "IQOPTION_CONNECTION_QUARANTINED"
     assert denied.retry_after_seconds == IQOPTION_CONNECTION_QUARANTINE_SECONDS
@@ -43,10 +43,10 @@ def test_terminal_auth_responses_open_quarantine_immediately(
         IQOptionConnectionSafetyStore(tmp_path),
         wall_time=lambda: now[0],
     )
-    assert controller.admit_http_login().allowed is True
+    assert controller.admit_http_login(source="auto").allowed is True
     controller.record_failure(reason)
 
-    denied = controller.admit_http_login()
+    denied = controller.admit_http_login(source="auto")
     assert denied.allowed is False
     assert denied.retry_after_seconds == IQOPTION_CONNECTION_QUARANTINE_SECONDS
 
@@ -57,9 +57,9 @@ def test_success_does_not_erase_rolling_login_budget(tmp_path: Path) -> None:
         wall_time=lambda: 3_000_000.0,
     )
     for _ in range(3):
-        assert controller.admit_http_login().allowed is True
+        assert controller.admit_http_login(source="auto").allowed is True
         controller.record_success()
-    assert controller.admit_http_login().allowed is False
+    assert controller.admit_http_login(source="auto").allowed is False
 
 
 def test_quarantine_expires_after_cooldown(tmp_path: Path) -> None:
@@ -68,10 +68,10 @@ def test_quarantine_expires_after_cooldown(tmp_path: Path) -> None:
         IQOptionConnectionSafetyStore(tmp_path),
         wall_time=lambda: now[0],
     )
-    assert controller.admit_http_login().allowed is True
+    assert controller.admit_http_login(source="auto").allowed is True
     controller.record_failure("IQOPTION_RATE_LIMITED")
     now[0] += IQOPTION_CONNECTION_QUARANTINE_SECONDS + 1
-    assert controller.admit_http_login().allowed is True
+    assert controller.admit_http_login(source="auto").allowed is True
 
 
 def test_corrupt_safety_state_fails_closed(tmp_path: Path) -> None:

@@ -17,11 +17,14 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from apps.core.execution_state import ALLOWED_STOP_REASONS, StopReason
 
 IQOPTION_HTTP_LOGIN_WINDOW_SECONDS = 15 * 60
 IQOPTION_HTTP_LOGIN_LIMIT = 3
+IQOPTION_MANUAL_LOGIN_WINDOW_SECONDS = 2 * 60
+IQOPTION_MANUAL_LOGIN_LIMIT = 1
 IQOPTION_CONNECTION_QUARANTINE_SECONDS = 15 * 60
 
 # One request per evaluation second is the maximum market-data load.  A
@@ -156,12 +159,46 @@ class IQOptionConnectionSafetyController:
         self._wall_time = wall_time
         self._lock = threading.Lock()
         self._state = store.load()
+        self._manual_attempt_epochs: deque[float] = deque()
 
-    def admit_http_login(self) -> IQOptionConnectionSafetyDecision:
+    def admit_http_login(
+        self,
+        *,
+        source: Literal["auto", "manual"],
+    ) -> IQOptionConnectionSafetyDecision:
         """Reserve one external session-start attempt before network activity."""
 
         with self._lock:
             now = self._now()
+            if source == "manual":
+                boundary = now - IQOPTION_MANUAL_LOGIN_WINDOW_SECONDS
+                while self._manual_attempt_epochs and self._manual_attempt_epochs[0] <= boundary:
+                    self._manual_attempt_epochs.popleft()
+                if len(self._manual_attempt_epochs) >= IQOPTION_MANUAL_LOGIN_LIMIT:
+                    retry_after = max(
+                        0,
+                        math.ceil(
+                            self._manual_attempt_epochs[0]
+                            + IQOPTION_MANUAL_LOGIN_WINDOW_SECONDS
+                            - now
+                        ),
+                    )
+                    return IQOptionConnectionSafetyDecision(
+                        allowed=False,
+                        reason_code="IQOPTION_MANUAL_LOGIN_THROTTLED",
+                        attempts_in_window=len(self._manual_attempt_epochs),
+                        retry_after_seconds=retry_after,
+                    )
+                self._manual_attempt_epochs.append(now)
+                # An explicit human retry supersedes an old automatic quarantine,
+                # but remains independently bounded to one attempt every two minutes.
+                self._persist(_PersistentState())
+                return IQOptionConnectionSafetyDecision(
+                    allowed=True,
+                    reason_code="IQOPTION_CONNECTION_ATTEMPT_ADMITTED",
+                    attempts_in_window=1,
+                    retry_after_seconds=0,
+                )
             state = self._pruned(now)
             if state.quarantine_until_epoch > now:
                 self._state = state
@@ -334,6 +371,8 @@ __all__ = [
     "IQOPTION_CONNECTION_QUARANTINE_SECONDS",
     "IQOPTION_HTTP_LOGIN_LIMIT",
     "IQOPTION_HTTP_LOGIN_WINDOW_SECONDS",
+    "IQOPTION_MANUAL_LOGIN_LIMIT",
+    "IQOPTION_MANUAL_LOGIN_WINDOW_SECONDS",
     "IQOPTION_MARKET_DATA_MESSAGE_BUDGET_PER_MINUTE",
     "IQOPTION_TOTAL_INTERNAL_MESSAGE_BUDGET_PER_MINUTE",
     "IQOptionConnectionSafetyController",

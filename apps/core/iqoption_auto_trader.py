@@ -530,11 +530,13 @@ class IqOptionAutoTrader:
                 except WorkerDispatchError as exc:
                     with self._lock:
                         self._latest_clock = None
-                    reason = exc.code.value
-                    if reason in IQOPTION_CLOCK_FAILURE_REASONS:
-                        self._handle_clock_failure(runtime, reason, diagnostics=exc.details)
-                    else:
-                        self._notify_session_failure(supervisor.client, reason)
+                    # Clock is a health sample, not evidence that the broker
+                    # session must be replaced. Reader/heartbeat owns recovery.
+                    self._handle_clock_failure(
+                        runtime,
+                        exc.code.value,
+                        diagnostics=exc.details,
+                    )
                     return
                 except Exception:
                     with self._lock:
@@ -1071,15 +1073,8 @@ class IqOptionAutoTrader:
                     signal_observed=True,
                     candidate_eligible=False,
                 )
-            if reason in {
-                "IQOPTION_WEBSOCKET_UNAVAILABLE",
-                "IQOPTION_REQUEST_TIMEOUT",
-                "IQOPTION_RESPONSE_TOO_LARGE",
-                "IQOPTION_AUTH_FAILED",
-                "IPC_CONNECTION_LOST",
-                "WORKER_CRASHED",
-            }:
-                self._notify_session_failure(supervisor.client, reason)
+            # Payout is a fail-closed entry gate. Its timeout must not own
+            # transport recovery or spend an HTTP login attempt.
             failure = self._failures.current(symbol, risk_config)
             if failure is not None:
                 self._failures.probe_failed(failure, self._monotonic())

@@ -7,6 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
 
 from apps.ui.components.iqoption_strategy_panel import IqOptionStrategyConfigWidget
+from apps.ui.components.iqoption_workspace import IqOptionWorkspaceWidget
 from apps.ui.components.workspaces import BrokerWorkspaceWidget
 from packages.protocol import BrokerCardStatus, UiAccountMode
 
@@ -66,4 +67,19 @@ def test_iqoption_rsi_and_risk_controls_are_visible() -> None:
 
     assert any("RSI" in item for item in combo_text)
     assert any("IQ Option" in item for item in buttons)
+    assert application is not None
+
+
+def test_armed_transport_recovery_and_countdown_are_inline() -> None:
+    application = QApplication.instance() or QApplication([])
+    workspace = IqOptionWorkspaceWidget()
+
+    workspace.update_bot_state(True, "TRANSPORT_DOWN", entry_ready=False)
+    workspace.set_iqoption_reconnect_wait(272, 2)
+
+    assert workspace._automation_pill.text() == "● BOT ARMADO · RECONECTANDO"
+    assert "04:32" in workspace._iqoption_login_status.text()
+    assert "tentativas 2/3" in workspace._iqoption_login_status.text()
+    assert workspace._iqoption_login_button.text() == "↻ Reconectar agora"
+    workspace._reconnect_timer.stop()
     assert application is not None
