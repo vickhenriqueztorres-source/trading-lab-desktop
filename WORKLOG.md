@@ -5903,3 +5903,10 @@ Validação:
 - A observação externa de duas horas em Practice não foi simulada nem declarada como concluída;
   requer execução controlada com a sessão do operador. Nenhuma credencial ou ordem externa foi
   usada nesta implementação.
+- Build canônico PyInstaller aprovado com 443 arquivos no manifesto, scanner com zero segredos,
+  integridade e health-check exit 0. O portátil contém 884 entradas, ProductVersion 1.9.11,
+  48.350.720 bytes e recurso único `TradingLab.payload.zip`. Smoke headless de três segundos com
+  perfil isolado terminou em exit 0, zero processos residuais, `quick_check=ok` nos dois bancos e
+  zero intents, reservas, outbox e ordens. Artefato:
+  `dist/iq-connection-resilience-final-20260910/TradingLab-Desktop-v1.9.11-IQ-CONNECTION-RESILIENCE-FINAL.exe`;
+  SHA-256 `262BB447114C317AE2FA04AC8BD4501E89385EAE737FBBD142355A7D2D4AC26C`.
