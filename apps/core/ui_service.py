@@ -8,6 +8,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
@@ -495,7 +496,12 @@ class CoreUiProjectionBuilder:
             Broker.IQ_OPTION.value,
             IQOPTION_PRACTICE_ACCOUNT_ID,
         )
-        iq_clock_ready = iq_clock is not None and iq_clock.is_synced
+        # IQ execution trusts the broker timestamp by skew, not transport RTT.
+        # A slow round trip remains observable in ``clock_latency_ms`` but does
+        # not make an otherwise fresh broker clock unsafe.
+        iq_clock_ready = iq_clock is not None and abs(iq_clock.estimated_offset_seconds) <= Decimal(
+            "120"
+        )
         iq_entry_ready = (
             iq_connected and iq_account_synced and iq_clock_ready and iq_armed and iq_scope.is_open
         )
@@ -565,7 +571,7 @@ class CoreUiProjectionBuilder:
                     iq_balance.balance_minor_units if iq_balance is not None else None
                 ),
                 currency=(iq_balance.currency if iq_balance is not None else None),
-                clock_synced=iq_clock is not None and iq_clock.is_synced,
+                clock_synced=iq_clock_ready,
                 connection_label=(
                     "REAL — SOMENTE LEITURA"
                     if iq_balance is not None and iq_balance.account_type == "REAL"
@@ -854,7 +860,7 @@ class CoreUiProjectionService:
         bytes.fromhex(token)
         self._token = session_token
         self._snapshot_provider = snapshot_provider
-        self._safe_stop = safe_stop
+        self._invoke_stop = safe_stop
         self._resume = resume
         self._shutdown_requested = shutdown_requested
         self._diagnostic_provider = diagnostic_provider
@@ -1011,7 +1017,7 @@ class CoreUiProjectionService:
             )
         if request.message_type is MessageType.UI_SAFE_STOP_COMMAND:
             require_empty_payload(request.payload)
-            self._safe_stop()
+            self._invoke_stop()
             ack = UiCommandAck(True, "SAFE_STOP_ACTIVE", True)
             return _response(request, MessageType.UI_SAFE_STOP_ACK, ack.to_payload())
         if request.message_type is MessageType.UI_RESUME_COMMAND:
@@ -1034,7 +1040,7 @@ class CoreUiProjectionService:
             return _response(request, MessageType.UI_RESUME_ACK, ack.to_payload())
         if request.message_type is MessageType.UI_SHUTDOWN_REQUEST:
             require_empty_payload(request.payload)
-            self._safe_stop()
+            self._invoke_stop()
             self._shutdown_requested()
             ack = UiCommandAck(True, "SAFE_SHUTDOWN_REQUESTED", True)
             return _response(request, MessageType.UI_SHUTDOWN_ACK, ack.to_payload())

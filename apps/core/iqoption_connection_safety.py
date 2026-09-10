@@ -18,10 +18,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from apps.core.execution_state import ALLOWED_STOP_REASONS, StopReason
+
 IQOPTION_HTTP_LOGIN_WINDOW_SECONDS = 15 * 60
 IQOPTION_HTTP_LOGIN_LIMIT = 3
 IQOPTION_CONNECTION_QUARANTINE_SECONDS = 15 * 60
-IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS = 5
 
 # One request per evaluation second is the maximum market-data load.  A
 # separate 30-message operational reserve is deliberately left for balance,
@@ -37,6 +38,12 @@ _IMMEDIATE_QUARANTINE_REASONS = frozenset(
         "IQOPTION_RATE_LIMITED",
     }
 )
+
+
+def assert_safe_stop_caller(caller: StopReason) -> None:
+    """Reject transport-originated attempts to revoke execution intent."""
+
+    assert caller in ALLOWED_STOP_REASONS, "unauthorized safe-stop caller"
 
 
 class IQOptionConnectionSafetyStateError(RuntimeError):
@@ -328,7 +335,6 @@ __all__ = [
     "IQOPTION_HTTP_LOGIN_LIMIT",
     "IQOPTION_HTTP_LOGIN_WINDOW_SECONDS",
     "IQOPTION_MARKET_DATA_MESSAGE_BUDGET_PER_MINUTE",
-    "IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS",
     "IQOPTION_TOTAL_INTERNAL_MESSAGE_BUDGET_PER_MINUTE",
     "IQOptionConnectionSafetyController",
     "IQOptionConnectionSafetyDecision",
@@ -337,4 +343,5 @@ __all__ = [
     "IQOptionConnectionSafetyStore",
     "IQOptionMessageBudget",
     "IQOptionMessageBudgetDecision",
+    "assert_safe_stop_caller",
 ]

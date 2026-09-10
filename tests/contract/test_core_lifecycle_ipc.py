@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+from apps.core.execution_state import StopReason
 from apps.core.lifecycle_server import CoreLifecycleServer
 from apps.core.lifecycle_service import CoreServiceState
 from apps.launcher.core_client import CoreLifecycleClient, CoreLifecycleIpcUnavailable
@@ -24,7 +25,14 @@ class FakeLifecycleService:
             for index, role in enumerate(("AUTH_AGENT", "CORE", "SIMULATED_WORKER", "DERIV_WORKER"))
         )
 
-    def safe_stop(self) -> None:
+    def safe_stop(
+        self,
+        *,
+        caller: StopReason,
+        preserve_operator_intent: bool = False,
+    ) -> None:
+        assert caller is StopReason.USER_COMMAND
+        assert preserve_operator_intent is True
         self.events.append("safe_stop")
         self.safe_stop_active = True
         self.state = CoreServiceState.SAFE_STOP

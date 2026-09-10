@@ -16,10 +16,16 @@
 - **R-SCOPE-003:** A IQ Option PODE conectar e executar ordens em modo **Practice (Demo)** e **Real**
   através do motor `IqOptionAutoTrader`, utilizando candles em tempo real, varredura multi-ativos (`AUTO`),
   estratégias baseadas em indicadores (RSI 14, Bandas de Bollinger, etc.) e salvaguardas do Risk Ledger.
-- **R-SCOPE-004:** O bot DEVE iniciar pausado e só PODE abrir novas entradas depois de ação
-  explícita do operador (**Ligar Bot**).
-- **R-SCOPE-005:** Troca de estratégia, troca de conta ou recuperação de conexão DEVE executar
-  Safe Stop, invalidar o sinal anterior e exigir avaliação nova; reconexão NÃO DEVE rearmar o bot.
+- **R-SCOPE-004:** No primeiro uso, o bot DEVE iniciar pausado e só PODE abrir novas entradas depois
+  de ação explícita do operador (**Ligar Bot**). A intenção armada da IQ Option DEVE ser persistida
+  atomicamente e restaurada após reinício como `ARMED_DEGRADED` até o transporte e a reconciliação
+  voltarem a ser comprovados.
+- **R-SCOPE-005:** Troca de estratégia PODE executar Safe Stop. Queda, timeout, troca de IP, suspensão
+  do Windows, substituição de worker ou recuperação de conexão da IQ Option NÃO DEVEM revogar a
+  intenção armada: o estado passa a `ARMED_DEGRADED`, descarta a autoridade efêmera do sinal e não
+  avalia novas entradas enquanto o transporte estiver indisponível. Após reconexão, o estado volta
+  a `ARMED`, agenda reconciliação e exige sinal novo. Parada de execução só PODE ser originada por
+  `RiskManager`, `StrategyGate`, `PayoutGate` ou `UserCommand`.
 - **R-SCOPE-006:** Cada sinal de tick ou candle DEVE ser consumido no máximo uma vez e somente uma ordem
   por corretora PODE permanecer em voo.
 - **R-SCOPE-007:** O launcher portátil DEVE impedir duas instâncias do mesmo perfil e uma segunda

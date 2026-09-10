@@ -69,12 +69,12 @@ def test_invalid_or_low_payout_blocks_without_burning_signal(payout):
     assert json.loads(runtime.requests[0].manifest_context)["strategy_key"] == "f5:a"
 
 
-def test_monitor_absence_blocks_even_valid_signal():
+def test_monitor_absence_is_not_a_duplicate_execution_gate():
     _, trader, _, runtime, _ = execution_setup()
     trader._monitor_provider = lambda: None
     trader._evaluate_cycle()
-    assert not runtime.requests
-    assert trader.status_reason == "MANIFEST_MONITOR_UNAVAILABLE"
+    assert len(runtime.requests) == 1
+    assert trader.status_reason.startswith("ORDEM_ACEITA")
 
 
 def test_budget_exhaustion_does_not_send_quote():
@@ -128,7 +128,7 @@ def test_rechecks_at_core_boundary(change, reason):
     elif change == "time":
         from datetime import timedelta
 
-        clock[0] += timedelta(seconds=2)
+        clock[0] += timedelta(seconds=9)
     elif change == "removed":
         cat.apply_manifest({"strategies": []})
     elif change == "real":

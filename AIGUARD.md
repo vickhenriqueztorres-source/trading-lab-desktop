@@ -53,6 +53,10 @@ UI, estratégias e workers não podem gravar diretamente no banco transacional n
 ### AG-INV-005 — Falhar fechado
 
 Falha de banco, relógio, dados, catálogo, cotação, protocolo, versão ou reconciliação bloqueia novas entradas.
+Na IQ Option, indisponibilidade de transporte bloqueia a avaliação em `ARMED_DEGRADED`, mas não apaga
+a intenção explícita do operador; a retomada exige transporte comprovado, reconciliação agendada e
+sinal novo. Somente gestão de risco, filtro de estratégia, payout ou comando do usuário pode parar a
+execução armada.
 
 ### AG-INV-006 — Conta real exige seleção e confirmação explícita do operador
 

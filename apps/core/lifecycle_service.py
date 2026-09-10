@@ -16,14 +16,15 @@ from apps.core.deriv_telemetry import (
     DerivTelemetrySource,
 )
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
+from apps.core.execution_state import OperatorIntentStore, StopReason, TransportSupervisor
 from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID, IqOptionAutoTrader
 from apps.core.iqoption_candidates import TIMEFRAMES
 from apps.core.iqoption_connection_safety import (
-    IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS,
     IQOptionConnectionSafetyController,
     IQOptionConnectionSafetyStateError,
     IQOptionConnectionSafetyStore,
     IQOptionMessageBudget,
+    assert_safe_stop_caller,
 )
 from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
 from apps.core.live_monitor import LiveMonitor
@@ -84,7 +85,7 @@ _DEMO_TEST_SESSION_BLOCKERS = frozenset(
 # the subprocess reaches its loopback listener.
 _IQOPTION_WORKER_HANDSHAKE_TIMEOUT_SECONDS = 45.0
 _IQOPTION_WORKER_RESPONSE_TIMEOUT_SECONDS = 65.0
-_IQOPTION_WORKER_HEARTBEAT_TIMEOUT_SECONDS = 10.0
+_IQOPTION_WORKER_HEARTBEAT_TIMEOUT_SECONDS = 30.0
 _IQOPTION_RECOVERY_DELAYS_SECONDS = (0.0, 5.0, 15.0, 30.0, 60.0)
 
 
@@ -184,8 +185,22 @@ class CoreLifecycleService:
             self._manifest_client,
             on_event=self._emit_manifest_event,
         )
-        self._iqoption_bot_armed = False
-        self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+        self._operator_intent_store = OperatorIntentStore(self._profile_dir)
+        try:
+            self._transport_supervisor = TransportSupervisor(
+                intent_store=self._operator_intent_store
+            )
+            self._operator_intent_invalid = False
+        except ValueError:
+            self._transport_supervisor = TransportSupervisor(
+                intent_store=self._operator_intent_store,
+                initially_armed=False,
+            )
+            self._operator_intent_invalid = True
+        self._iqoption_bot_armed = self._transport_supervisor.armed_intent
+        self._iqoption_bot_reason = (
+            "TRANSPORT_DOWN" if self._iqoption_bot_armed else "IQOPTION_BOT_DISARMED"
+        )
         self._iqoption_message_budget = IQOptionMessageBudget()
         self._iqoption_auto_trader = IqOptionAutoTrader(
             supervisor_provider=lambda: self._iqoption,
@@ -201,6 +216,8 @@ class CoreLifecycleService:
             monitor_provider=lambda: self._live_monitor,
             recovery_notifier=self._request_iqoption_recovery,
             message_budget=self._iqoption_message_budget,
+            transport_supervisor=self._transport_supervisor,
+            reconcile_orders=self._schedule_iqoption_reconciliation,
         )
         self._deriv_transport = deriv_transport
         self._deriv_telemetry: DerivTelemetryMonitor | None = None
@@ -293,6 +310,11 @@ class CoreLifecycleService:
             self._emit_manifest_event(
                 "manifest_startup_validation", {"reason_code": self._manifest_load_reason}
             )
+            if self._operator_intent_invalid:
+                runtime.event_sink.emit(
+                    "iqoption_operator_intent_rejected",
+                    reason_code="IQOPTION_OPERATOR_INTENT_INVALID",
+                )
             # Anonymous outcome telemetry is opt-in and strictly off the
             # financial path.  No endpoint means no uploader and no network work.
             telemetry_opt_in = os.environ.get("DUALTRADE_OUTCOMES_OPT_IN") == "1"
@@ -318,9 +340,8 @@ class CoreLifecycleService:
             runtime.iqoption_entry_validator = self._iqoption_auto_trader.validate_runtime_entry
             runtime.iqoption_execution_lock = self._manifest_catalog.execution_lock
             runtime.iqoption_order_registered = self._manifest_catalog.notify_order_opened
-            # Each broker starts independently disarmed. A global stop is
-            # reserved for shutdown and truly global failures.
-            runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
+            # Transport availability cannot overwrite persisted operator intent.
+            # A restored ARMED intent remains degraded until a worker is proven up.
             self._safe_stop = True
             self._startup_sequence.append("SIMULATED_WORKER")
             if "deriv_read_only" in self._workers:
@@ -403,7 +424,7 @@ class CoreLifecycleService:
                 ui_service = CoreUiProjectionService(
                     self._ui_session_token,
                     projection.snapshot,
-                    self.safe_stop,
+                    lambda: self.safe_stop(caller=StopReason.USER_COMMAND),
                     self.resume,
                     self._request_ui_shutdown,
                     deriv_demo_connect=self.connect_deriv_selected_account,
@@ -509,9 +530,9 @@ class CoreLifecycleService:
             self._request_deriv_recovery("DERIV_STARTUP_RECONCILIATION_REQUIRED")
 
     def _schedule_saved_iqoption_recovery(self, *, has_iqoption_recovery: bool) -> None:
-        """Recover a durable Practice order without depending on UI startup timing."""
+        """Recover durable orders or a persisted ARMED operator intent."""
 
-        if not has_iqoption_recovery:
+        if not has_iqoption_recovery and not self._transport_supervisor.armed_intent:
             return
         try:
             saved_mode = IQOptionCredentialVault(
@@ -524,6 +545,14 @@ class CoreLifecycleService:
             return
         self._request_iqoption_recovery("IQOPTION_STARTUP_RECONCILIATION_REQUIRED")
 
+    def _schedule_iqoption_reconciliation(self) -> None:
+        """Ask the existing bounded scheduler to reconcile after transport returns."""
+
+        runtime = self._runtime
+        supervisor = self._iqoption
+        if runtime is not None and supervisor is not None:
+            runtime.reconcile_iqoption_worker(supervisor.client)
+
     def _request_iqoption_recovery_from(
         self,
         source: ReadOnlyWorkerSupervisor,
@@ -535,7 +564,7 @@ class CoreLifecycleService:
             self._request_iqoption_recovery(code.value)
 
     def _request_iqoption_recovery(self, reason_code: str) -> None:
-        """Run one bounded IQ recovery owner without ever rearming entries."""
+        """Recover transport while preserving the operator's execution intent."""
 
         if self._state in {CoreServiceState.STOPPING, CoreServiceState.STOPPED}:
             return
@@ -544,15 +573,14 @@ class CoreLifecycleService:
             return
         with self._iqoption_switch_lock:
             current = self._iqoption_startup_recovery_thread
-            self._iqoption_bot_armed = False
-            self._iqoption_bot_reason = "IQOPTION_RECOVERING"
+            self._iqoption_auto_trader.on_transport_down(reason_code)
+            if self._transport_supervisor.armed_intent:
+                self._iqoption_bot_reason = "TRANSPORT_DOWN"
             # IPC PONG proves only process liveness. A broker failure invalidates
             # cached evidence even when the supervisor still reports READY.
             self._iqoption_session_invalidated = True
             self._iqoption_balance = None
             self._iqoption_clock = None
-            runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
-            self._iqoption_auto_trader.invalidate_entry_authority("IQOPTION_RECOVERING")
             if current is not None and current.is_alive():
                 return
             runtime.event_sink.emit(
@@ -579,14 +607,9 @@ class CoreLifecycleService:
             "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION",
         }
         attempt = 0
-        while (
-            attempt < IQOPTION_MAX_AUTOMATED_RECOVERY_ATTEMPTS
-            and not self._iqoption_recovery_stop.is_set()
-        ):
-            delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
-                min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
-            ]
-            attempt += 1
+        for attempt, delay in enumerate(_IQOPTION_RECOVERY_DELAYS_SECONDS, start=1):
+            if self._iqoption_recovery_stop.is_set():
+                return
             if self._iqoption_recovery_stop.wait(delay):
                 return
             runtime = self._runtime
@@ -602,11 +625,14 @@ class CoreLifecycleService:
             )
             accepted, connected, reason = self.connect_iqoption_selected_account("saved")
             if accepted and connected and not self._iqoption_session_invalidated:
-                self._iqoption_bot_armed = False
-                self._iqoption_bot_reason = "IQOPTION_CONNECTED_REARM_REQUIRED"
+                self._iqoption_bot_reason = (
+                    "IQOPTION_BOT_ARMED"
+                    if self._transport_supervisor.armed_intent
+                    else "IQOPTION_BOT_DISARMED"
+                )
                 runtime.event_sink.emit(
                     "iqoption_recovery_connected",
-                    reason_code="OPERATOR_REARM_REQUIRED",
+                    reason_code="EXECUTION_INTENT_PRESERVED",
                     attempt=attempt,
                 )
                 return
@@ -622,17 +648,31 @@ class CoreLifecycleService:
                 return
         runtime = self._runtime
         if runtime is not None and not self._iqoption_recovery_stop.is_set():
-            self._iqoption_bot_reason = "IQOPTION_AUTOMATED_RECOVERY_LIMIT_REACHED"
+            self._iqoption_bot_reason = "TRANSPORT_DOWN"
             runtime.event_sink.emit(
                 "iqoption_recovery_exhausted",
-                reason_code="IQOPTION_AUTOMATED_RECOVERY_LIMIT_REACHED",
+                reason_code="TRANSPORT_DOWN",
                 attempts=attempt,
             )
 
-    def safe_stop(self) -> None:
+    def safe_stop(
+        self,
+        *,
+        caller: StopReason,
+        preserve_operator_intent: bool = False,
+    ) -> None:
+        assert_safe_stop_caller(caller)
         runtime = self._require_runtime()
         if self._deriv_account_id is not None:
             runtime.stop_new_entries_for(Broker.DERIV, self._deriv_account_id)
+        # Launcher shutdown blocks the current process immediately without
+        # erasing the durable operator choice. Explicit UI stop commands use
+        # the default and persist DISARMED.
+        self._stop_iqoption_execution(
+            caller,
+            "IQOPTION_BOT_DISARMED",
+            persist_operator_intent=not preserve_operator_intent,
+        )
         self._safe_stop = True
         # Lifecycle READY means the Core/UI control plane is available. Trading
         # authority is represented independently by _safe_stop/HealthGate.
@@ -769,12 +809,11 @@ class CoreLifecycleService:
                     self._iqoption_session_invalidated = True
                     self._iqoption_balance = None
                     self._iqoption_clock = None
-                    self._iqoption_bot_armed = False
-                    self._iqoption_bot_reason = "IQOPTION_RECOVERING"
-                    self._require_runtime().stop_new_entries_for(
-                        Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID
+                    self._iqoption_auto_trader.on_transport_down(
+                        "IQOPTION_BROKER_SESSION_UNAVAILABLE"
                     )
-                    self._iqoption_auto_trader.invalidate_entry_authority("IQOPTION_RECOVERING")
+                    if self._transport_supervisor.armed_intent:
+                        self._iqoption_bot_reason = "TRANSPORT_DOWN"
                 else:
                     self._iqoption_balance = verified_balance
                     return (
@@ -801,11 +840,8 @@ class CoreLifecycleService:
                     retry_after_seconds=admission.retry_after_seconds,
                 )
                 return False, False, admission.reason_code
-            self._iqoption_bot_armed = False
-            self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED_AFTER_CONNECTION_CHANGE"
             runtime = self._require_runtime()
-            runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
-            self._iqoption_auto_trader.stop()
+            self._iqoption_auto_trader.on_transport_down("IQOPTION_CONNECTION_CHANGE")
             runtime.detach_iqoption_worker()
             previous = self._iqoption
             self._iqoption = None
@@ -898,7 +934,24 @@ class CoreLifecycleService:
             self._iqoption_balance = balance
             self._iqoption_clock = clock
             self._iqoption_session_invalidated = False
-            self._iqoption_bot_reason = "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK"
+            self._iqoption_auto_trader.on_transport_up()
+            if self._transport_supervisor.armed_intent:
+                self._iqoption_bot_armed = True
+                if runtime.resume_new_entries_for(
+                    Broker.IQ_OPTION,
+                    IQOPTION_PRACTICE_ACCOUNT_ID,
+                ):
+                    self._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
+                else:
+                    self._iqoption_bot_reason = (
+                        runtime.health_gate.state_for(
+                            Broker.IQ_OPTION.value,
+                            IQOPTION_PRACTICE_ACCOUNT_ID,
+                        ).reason_code
+                        or "IQOPTION_HEALTH_GATE_BLOCKED"
+                    )
+            else:
+                self._iqoption_bot_reason = "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK"
             if self._iqoption_auto_trader is not None:
                 self._iqoption_auto_trader.start()
             return (
@@ -962,10 +1015,10 @@ class CoreLifecycleService:
 
         with self._iqoption_switch_lock:
             if not enabled:
-                self._iqoption_bot_armed = False
-                runtime = self._require_runtime()
-                runtime.stop_new_entries_for(Broker.IQ_OPTION, IQOPTION_PRACTICE_ACCOUNT_ID)
-                self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+                self._stop_iqoption_execution(
+                    StopReason.USER_COMMAND,
+                    "IQOPTION_BOT_DISARMED",
+                )
                 return True, self._iqoption_bot_reason
             supervisor = self._iqoption
             balance = self._iqoption_balance
@@ -1007,11 +1060,47 @@ class CoreLifecycleService:
                 )
                 return False, self._iqoption_bot_reason
             self._iqoption_bot_armed = True
+            self._iqoption_execution_transport().arm()
             if hasattr(self, "_iqoption_auto_trader") and self._iqoption_auto_trader is not None:
                 self._iqoption_auto_trader.begin_new_run()
                 self._iqoption_auto_trader.start()
             self._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
             return True, self._iqoption_bot_reason
+
+    def _stop_iqoption_execution(
+        self,
+        caller: StopReason,
+        reason_code: str,
+        *,
+        persist_operator_intent: bool = True,
+    ) -> None:
+        """Central stop boundary; transport code is not an authorized caller."""
+
+        assert_safe_stop_caller(caller)
+        self._iqoption_execution_transport().safe_stop(
+            caller=caller,
+            persist_intent=persist_operator_intent,
+        )
+        self._iqoption_bot_armed = False
+        self._iqoption_bot_reason = reason_code
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.stop_new_entries_for(
+                Broker.IQ_OPTION,
+                IQOPTION_PRACTICE_ACCOUNT_ID,
+            )
+        trader = getattr(self, "_iqoption_auto_trader", None)
+        if trader is not None:
+            trader.invalidate_entry_authority(reason_code)
+
+    def _iqoption_execution_transport(self) -> TransportSupervisor:
+        controller = getattr(self, "_transport_supervisor", None)
+        if controller is None:
+            controller = TransportSupervisor(
+                initially_armed=bool(getattr(self, "_iqoption_bot_armed", False))
+            )
+            self._transport_supervisor = controller
+        return controller
 
     def _connect_deriv_selected_account_locked(self) -> tuple[bool, str]:
         """Replace the public worker with the explicitly selected authenticated account."""
@@ -1129,14 +1218,10 @@ class CoreLifecycleService:
     def _on_manifest_applied(self, manifest: ManifestRecord) -> None:
         """Finish a remote swap without granting or preserving entry authority."""
         if self._iqoption_bot_armed:
-            self._iqoption_bot_armed = False
-            self._iqoption_bot_reason = "IQOPTION_BOT_DISARMED_AFTER_MANIFEST_CHANGE"
-            if self._runtime is not None:
-                self._runtime.stop_new_entries_for(
-                    Broker.IQ_OPTION,
-                    IQOPTION_PRACTICE_ACCOUNT_ID,
-                )
-            self._iqoption_auto_trader.invalidate_entry_authority(self._iqoption_bot_reason)
+            self._stop_iqoption_execution(
+                StopReason.STRATEGY_GATE,
+                "IQOPTION_BOT_DISARMED_AFTER_MANIFEST_CHANGE",
+            )
         monitor = self._live_monitor
         if monitor is not None:
             monitor.on_manifest_applied(manifest)

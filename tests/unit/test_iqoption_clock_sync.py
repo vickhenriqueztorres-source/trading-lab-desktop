@@ -151,8 +151,8 @@ def test_reconnect_requires_new_timestamp_and_new_probe(connected) -> None:
     assert sock.pings == 2
 
 
-@pytest.mark.parametrize("failure", ["missing", "latency", "stale"])
-def test_core_blocks_only_iq_and_resumes_on_fresh_clock_without_relogin(failure) -> None:
+@pytest.mark.parametrize("failure", ["missing", "stale"])
+def test_core_degrades_transport_and_resumes_on_fresh_clock_without_rearm(failure) -> None:
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
 
@@ -186,7 +186,7 @@ def test_core_blocks_only_iq_and_resumes_on_fresh_clock_without_relogin(failure)
             return BrokerClockSnapshot(
                 int(now.timestamp()),
                 now - timedelta(seconds=31 if not self.healthy and failure == "stale" else 0),
-                8.0 if not self.healthy and failure == "latency" else 0.125,
+                0.125,
                 Decimal(0),
             )
 
@@ -204,18 +204,94 @@ def test_core_blocks_only_iq_and_resumes_on_fresh_clock_without_relogin(failure)
         recovery_notifier=recovery.append,
     )
     trader._evaluate_cycle()
-    assert trader.status_reason == "MD_CLOCK_UNTRUSTED"
+    assert trader.status_reason == "TRANSPORT_DOWN"
     assert not runtime.requests
-    assert not runtime.health_gate.state_for(
-        Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
-    ).is_open
+    assert trader.execution_state.value == "ARMED_DEGRADED"
     assert runtime.health_gate.state_for(Broker.DERIV.value, "demo").is_open
-    assert not recovery
+    assert recovery == ["IQOPTION_CLOCK_UNAVAILABLE"]
     client.healthy = True
+    trader.on_transport_up()
+    trader._armed_after_epoch = None
     mono[0] += 11
     trader._evaluate_cycle()
     assert runtime.health_gate.state_for(
         Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
     ).is_open
     assert len(runtime.requests) == 1  # simulated Core pipeline only
-    assert not recovery
+    assert recovery == ["IQOPTION_CLOCK_UNAVAILABLE"]
+
+
+def test_core_logs_high_rtt_but_does_not_block() -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from apps.core.health import HealthGate
+    from apps.core.iqoption_auto_trader import IqOptionAutoTrader
+    from apps.core.iqoption_risk_config import IqOptionRiskConfig
+    from packages.domain.market import BrokerClockSnapshot
+    from tests.unit.test_iqoption_auto_trader import (
+        FakeClient,
+        FakeRuntime,
+        _falling_prices,
+        _make_candles,
+    )
+
+    now = datetime.now(UTC)
+
+    class Client(FakeClient):
+        def broker_clock(self):
+            return BrokerClockSnapshot(int(now.timestamp()), now, 8.0, Decimal(0))
+
+    client = Client(_make_candles(_falling_prices()))
+    runtime = FakeRuntime()
+    runtime.health_gate = HealthGate()
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,
+        risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
+        operator_armed=lambda: True,
+        utc_clock=lambda: now,
+        monotonic=lambda: 100.0,
+    )
+
+    trader._evaluate_cycle()
+
+    assert len(runtime.requests) == 1
+    assert any(name == "iqoption_clock_rtt_observed" for name, _ in runtime.events)
+
+
+def test_core_blocks_only_when_clock_skew_exceeds_120_seconds() -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from apps.core.health import HealthGate
+    from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID, IqOptionAutoTrader
+    from apps.core.iqoption_risk_config import IqOptionRiskConfig
+    from packages.domain.market import BrokerClockSnapshot
+    from packages.domain.models import Broker
+    from tests.unit.test_iqoption_auto_trader import FakeClient, FakeRuntime
+
+    now = datetime.now(UTC)
+
+    class Client(FakeClient):
+        def broker_clock(self):
+            return BrokerClockSnapshot(int(now.timestamp()), now, 0.1, Decimal("120.001"))
+
+    client = Client([])
+    runtime = FakeRuntime()
+    runtime.health_gate = HealthGate()
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,
+        risk_config_provider=IqOptionRiskConfig,
+        operator_armed=lambda: True,
+        utc_clock=lambda: now,
+        monotonic=lambda: 100.0,
+    )
+
+    trader._evaluate_cycle()
+
+    assert trader.status_reason == "MD_CLOCK_UNTRUSTED"
+    assert not runtime.health_gate.state_for(
+        Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
+    ).is_open

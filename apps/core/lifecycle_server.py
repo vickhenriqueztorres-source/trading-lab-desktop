@@ -9,6 +9,7 @@ from collections import OrderedDict
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from apps.core.execution_state import StopReason
 from apps.core.lifecycle_service import CoreLifecycleService
 from packages.protocol import (
     PROTOCOL_VERSION,
@@ -216,7 +217,10 @@ class CoreLifecycleServer:
             )
         if request.message_type is MessageType.CORE_SAFE_STOP_REQUEST:
             require_empty_payload(request.payload)
-            self._service.safe_stop()
+            self._service.safe_stop(
+                caller=StopReason.USER_COMMAND,
+                preserve_operator_intent=True,
+            )
             return _response(request, MessageType.CORE_SAFE_STOP_ACK, {})
         if request.message_type is MessageType.CORE_DRAIN_REQUEST:
             drain = CoreDrainRequest.from_payload(request.payload)

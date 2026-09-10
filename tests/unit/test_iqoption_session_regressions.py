@@ -293,7 +293,7 @@ def test_identical_order_and_radar_projections_do_not_rebuild_cells() -> None:
 
 
 @pytest.mark.parametrize("recovery", [True, False])
-def test_dead_broker_with_live_ipc_replaces_worker_and_stays_disarmed(
+def test_dead_broker_with_live_ipc_replaces_worker_and_preserves_arm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recovery: bool
 ) -> None:
     from apps.core.lifecycle_service import CoreLifecycleService
@@ -354,6 +354,7 @@ def test_dead_broker_with_live_ipc_replaces_worker_and_stays_disarmed(
         assert service.connect_iqoption_selected_account("practice")[1]
         old = made[0]
         old.client.dead = True
+        service._transport_supervisor.arm()
         service._iqoption_bot_armed = True
         if recovery:
             service._request_iqoption_recovery("IQOPTION_WEBSOCKET_UNAVAILABLE")
@@ -364,7 +365,8 @@ def test_dead_broker_with_live_ipc_replaces_worker_and_stays_disarmed(
         assert len(made) == 2
         assert old.stopped
         assert attached == [old.client, made[1].client]
-        assert not service._iqoption_bot_armed
+        assert service._iqoption_bot_armed
+        assert service._transport_supervisor.armed_intent
         assert not service._iqoption_session_invalidated
         # A delayed callback from the dead generation cannot restart the new one.
         service._request_iqoption_recovery_from(old, ProtocolErrorCode.WORKER_CRASHED)

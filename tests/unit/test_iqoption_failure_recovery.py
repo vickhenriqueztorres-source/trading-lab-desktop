@@ -392,7 +392,7 @@ def test_ticket_expiry_before_admission_does_not_latch_account():
     submit = runtime.submit
 
     def expire_ticket(request):
-        clock[0] += 3
+        clock[0] += 9
         trader.validate_runtime_entry(request)  # Core calls this before reserving.
 
     runtime.submit = expire_ticket

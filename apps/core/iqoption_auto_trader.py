@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+from apps.core.execution_state import ExecutionState, TransportSupervisor
 from apps.core.families.base import EvalResult
 from apps.core.indicator_cache import (
     IndicatorCache,
@@ -105,6 +106,8 @@ IQOPTION_ACTIVE_SUSPENSION_COOLDOWN_SECONDS = 5 * 60
 IQOPTION_TELEMETRY_CACHE_TTL_SECONDS = 10.0
 IQOPTION_INSTRUMENT_CATALOG_TTL_SECONDS = 60.0
 IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS = 180.0
+IQOPTION_PAYOUT_TICKET_MAX_AGE_SECONDS = 8.0
+IQOPTION_CLOCK_MAX_SKEW_SECONDS = Decimal("120")
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +179,8 @@ class IqOptionAutoTrader:
         monitor_provider: Callable[[], LiveMonitor | None] | None = None,
         execution_flags_provider: Callable[[], IqOptionExecutionFlags] | None = None,
         recovery_notifier: Callable[[str], None] | None = None,
+        transport_supervisor: TransportSupervisor | None = None,
+        reconcile_orders: Callable[[], None] | None = None,
     ) -> None:
         if evaluation_interval_seconds <= 0:
             raise ValueError("IQ Option evaluation interval must be positive")
@@ -188,6 +193,15 @@ class IqOptionAutoTrader:
         self._monitor_provider = monitor_provider
         self._execution_flags_provider = execution_flags_provider or IqOptionExecutionFlags
         self._recovery_notifier = recovery_notifier
+        if transport_supervisor is None:
+            # A standalone trader is constructed around an already supplied
+            # supervisor. Lifecycle injects its persisted, initially degraded
+            # controller while it is still reconnecting.
+            transport_supervisor = TransportSupervisor(initially_armed=bool(operator_armed()))
+            if transport_supervisor.armed_intent:
+                transport_supervisor.mark_up()
+        self._transport_supervisor = transport_supervisor
+        self._reconcile_orders = reconcile_orders
         self._recovery_notified_generation: str | None = None
         self._observed_client: object | None = None
         # Negative availability only, never cached permission to submit.
@@ -265,6 +279,10 @@ class IqOptionAutoTrader:
     def status_reason(self) -> str:
         with self._lock:
             return self._status_reason
+
+    @property
+    def execution_state(self) -> ExecutionState:
+        return self._transport_supervisor.state
 
     @property
     def last_rsi(self) -> Decimal | None:
@@ -362,9 +380,51 @@ class IqOptionAutoTrader:
         """ARM never erases consumed signals, broker failures or financial evidence."""
 
         with self._lock:
+            self._transport_supervisor.arm()
             self._execution_ticket = None
             self._armed_after_epoch = int(self._utc_clock().timestamp())
             self._status_reason = "IQOPTION_BOT_ARMED"
+
+    def on_transport_down(self, reason_code: str) -> None:
+        """Degrade transport without revoking the operator's arm intent."""
+
+        state = self._transport_supervisor.mark_down(reason_code)
+        with self._lock:
+            self._execution_ticket = None
+            self._status_reason = (
+                "TRANSPORT_DOWN"
+                if state is ExecutionState.ARMED_DEGRADED
+                else (self._status_reason)
+            )
+        runtime = self._runtime_provider()
+        if runtime is not None:
+            runtime.event_sink.emit(
+                "transport_down",
+                broker=Broker.IQ_OPTION.value,
+                execution_state=state.value,
+                reason_code=reason_code,
+            )
+
+    def on_transport_up(self) -> None:
+        """Restore transport state and schedule reconciliation before fresh evaluation."""
+
+        previous = self._transport_supervisor.state
+        state = self._transport_supervisor.mark_up()
+        self._recovery_notified_generation = None
+        if previous is ExecutionState.ARMED_DEGRADED and state is ExecutionState.ARMED:
+            with self._lock:
+                self._execution_ticket = None
+                self._armed_after_epoch = int(self._utc_clock().timestamp())
+                self._status_reason = "IQOPTION_BOT_ARMED"
+        runtime = self._runtime_provider()
+        if runtime is not None:
+            runtime.event_sink.emit(
+                "transport_up",
+                broker=Broker.IQ_OPTION.value,
+                execution_state=state.value,
+            )
+        if self._reconcile_orders is not None:
+            self._reconcile_orders()
 
     def invalidate_entry_authority(self, reason: str) -> None:
         """Drop only ephemeral admission authority; monitoring and settlement continue."""
@@ -393,6 +453,25 @@ class IqOptionAutoTrader:
 
     def _evaluate_cycle(self) -> None:
         self._cycle_started_mono = self._monotonic()
+        if self._transport_supervisor.state is ExecutionState.ARMED_DEGRADED:
+            runtime = self._runtime_provider()
+            logger.info(
+                "IQ Option evaluation skipped",
+                extra={
+                    "broker": Broker.IQ_OPTION.value,
+                    "reason_code": "TRANSPORT_DOWN",
+                    "execution_state": ExecutionState.ARMED_DEGRADED.value,
+                },
+            )
+            if runtime is not None:
+                runtime.event_sink.emit(
+                    "iqoption_evaluation_skipped",
+                    broker=Broker.IQ_OPTION.value,
+                    reason_code="TRANSPORT_DOWN",
+                    execution_state=ExecutionState.ARMED_DEGRADED.value,
+                )
+            self._set_status("TRANSPORT_DOWN")
+            return
         risk_config = self._risk_config_provider()
         selected_symbol = risk_config.symbol or "AUTO"
         automatic = selected_symbol == "AUTO"
@@ -432,12 +511,7 @@ class IqOptionAutoTrader:
                 except WorkerDispatchError as exc:
                     with self._lock:
                         self._latest_clock = None
-                    runtime.health_gate.block_scope(
-                        Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
-                    )
-                    self._set_status("MD_CLOCK_UNTRUSTED")
-                    if exc.code.value != "IQOPTION_CLOCK_UNAVAILABLE":
-                        self._notify_session_failure(supervisor.client, exc.code.value)
+                    self._notify_session_failure(supervisor.client, exc.code.value)
                     return
                 except Exception:
                     with self._lock:
@@ -462,7 +536,19 @@ class IqOptionAutoTrader:
             clock_fresh = clock is not None and (
                 0 <= (self._utc_clock() - clock.local_received_at).total_seconds() <= 30
             )
-            if not clock_fresh or clock is None or not clock.is_synced:
+            if not clock_fresh or clock is None:
+                self._notify_session_failure(
+                    supervisor.client,
+                    "IQOPTION_CLOCK_UNAVAILABLE",
+                )
+                return
+            if clock.round_trip_milliseconds > 1_000:
+                runtime.event_sink.emit(
+                    "iqoption_clock_rtt_observed",
+                    broker=Broker.IQ_OPTION.value,
+                    round_trip_milliseconds=clock.round_trip_milliseconds,
+                )
+            if abs(clock.estimated_offset_seconds) > IQOPTION_CLOCK_MAX_SKEW_SECONDS:
                 runtime.health_gate.block_scope(
                     Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
                 )
@@ -1134,6 +1220,7 @@ class IqOptionAutoTrader:
         current = self._supervisor_provider()
         if current is None or current.client is not client:
             return
+        self.on_transport_down(reason)
         generation = self._series_generation(client)
         if self._recovery_notifier is not None and self._recovery_notified_generation != generation:
             self._recovery_notified_generation = generation
@@ -1146,10 +1233,6 @@ class IqOptionAutoTrader:
             raise RuntimeError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
         if not self._operator_armed():
             raise RuntimeError("IQOPTION_BOT_DISARMED")
-        if key != "iqoption-rsi-demo":
-            monitor = None if self._monitor_provider is None else self._monitor_provider()
-            if monitor is None or not monitor.ready:
-                raise RuntimeError("MANIFEST_MONITOR_UNAVAILABLE")
         started = self._monotonic()
         has_payout_probe = callable(getattr(client, "iqoption_binary_payout", None))
         if key == "iqoption-rsi-demo" and not has_payout_probe:
@@ -1197,9 +1280,6 @@ class IqOptionAutoTrader:
                 raise RuntimeError("NO_CANDIDATE")
             # Explicit unvalidated Practice recipe has no fabricated Wilson/SPRT.
             return None
-        monitor = None if self._monitor_provider is None else self._monitor_provider()
-        if monitor is None or not monitor.ready:
-            raise RuntimeError("MANIFEST_MONITOR_UNAVAILABLE")
         catalog = None if self._catalog_provider is None else self._catalog_provider()
         if catalog is None:
             raise RuntimeError("STRATEGY_NOT_FOUND")
@@ -1242,7 +1322,7 @@ class IqOptionAutoTrader:
             ticket is None
             or active_client is not ticket[3]
             or (symbol, key, context) != ticket[:3]
-            or not 0 <= self._monotonic() - ticket[4] < 2
+            or not 0 <= self._monotonic() - ticket[4] < IQOPTION_PAYOUT_TICKET_MAX_AGE_SECONDS
         ):
             raise RuntimeError("IQOPTION_PAYOUT_STALE")
         if not self._operator_armed():

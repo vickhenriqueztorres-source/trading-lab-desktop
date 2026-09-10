@@ -192,9 +192,12 @@ mesma transação antes do IPC financeiro. Aceite, rejeição e ambiguidade são
 estado persistido, sem conversão de exceção em sucesso. Eventos de abertura/liquidação voltam ao Core
 e atualizam a ordem e o P&L pelo processador idempotente compartilhado.
 
-Conta Practice salva pode reconectar sem reabrir o diálogo, mas a reconexão não rearma o bot. Conta
-Real salva exige confirmação explícita e o conector compilado desta revisão permanece somente leitura;
-nenhum teste externo Real é autorizado por esta arquitetura operacional.
+A intenção explícita de execução Practice é persistida atomicamente em `operator_intent.json`. Queda
+de transporte ou substituição do worker muda `ARMED` para `ARMED_DEGRADED`, bloqueia avaliações e
+preserva essa intenção durante reconexões e reinícios. Quando o transporte volta, o Core agenda a
+reconciliação, descarta sinais anteriores à recuperação e retorna a `ARMED` sem exigir novo clique.
+Conta Real salva exige confirmação explícita e o conector compilado desta revisão permanece somente
+leitura; nenhum teste externo Real é autorizado por esta arquitetura operacional.
 
 O `IQOptionConnectionSafetyController` limita inícios externos de sessão e persiste o orçamento no
 profile. O worker mantém o SSID apenas em memória e o reutiliza em até cinco recuperações WebSocket,

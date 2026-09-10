@@ -35,13 +35,18 @@ def test_iq_workspace_reports_effective_gate_not_only_arm_flag(qapp: QApplicatio
         workspace.close()
 
 
-def test_iq_workspace_explains_rearm_after_reconnect(qapp: QApplication) -> None:
+def test_iq_workspace_explains_transport_recovery_without_rearm(qapp: QApplication) -> None:
     workspace = IqOptionWorkspaceWidget()
     try:
-        workspace.update_bot_state(False, "IQOPTION_CONNECTED_REARM_REQUIRED")
+        workspace.update_bot_state(
+            True,
+            "TRANSPORT_DOWN",
+            entry_ready=False,
+            entry_blocker="TRANSPORT_DOWN",
+        )
 
-        assert "Clique em ‘Ligar Bot IQ Option’" in workspace._automation_detail.text()
-        assert "IQOPTION_CONNECTED_REARM_REQUIRED" not in workspace._automation_detail.text()
+        assert "bot continua armado" in workspace._automation_detail.text()
+        assert "retomará após reconciliar" in workspace._automation_detail.text()
     finally:
         workspace.close()
 

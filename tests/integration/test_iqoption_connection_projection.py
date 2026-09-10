@@ -360,9 +360,12 @@ def test_iq_recovery_preserves_deriv_entry_authority(
         runtime.stop_new_entries_for(Broker.DERIV, "deriv-demo")
         assert runtime.resume_new_entries_for(Broker.DERIV, "deriv-demo") is True
         service._safe_stop = False
+        service._transport_supervisor.arm()
+        service._iqoption_bot_armed = True
 
         def reconnect(_mode: str) -> tuple[bool, bool, str]:
             service._iqoption_session_invalidated = False
+            service._iqoption_auto_trader.on_transport_up()
             return True, True, "IQOPTION_PRACTICE_CONNECTED"
 
         monkeypatch.setattr(service, "connect_iqoption_selected_account", reconnect)
@@ -374,8 +377,8 @@ def test_iq_recovery_preserves_deriv_entry_authority(
 
         assert runtime.health_gate.state_for("DERIV", "deriv-demo").is_open is True
         assert service._safe_stop is False
-        assert service._iqoption_bot_armed is False
-        assert service._iqoption_bot_reason == "IQOPTION_CONNECTED_REARM_REQUIRED"
+        assert service._iqoption_bot_armed is True
+        assert service._iqoption_bot_reason == "IQOPTION_BOT_ARMED"
     finally:
         service.emergency_shutdown()
 

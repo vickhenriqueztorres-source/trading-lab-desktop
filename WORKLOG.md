@@ -5799,3 +5799,42 @@ Validação:
   Windows durante `COLLECT`; a recompilação canônica em `dist/log` concluiu sem alteração de código.
 - O portátil R1 foi supersedido após endurecer a validação runtime do nível do evento; R2 é o
   artefato final e repetiu scanner, integridade e health-check com zero processo residual.
+
+## 2026-09-10 — Fase 1: execução IQ Option desacoplada do transporte
+
+- Mudança de risco alto na autoridade de execução da IQ Option, deliberadamente substituindo a
+  regra anterior de rearme manual após reconexão. O Core continua dono do estado financeiro e
+  falha fechado: transporte indisponível muda `ARMED` para `ARMED_DEGRADED`, descarta o ticket de
+  payout e pula toda avaliação com `TRANSPORT_DOWN`, sem revogar a intenção do operador.
+- Criados `ExecutionState`, `StopReason`, allowlist fechada de callers e `TransportSupervisor`.
+  Somente `RiskManager`, `StrategyGate`, `PayoutGate` e `UserCommand` podem executar Safe Stop.
+  Timeout, WebSocket fechado, troca de conexão e crash de worker apenas marcam transporte down.
+- A intenção armada é gravada atomicamente em `profile_dir/operator_intent.json` com `os.replace`.
+  Safe shutdown preserva essa escolha; comando explícito de desligar o bot persiste `DISARMED`.
+  Reinício restaura `ARMED_DEGRADED`, reconecta a conta Practice salva e agenda reconciliação antes
+  de aceitar sinal novo.
+- Heartbeat do worker IQ passou de 10 para 30 segundos. O limite nominal de tentativas que causava
+  desarme foi removido; esgotar a rodada bounded de recovery mantém `TRANSPORT_DOWN` e intenção
+  armada. O motivo legado `IQOPTION_BOT_DISARMED_AFTER_CONNECTION_CHANGE` foi removido do Core/UI.
+- Gate duplicado `MANIFEST_MONITOR_UNAVAILABLE` saiu do auto trader. Ticket de payout passou de 2
+  para 8 segundos. RTT alto ficou somente observável; `MD_CLOCK_UNTRUSTED` bloqueia apenas quando o
+  desvio absoluto do relógio supera 120 segundos. Ausência/staleness do relógio degrada transporte.
+- Testes novos em `test_iqoption_execution_decoupled.py`: 50 `REQUEST_TIMEOUT`, 10 `WS_CLOSED`,
+  skip de avaliação em transporte down e persistência após restart. Nenhum teste foi removido;
+  expectativas legadas de monitor duplicado, payout 2 s, RTT bloqueante e rearme pós-reconexão
+  foram atualizadas para o contrato desta fase.
+- Validação: testes obrigatórios 4/4; `tests/unit` 864 passed, 1 skipped; integração 280 passed,
+  1 skipped; contract/chaos/e2e/load/replay/security 238 passed, 1 skipped; externo 1 skipped
+  opt-in. Ruff check/format no escopo executável `apps packages tests scripts` (525 arquivos), mypy
+  em 312 arquivos, compileall, diff-check e as quatro buscas globais passaram. O comando não
+  canônico `ruff .` continua falhando somente no Markdown legado `docs/##  Arquitetura.py`, que tem
+  extensão incorreta e foi preservado. O aviso `WinError 5` ocorre no callback de limpeza de
+  `pytest-current` depois do exit 0.
+- Build canônico posterior ao commit: onedir PyInstaller 6.22.2 com 549 arquivos no manifesto,
+  scanner zero segredos, integridade e health-check aprovados. Portátil C# com 986 entradas,
+  recurso único `TradingLab.payload.zip`, ProductVersion 1.9.11, 59.159.040 bytes e health-check
+  exit 0 sem processo residual. Artefato:
+  `dist/TradingLab-Desktop-v1.9.11-IQ-CONNECTION-RESILIENCE-FASE1.exe`; SHA-256
+  `61C1A47C26F3530984EA065B3014499988052ED2C698CA6E56304C156E6056D3`.
+- Nenhuma conexão com corretora, ordem externa, credencial, push ou Fase 2 foi executada nesta
+  entrega.

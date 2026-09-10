@@ -40,16 +40,14 @@ def _mode_text(mode: UiAccountMode) -> str:
 def _bot_reason_text(reason: str) -> str:
     messages = {
         "MD_CLOCK_UNTRUSTED": (
-            "Relógio da corretora sem confirmação recente ou com latência/desvio excessivo. "
-            "A sincronização será verificada novamente; não é necessário refazer o login."
+            "Relógio da corretora sem confirmação recente ou com desvio acima de 120 segundos. "
+            "A latência continua visível para diagnóstico, mas não bloqueia entradas; "
+            "não é necessário refazer o login."
         ),
-        "IQOPTION_CONNECTED_REARM_REQUIRED": (
-            "Conexão recuperada. Clique em ‘Ligar Bot IQ Option’ para rearmar as entradas."
+        "TRANSPORT_DOWN": (
+            "Transporte indisponível. O bot continua armado e retomará após reconciliar."
         ),
         "IQOPTION_BOT_DISARMED": "Bot aguardando o comando ‘Ligar Bot IQ Option’.",
-        "IQOPTION_BOT_DISARMED_AFTER_CONNECTION_CHANGE": (
-            "A conta mudou ou reconectou. Confirme ‘Ligar Bot IQ Option’ novamente."
-        ),
     }
     return messages.get(reason, reason)
 
