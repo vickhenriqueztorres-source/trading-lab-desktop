@@ -22,6 +22,7 @@ logger = logging.getLogger("core.live_monitor")
 
 STRATEGY_DEMOTED_BY_SPRT = "STRATEGY_DEMOTED_BY_SPRT"
 MANIFEST_EXPIRED = "MANIFEST_EXPIRED"
+MANIFEST_MONITOR_STATS_INVALID = "MANIFEST_MONITOR_STATS_INVALID"
 
 
 class LiveMonitor:
@@ -106,10 +107,19 @@ class LiveMonitor:
 
             def update(
                 binding: dict[str, Any], prior: dict[str, Any] | None, pnl: int
-            ) -> dict[str, Any]:
-                monitor = (
-                    SPRT(binding["p0"], binding["p1"]) if prior is None else SPRT.from_dict(prior)
-                )
+            ) -> dict[str, Any] | None:
+                try:
+                    p0 = Decimal(str(binding["p0"]))
+                    p1 = Decimal(str(binding["p1"]))
+                except (KeyError, TypeError, ValueError):
+                    return None
+                if not (Decimal(0) < p1 < p0 < Decimal(1)):
+                    # Old Practice-only recipes used zero placeholders explicitly as
+                    # "not validated". A terminal order may survive an upgrade with
+                    # that durable binding. Acknowledge it without fabricating an SPRT
+                    # hypothesis and without misreporting a database write failure.
+                    return None
+                monitor = SPRT(p0, p1) if prior is None else SPRT.from_dict(prior)
                 monitor.update(pnl > 0)
                 return monitor.to_dict()
 
@@ -135,6 +145,13 @@ class LiveMonitor:
                         )
             for row in rows:
                 key, order_id = str(row["strategy_key"]), str(row["order_id"])
+                if row["state"] == "SETTLED" and row.get("monitor") is None:
+                    self._event_sink.emit(
+                        "manifest_monitor_evidence_skipped",
+                        strategy_key=key,
+                        order_id=order_id,
+                        reason_code=MANIFEST_MONITOR_STATS_INVALID,
+                    )
                 if self._uploader is not None and row["state"] == "SETTLED":
                     self._enqueue_terminal_evidence(row, key, order_id)
                 if row["state"] in {"SETTLED", "REJECTED", "SEND_BLOCKED", "CANCELLED", "EXPIRED"}:

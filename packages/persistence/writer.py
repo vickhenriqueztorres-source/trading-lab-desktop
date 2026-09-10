@@ -2230,7 +2230,7 @@ class SingleDatabaseWriter:
 
     def consume_manifest_orders(
         self,
-        update: Callable[[dict[str, Any], dict[str, Any] | None, int], dict[str, Any]],
+        update: Callable[[dict[str, Any], dict[str, Any] | None, int], dict[str, Any] | None],
     ) -> list[dict[str, Any]]:
         """Snapshot nonterminal bindings; atomically consume terminal evidence and SPRT.
 
@@ -2267,16 +2267,27 @@ class SingleDatabaseWriter:
                             for key in ("p0", "p1")
                         ):
                             prior_state = dict(legacy)
-                    updated = update(
-                        binding,
-                        prior_state,
-                        int(row["realized_pnl_minor"]),
-                    )
-                    connection.execute(
-                        "INSERT INTO manifest_monitor_states VALUES (?, ?, ?) "
-                        "ON CONFLICT(revision) DO UPDATE SET state_json=excluded.state_json",
-                        (row["revision"], row["strategy_key"], json.dumps(updated, sort_keys=True)),
-                    )
+                    try:
+                        updated = update(
+                            binding,
+                            prior_state,
+                            int(row["realized_pnl_minor"]),
+                        )
+                    except Exception as exc:
+                        # The callback performs statistical/domain work. Its failure must
+                        # roll back the durable cursor, but it is not evidence that SQLite
+                        # failed to write and therefore must not poison DatabaseHealth.
+                        raise PersistenceError("MANIFEST_MONITOR_UPDATE_FAILED") from exc
+                    if updated is not None:
+                        connection.execute(
+                            "INSERT INTO manifest_monitor_states VALUES (?, ?, ?) "
+                            "ON CONFLICT(revision) DO UPDATE SET state_json=excluded.state_json",
+                            (
+                                row["revision"],
+                                row["strategy_key"],
+                                json.dumps(updated, sort_keys=True),
+                            ),
+                        )
                     row["monitor"] = updated
                 if row["state"] in {"SETTLED", "REJECTED", "SEND_BLOCKED", "CANCELLED", "EXPIRED"}:
                     connection.execute(

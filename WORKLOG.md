@@ -5838,3 +5838,23 @@ Validação:
   `61C1A47C26F3530984EA065B3014499988052ED2C698CA6E56304C156E6056D3`.
 - Nenhuma conexão com corretora, ordem externa, credencial, push ou Fase 2 foi executada nesta
   entrega.
+
+## 2026-09-10 — Correção do falso DB_WRITE_FAILED no monitor de manifesto
+
+- Diagnóstico no perfil real, somente leitura: `PRAGMA quick_check=ok`; a primeira falha surgiu
+  11 ms após o startup do monitor e se repetia a cada 500 ms. A causa era uma ordem Practice
+  liquidada com vínculo legado `p0=0`/`p1=0`, valores que significam “sem validação” e não formam
+  uma hipótese SPRT válida.
+- O monitor agora reconhece essa evidência legada, consome o cursor terminal exatamente uma vez,
+  não fabrica estatística e emite `MANIFEST_MONITOR_STATS_INVALID`. O histórico financeiro e a
+  liquidação permanecem intactos.
+- Falhas do callback estatístico agora fazem rollback com `MANIFEST_MONITOR_UPDATE_FAILED`, mas
+  não são classificadas como falha física do SQLite nem envenenam `DatabaseHealth`. Falhas reais
+  de I/O/commit continuam resultando em `DB_WRITE_FAILED` e fail-close.
+- Regressões adicionadas para o vínculo legado e para garantir que exceção de domínio não marque
+  o banco como falho. Validação em snapshot consistente do banco real: vínculo pendente 1→0,
+  `database_health=HEALTHY`, `monitor_ready=True`, `quick_check=ok`; nenhum arquivo do perfil em
+  execução foi alterado.
+- Testes focados: 36 passed. Suíte completa: 1382 passed, 4 skipped e uma flutuação de timing no
+  contrato de crash do worker Deriv, fora do escopo; reexecução isolada 3/3 passed. Ruff check e
+  format (525 arquivos), mypy (312 arquivos), compileall e diff-check aprovados.

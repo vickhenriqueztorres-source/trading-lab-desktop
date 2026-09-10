@@ -35,6 +35,8 @@ from packages.domain.models import (
     ReconciliationSource,
     WorkerOutcome,
 )
+from packages.observability.events import InMemoryEventSink
+from packages.persistence.health import DatabaseHealthStatus
 from packages.persistence.writer import PersistenceError, SingleDatabaseWriter
 from packages.protocol import EndpointRole, Envelope
 from packages.security import SecretValue
@@ -228,12 +230,65 @@ def test_monitor_transaction_rolls_back_receipt_on_failure(tmp_path, order_reque
 
         with pytest.raises(PersistenceError):
             writer.consume_manifest_orders(fail)
+        assert writer.database_health.state.status is DatabaseHealthStatus.HEALTHY
         with sqlite3.connect(writer.path) as conn:
             assert conn.execute("SELECT consumed FROM manifest_order_bindings").fetchone()[0] == 0
             assert conn.execute("SELECT count(*) FROM manifest_monitor_states").fetchone()[0] == 0
         monitor = LiveMonitor(cat, writer=writer)
         monitor.poll_persisted()
         assert monitor.monitors["f5:a"].n == 1
+    finally:
+        writer.close()
+
+
+def test_legacy_unvalidated_practice_binding_does_not_poison_database_health(
+    tmp_path, order_request
+):
+    writer, _, _, _, coordinator = build_coordinator(tmp_path / "state.db", WorkerOutcome.ACCEPTED)
+    legacy_context = json.dumps(
+        {
+            "strategy_key": "f1:USDCAD-OTC:M1",
+            "revision": "legacy-zero-stats",
+            "asset": "USDCAD-OTC",
+            "timeframe": "M1",
+            "p0": "0",
+            "p1": "0",
+        }
+    )
+    bound = replace(
+        order_request,
+        broker=Broker.IQ_OPTION,
+        account_id="IQOPTION_PRACTICE",
+        product="BINARY_OPTION",
+        symbol="USDCAD-OTC",
+        strategy_id="f1:USDCAD-OTC:M1",
+        correlation_id=str(uuid4()),
+        manifest_context=legacy_context,
+    )
+    events = InMemoryEventSink()
+    try:
+        order = coordinator.submit(bound)
+        settle(writer, order, pnl=0)
+
+        monitor = LiveMonitor(catalog(entry()), writer=writer, event_sink=events)
+        monitor.poll_persisted()
+
+        assert monitor.ready
+        assert writer.database_health.state.status is DatabaseHealthStatus.HEALTHY
+        with sqlite3.connect(writer.path) as conn:
+            assert (
+                conn.execute(
+                    "SELECT consumed FROM manifest_order_bindings WHERE order_id=?",
+                    (order.order_id,),
+                ).fetchone()[0]
+                == 1
+            )
+            assert conn.execute("SELECT count(*) FROM manifest_monitor_states").fetchone()[0] == 0
+        assert any(
+            event.event_name == "manifest_monitor_evidence_skipped"
+            and event.reason_code == "MANIFEST_MONITOR_STATS_INVALID"
+            for event in events.events
+        )
     finally:
         writer.close()
 
