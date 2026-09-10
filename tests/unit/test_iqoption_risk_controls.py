@@ -7,11 +7,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from apps.core.execution_state import ExecutionState, OperatorIntentStore, TransportSupervisor
+from apps.core.health import HealthState
 from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
 from apps.core.lifecycle_service import CoreLifecycleService
 from apps.core.worker_supervisor import WorkerHealthState
 from packages.domain.market import BrokerAccountBalance
 from packages.domain.models import Broker
+from packages.observability.events import InMemoryEventSink
 from packages.protocol import UiIqOptionBotControlCommand, UiIqOptionRiskConfig
 
 
@@ -155,3 +158,89 @@ def test_iqoption_bot_arms_successfully_in_practice_when_capabilities_ready() ->
     assert service._iqoption_bot_armed is True
     assert service._safe_stop is True
     scoped_resume.assert_called_once_with(Broker.IQ_OPTION, "IQOPTION_PRACTICE")
+
+
+def test_iqoption_bot_accepts_armed_degraded_intent_while_transport_is_down(
+    tmp_path, monkeypatch
+) -> None:
+    class FakeVault:
+        def __init__(self, _directory) -> None:
+            pass
+
+        @staticmethod
+        def configured_account_mode() -> str:
+            return "practice"
+
+    monkeypatch.setattr("apps.core.lifecycle_service.IQOptionCredentialVault", FakeVault)
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._profile_dir = tmp_path
+    service._iqoption_session_invalidated = True
+    service._iqoption_switch_lock = threading.RLock()
+    service._iqoption = None
+    service._iqoption_balance = None
+    service._iqoption_bot_armed = False
+    service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+    service._transport_supervisor = TransportSupervisor(intent_store=OperatorIntentStore(tmp_path))
+    service._iqoption_auto_trader = MagicMock()
+    service._request_iqoption_recovery = MagicMock()
+    scoped_resume = MagicMock(return_value=False)
+    health_gate = SimpleNamespace(
+        global_state=HealthState(True, None),
+        state_for=lambda *_args: HealthState(False, "HG_WORKER_DISCONNECTED"),
+    )
+    events = InMemoryEventSink()
+    service._runtime = SimpleNamespace(
+        health_gate=health_gate,
+        event_sink=events,
+        resume_new_entries_for=scoped_resume,
+        stop_new_entries_for=MagicMock(),
+    )
+
+    accepted, reason = service.control_iqoption_bot(True)
+
+    assert accepted is True
+    assert reason == "IQOPTION_BOT_ARMED_DEGRADED"
+    assert service._iqoption_bot_armed is True
+    assert service._transport_supervisor.state is ExecutionState.ARMED_DEGRADED
+    assert OperatorIntentStore(tmp_path).load_armed() is True
+    service._iqoption_auto_trader.on_transport_down.assert_called_once_with(
+        "IQOPTION_CONNECTION_REQUIRED"
+    )
+    service._iqoption_auto_trader.start.assert_called_once_with()
+    service._request_iqoption_recovery.assert_called_once_with("IQOPTION_OPERATOR_ARMED_DEGRADED")
+    assert any(
+        event.event_name == "iqoption_operator_intent_armed"
+        and event.reason_code == "TRANSPORT_DOWN"
+        for event in events.events
+    )
+
+
+def test_iqoption_degraded_arm_does_not_bypass_database_failure(tmp_path, monkeypatch) -> None:
+    class FakeVault:
+        def __init__(self, _directory) -> None:
+            pass
+
+        @staticmethod
+        def configured_account_mode() -> str:
+            return "practice"
+
+    monkeypatch.setattr("apps.core.lifecycle_service.IQOptionCredentialVault", FakeVault)
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._profile_dir = tmp_path
+    service._iqoption_session_invalidated = True
+    service._iqoption_switch_lock = threading.RLock()
+    service._iqoption = None
+    service._iqoption_balance = None
+    service._iqoption_bot_armed = False
+    service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+    service._transport_supervisor = TransportSupervisor(intent_store=OperatorIntentStore(tmp_path))
+    service._runtime = SimpleNamespace(
+        health_gate=SimpleNamespace(global_state=HealthState(False, "DB_WRITE_FAILED"))
+    )
+
+    accepted, reason = service.control_iqoption_bot(True)
+
+    assert accepted is False
+    assert reason == "DB_WRITE_FAILED"
+    assert service._transport_supervisor.state is ExecutionState.DISARMED
+    assert not (tmp_path / "operator_intent.json").exists()

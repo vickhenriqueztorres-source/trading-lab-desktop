@@ -109,11 +109,15 @@ class TransportSupervisor:
         with self._lock:
             return self._last_transport_reason
 
-    def arm(self) -> ExecutionState:
+    def arm(self, *, transport_available: bool = True) -> ExecutionState:
+        if type(transport_available) is not bool:
+            raise TypeError("transport_available must be a boolean")
         with self._lock:
             self._persist(True)
-            self._state = ExecutionState.ARMED
-            self._last_transport_reason = None
+            self._state = (
+                ExecutionState.ARMED if transport_available else ExecutionState.ARMED_DEGRADED
+            )
+            self._last_transport_reason = None if transport_available else "TRANSPORT_DOWN"
             return self._state
 
     def safe_stop(

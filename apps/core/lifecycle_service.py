@@ -16,7 +16,12 @@ from apps.core.deriv_telemetry import (
     DerivTelemetrySource,
 )
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
-from apps.core.execution_state import OperatorIntentStore, StopReason, TransportSupervisor
+from apps.core.execution_state import (
+    ExecutionState,
+    OperatorIntentStore,
+    StopReason,
+    TransportSupervisor,
+)
 from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID, IqOptionAutoTrader
 from apps.core.iqoption_candidates import TIMEFRAMES
 from apps.core.iqoption_connection_safety import (
@@ -600,17 +605,14 @@ class CoreLifecycleService:
             "IQOPTION_AUTH_FAILED",
             "IQOPTION_2FA_REQUIRED",
             "IQOPTION_RATE_LIMITED",
-            "IQOPTION_CONNECTION_QUARANTINED",
             "IQOPTION_CONNECTION_SAFETY_STATE_INVALID",
             "IQOPTION_CREDENTIALS_NOT_CONFIGURED",
             "IQOPTION_SAVED_LOGIN_UNAVAILABLE",
             "IQOPTION_SAVED_REAL_REQUIRES_CONFIRMATION",
         }
         attempt = 0
-        for attempt, delay in enumerate(_IQOPTION_RECOVERY_DELAYS_SECONDS, start=1):
+        while True:
             if self._iqoption_recovery_stop.is_set():
-                return
-            if self._iqoption_recovery_stop.wait(delay):
                 return
             runtime = self._runtime
             if runtime is None or self._state in {
@@ -618,6 +620,33 @@ class CoreLifecycleService:
                 CoreServiceState.STOPPED,
             }:
                 return
+            controller = self._iqoption_connection_safety
+            if controller is not None:
+                try:
+                    safety = controller.snapshot()
+                except IQOptionConnectionSafetyStateError:
+                    self._iqoption_connection_safety = None
+                    self._iqoption_bot_reason = "IQOPTION_CONNECTION_SAFETY_STATE_INVALID"
+                    return
+                if safety.quarantine_active:
+                    if self._transport_supervisor.armed_intent:
+                        self._iqoption_bot_reason = "TRANSPORT_DOWN"
+                    else:
+                        self._iqoption_bot_reason = "IQOPTION_CONNECTION_QUARANTINED"
+                    runtime.event_sink.emit(
+                        "iqoption_recovery_waiting",
+                        reason_code="IQOPTION_CONNECTION_QUARANTINED",
+                        retry_after_seconds=safety.retry_after_seconds,
+                    )
+                    if self._iqoption_recovery_stop.wait(safety.retry_after_seconds):
+                        return
+                    continue
+            delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
+                min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
+            ]
+            if self._iqoption_recovery_stop.wait(delay):
+                return
+            attempt += 1
             runtime.event_sink.emit(
                 "iqoption_recovery_attempt",
                 attempt=attempt,
@@ -646,14 +675,19 @@ class CoreLifecycleService:
             if reason in terminal_reasons:
                 self._iqoption_bot_reason = reason
                 return
-        runtime = self._runtime
-        if runtime is not None and not self._iqoption_recovery_stop.is_set():
+            keep_recovering = self._transport_supervisor.armed_intent or any(
+                str(item.get("broker")) == Broker.IQ_OPTION.value
+                for item in runtime.reader.list_nonterminal_orders()
+            )
+            if keep_recovering or attempt < len(_IQOPTION_RECOVERY_DELAYS_SECONDS):
+                continue
             self._iqoption_bot_reason = "TRANSPORT_DOWN"
             runtime.event_sink.emit(
                 "iqoption_recovery_exhausted",
                 reason_code="TRANSPORT_DOWN",
                 attempts=attempt,
             )
+            return
 
     def safe_stop(
         self,
@@ -1027,8 +1061,71 @@ class CoreLifecycleService:
                 or supervisor is None
                 or supervisor.health_state is not WorkerHealthState.READY
             ):
-                self._iqoption_bot_reason = "IQOPTION_CONNECTION_REQUIRED"
-                return False, self._iqoption_bot_reason
+                if balance is not None and balance.account_type.upper() not in {
+                    "DEMO",
+                    "PRACTICE",
+                }:
+                    self._iqoption_bot_reason = "IQOPTION_PRACTICE_REQUIRED"
+                    return False, self._iqoption_bot_reason
+                try:
+                    saved_mode = IQOptionCredentialVault(
+                        self._profile_dir / "broker_credentials"
+                    ).configured_account_mode()
+                except (OSError, RuntimeError, ValueError):
+                    saved_mode = None
+                if saved_mode != "practice":
+                    self._iqoption_bot_reason = "IQOPTION_CONNECTION_REQUIRED"
+                    return False, self._iqoption_bot_reason
+                iq_runtime = self._runtime
+                if iq_runtime is None:
+                    self._iqoption_bot_reason = "IQOPTION_CORE_NOT_READY"
+                    return False, self._iqoption_bot_reason
+                global_state = iq_runtime.health_gate.global_state
+                if not global_state.is_open:
+                    self._iqoption_bot_reason = (
+                        global_state.reason_code or "IQOPTION_HEALTH_GATE_BLOCKED"
+                    )
+                    return False, self._iqoption_bot_reason
+                resumed = iq_runtime.resume_new_entries_for(
+                    Broker.IQ_OPTION,
+                    IQOPTION_PRACTICE_ACCOUNT_ID,
+                )
+                blocker = iq_runtime.health_gate.state_for(
+                    Broker.IQ_OPTION.value,
+                    IQOPTION_PRACTICE_ACCOUNT_ID,
+                ).reason_code
+                transport_blockers = {
+                    None,
+                    "HG_WORKER_CIRCUIT_OPEN",
+                    "HG_WORKER_DISCONNECTED",
+                    "HG_WORKER_NOT_READY",
+                    "HG_MARKET_DATA_DISCONNECTED",
+                    "MD_CLOCK_UNTRUSTED",
+                }
+                if not resumed and blocker not in transport_blockers:
+                    iq_runtime.stop_new_entries_for(
+                        Broker.IQ_OPTION,
+                        IQOPTION_PRACTICE_ACCOUNT_ID,
+                    )
+                    self._iqoption_bot_reason = blocker or "IQOPTION_HEALTH_GATE_BLOCKED"
+                    return False, self._iqoption_bot_reason
+                try:
+                    self._iqoption_execution_transport().arm(transport_available=False)
+                except (OSError, ValueError):
+                    self._iqoption_bot_reason = "IQOPTION_OPERATOR_INTENT_PERSIST_FAILED"
+                    return False, self._iqoption_bot_reason
+                self._iqoption_bot_armed = True
+                self._iqoption_auto_trader.on_transport_down("IQOPTION_CONNECTION_REQUIRED")
+                self._iqoption_auto_trader.begin_new_run()
+                self._iqoption_auto_trader.start()
+                self._iqoption_bot_reason = "TRANSPORT_DOWN"
+                iq_runtime.event_sink.emit(
+                    "iqoption_operator_intent_armed",
+                    reason_code="TRANSPORT_DOWN",
+                    execution_state=ExecutionState.ARMED_DEGRADED.value,
+                )
+                self._request_iqoption_recovery("IQOPTION_OPERATOR_ARMED_DEGRADED")
+                return True, "IQOPTION_BOT_ARMED_DEGRADED"
             if balance is None or balance.account_type.upper() not in {"DEMO", "PRACTICE"}:
                 self._iqoption_bot_reason = "IQOPTION_PRACTICE_REQUIRED"
                 return False, self._iqoption_bot_reason

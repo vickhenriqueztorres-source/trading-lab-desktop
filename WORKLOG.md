@@ -5858,3 +5858,20 @@ Validação:
 - Testes focados: 36 passed. Suíte completa: 1382 passed, 4 skipped e uma flutuação de timing no
   contrato de crash do worker Deriv, fora do escopo; reexecução isolada 3/3 passed. Ruff check e
   format (525 arquivos), mypy (312 arquivos), compileall e diff-check aprovados.
+
+## 2026-09-10 — Armamento IQ Option durante indisponibilidade do transporte
+
+- Corrigida a lacuna restante da Fase 1: o comando explícito de ligar o bot agora é aceito quando
+  existe uma conta Practice salva, mesmo com worker desconectado ou quarentena anti-login ativa.
+  A intenção é persistida como armada e o estado fica `ARMED_DEGRADED`; nenhuma avaliação ou ordem
+  é permitida até transporte, relógio, capacidades e reconciliação estarem novamente comprovados.
+- Conta Real, falha global de banco, gestão de risco, estratégia e reconciliação continuam
+  fail-close e não podem usar o caminho degradado. A quarentena de conexão não foi removida nem
+  encurtada: ela continua impedindo tempestade de login, mas deixou de impedir o armamento lógico.
+- Recovery armado deixou de terminar após a rodada inicial de cinco tentativas. Ele usa backoff,
+  observa o tempo restante da quarentena sem novas chamadas externas e retoma automaticamente ao
+  fim do prazo. Credencial inválida, 2FA, rate limit e estado de segurança inválido continuam
+  terminais e exigem correção do operador.
+- Testes novos cobrem armamento offline Practice, preservação do bloqueio `DB_WRITE_FAILED`,
+  continuidade após a rodada bounded e espera/retomada pós-quarentena. Validação: 25 testes focados,
+  `tests/unit` 866 passed/1 skipped e `tests/integration` 282 passed/1 skipped.

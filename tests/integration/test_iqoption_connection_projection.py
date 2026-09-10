@@ -5,15 +5,18 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from apps.core.lifecycle_service import CoreLifecycleService
+from apps.core.execution_state import TransportSupervisor
+from apps.core.lifecycle_service import CoreLifecycleService, CoreServiceState
 from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSpec
 from apps.core.worker_supervisor import WorkerHealthState
 from apps.ui.ipc_client import UiIpcClient
 from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
 from packages.domain.models import Broker
+from packages.observability.events import InMemoryEventSink
 from packages.protocol import ProtocolError, ProtocolErrorCode, UiAccountMode
 from packages.security import SecretValue
 
@@ -302,7 +305,7 @@ def test_pending_practice_order_starts_saved_recovery_without_ui(
     assert calls == ["saved"]
 
 
-def test_saved_recovery_stops_after_five_bounded_attempts(
+def test_saved_recovery_continues_after_bounded_round_while_armed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,15 +325,16 @@ def test_saved_recovery_stops_after_five_bounded_attempts(
         (0.0, 0.0, 0.0, 0.0, 0.0),
     )
     service = CoreLifecycleService(tmp_path, ("simulated",), force_auth_simulation=True)
-    monkeypatch.setattr(
-        service,
-        "connect_iqoption_selected_account",
-        lambda mode: (
-            False,
-            calls.append(mode) is not None,
-            "IQOPTION_NETWORK_UNREACHABLE",
-        ),
-    )
+    service._transport_supervisor.arm(transport_available=False)
+
+    def connect_saved(mode: str) -> tuple[bool, bool, str]:
+        calls.append(mode)
+        if len(calls) == 6:
+            service._iqoption_session_invalidated = False
+            return True, True, "IQOPTION_PRACTICE_CONNECTED"
+        return False, False, "IQOPTION_NETWORK_UNREACHABLE"
+
+    monkeypatch.setattr(service, "connect_iqoption_selected_account", connect_saved)
     service.start()
     try:
         service._schedule_saved_iqoption_recovery(has_iqoption_recovery=True)
@@ -341,7 +345,60 @@ def test_saved_recovery_stops_after_five_bounded_attempts(
     finally:
         service.emergency_shutdown()
 
-    assert calls == ["saved"] * 5
+    assert calls == ["saved"] * 6
+
+
+def test_armed_recovery_waits_out_quarantine_then_reconnects(monkeypatch) -> None:
+    class FakeStop:
+        def __init__(self) -> None:
+            self.waits: list[float] = []
+
+        @staticmethod
+        def is_set() -> bool:
+            return False
+
+        def wait(self, seconds: float) -> bool:
+            self.waits.append(seconds)
+            return False
+
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._state = CoreServiceState.READY
+    service._transport_supervisor = TransportSupervisor(initially_armed=True)
+    service._iqoption_bot_reason = "TRANSPORT_DOWN"
+    service._iqoption_session_invalidated = True
+    service._iqoption_recovery_stop = FakeStop()
+    service._runtime = SimpleNamespace(
+        event_sink=InMemoryEventSink(),
+        reader=SimpleNamespace(list_nonterminal_orders=lambda: []),
+    )
+    service._iqoption_connection_safety = SimpleNamespace(
+        snapshot=MagicMock(
+            side_effect=(
+                SimpleNamespace(quarantine_active=True, retry_after_seconds=341),
+                SimpleNamespace(quarantine_active=False, retry_after_seconds=0),
+            )
+        )
+    )
+    calls: list[str] = []
+
+    def connect_saved(mode: str) -> tuple[bool, bool, str]:
+        calls.append(mode)
+        service._iqoption_session_invalidated = False
+        return True, True, "IQOPTION_PRACTICE_CONNECTED"
+
+    monkeypatch.setattr(service, "connect_iqoption_selected_account", connect_saved)
+    monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
+
+    service._iqoption_recovery_loop()
+
+    assert service._iqoption_recovery_stop.waits == [341, 0.0]
+    assert calls == ["saved"]
+    assert service._iqoption_bot_reason == "IQOPTION_BOT_ARMED"
+    assert any(
+        event.event_name == "iqoption_recovery_waiting"
+        and event.reason_code == "IQOPTION_CONNECTION_QUARANTINED"
+        for event in service._runtime.event_sink.events
+    )
 
 
 def test_iq_recovery_preserves_deriv_entry_authority(
