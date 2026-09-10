@@ -5942,3 +5942,28 @@ Validação:
 - O caos manual de Wi-Fi/suspensão/kill/restart no EXE permanece gate externo e não foi declarado
   como executado. O smoke do invólucro portátil não foi iniciado porque outra versão do aplicativo
   estava aberta sob o mutex único; a pasta onedir incorporada passou o health-check canônico.
+
+## 2026-09-10 — Recovery do WebSocket aposentado por timeout do catálogo IQ Option
+
+- O diário real mostrou que `get-initialization-data` expirou e aposentou corretamente a geração
+  WebSocket por não possuir correlação confiável, mas o Core tratava `IQOPTION_REQUEST_TIMEOUT`
+  apenas como falha do catálogo. Como worker e IPC permaneciam vivos, o heartbeat não solicitava
+  recovery e o bot ficava armado sem voltar a avaliar.
+- Timeout da rota obrigatória do catálogo agora marca `TRANSPORT_DOWN`, solicita exatamente uma
+  recuperação por geração e encerra o ciclo antes de novas leituras de mercado ou payout. Timeout
+  de rotas correlacionadas continua operação-scoped e não provoca reconnect.
+- `IQOPTION_WEBSOCKET_UNAVAILABLE` observado durante `broker_clock` agora é classificado como
+  transporte; `CLOCK_NO_SAMPLE`, `CLOCK_STALE`, `CLOCK_PONG_TIMEOUT` e `CLOCK_WALL_JUMP` continuam
+  bloqueios temporais sem teardown. O recovery existente tenta primeiro o mesmo worker e seu SSID,
+  preserva o armamento e não consome login HTTP.
+- Regressões novas reproduzem o timeout do catálogo, deduplicam a notificação, comprovam ausência
+  de chamada de mercado na geração morta e distinguem exceção genérica de clock de WebSocket
+  comprovadamente indisponível. Testes focados: 26 passed; suíte final: 1.411 passed, 4 skipped,
+  0 failed em 432,27 s. Ruff/format (531 arquivos), mypy (313 arquivos), compileall e diff-check
+  passaram; permanece apenas o aviso conhecido de permissão na limpeza do pytest após exit 0.
+- Build PyInstaller 6.22.2 aprovado com 550 arquivos no manifesto, scanner zero segredos e
+  health-check interno aprovado. Portátil com 988 entradas, ProductVersion 1.9.11, recurso único
+  `TradingLab.payload.zip`, health-check exit 0 e nenhum processo residual. Artefato:
+  `dist/iq-websocket-recovery-final-20260910/TradingLab-Desktop-v1.9.11-IQ-WEBSOCKET-RECOVERY-FINAL.exe`;
+  59.200.512 bytes; SHA-256
+  `C9B59089031404A58FCD80D1BD9EEE1CD505573FACA9ADFBD01C2627916C6BE4`.

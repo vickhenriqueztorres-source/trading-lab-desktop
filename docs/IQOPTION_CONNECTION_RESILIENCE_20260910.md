@@ -32,6 +32,10 @@ para o relógio local.
 ## Timeouts e recuperação
 
 - Leituras correlacionadas que expiram permanecem isoladas e não provocam login.
+- O timeout da rota obrigatória `get-initialization-data` do catálogo é uma exceção explícita:
+  como essa resposta legada não possui correlação confiável, o worker aposenta a geração para
+  impedir que uma resposta atrasada contamine a próxima consulta. O Core deve então marcar
+  `TRANSPORT_DOWN` e solicitar recuperação no mesmo worker por SSID.
 - A consulta global de payout continua single-flight e falha fechada. Timeout de payout não tem
   autoridade para substituir sessão nem iniciar login.
 - Ordem com resultado desconhecido segue para reconciliação e nunca é reenviada automaticamente.
@@ -50,6 +54,12 @@ ausência ou rejeição da sessão habilita a etapa seguinte, após admissão ex
 `manual`. Assim, reiniciar o EXE, reciclar o worker ou perder IPC custa zero logins quando a sessão
 de 20 horas ainda é aceita pelo broker.
 
+Uma resposta `IQOPTION_WEBSOCKET_UNAVAILABLE` obtida durante a leitura do relógio também é falha de
+transporte, não falha da evidência temporal. Isso importa quando o processo do worker e seu IPC
+continuam vivos: o heartbeat comprova apenas a vida do processo e não conseguiria detectar sozinho
+que o socket da corretora foi aposentado. Falhas realmente temporais (`NO_SAMPLE`, `STALE`,
+`PONG_TIMEOUT` e `WALL_JUMP`) continuam restritas ao gate `MD_CLOCK_UNTRUSTED`.
+
 ## Evidência automatizada
 
 Os testes cobrem:
@@ -62,8 +72,12 @@ Os testes cobrem:
 - bypass da quarentena HTTP durante recuperação com SSID;
 - parada manual durante recovery sem reativação posterior;
 - replay de 24 horas sem correlação duplicada.
+- timeout do catálogo obrigatório seguido por uma única solicitação de recuperação, preservando o
+  armamento e sem executar mercado/payout na geração aposentada;
+- WebSocket indisponível observado pela consulta do relógio promovido a recuperação de transporte,
+  enquanto uma exceção genérica de clock continua sem teardown.
 
-A suíte local final concluiu com 1.393 testes aprovados e 4 pulados por dependência de plataforma
+A suíte local final concluiu com 1.411 testes aprovados e 4 pulados por dependência de plataforma
 ou ambiente externo. O smoke do executável usa perfil isolado e não acessa a conta do operador.
 A observação de duas horas contra a IQ Option Practice continua sendo evidência externa separada:
 ela exige a sessão do operador e não é substituída pelos testes simulados.

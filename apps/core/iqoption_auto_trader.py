@@ -127,6 +127,14 @@ IQOPTION_TRANSPORT_FAILURE_REASONS = frozenset(
         "WORKER_NOT_READY",
     }
 )
+# The mandatory Binary/Turbo catalogue uses the legacy initialization route.
+# That response cannot be correlated on the wire, so its timeout deliberately
+# retires the current WebSocket generation in the worker.  It is therefore a
+# transport failure in this one call path even though correlated request
+# timeouts elsewhere remain operation-scoped.
+IQOPTION_CATALOG_SESSION_FAILURE_REASONS = IQOPTION_TRANSPORT_FAILURE_REASONS | {
+    "IQOPTION_REQUEST_TIMEOUT"
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,13 +538,18 @@ class IqOptionAutoTrader:
                 except WorkerDispatchError as exc:
                     with self._lock:
                         self._latest_clock = None
-                    # Clock is a health sample, not evidence that the broker
-                    # session must be replaced. Reader/heartbeat owns recovery.
-                    self._handle_clock_failure(
-                        runtime,
-                        exc.code.value,
-                        diagnostics=exc.details,
-                    )
+                    reason = exc.code.value
+                    if reason in IQOPTION_TRANSPORT_FAILURE_REASONS:
+                        # A live worker can still own a dead broker socket. IPC
+                        # heartbeat proves only process liveness, so lifecycle
+                        # must be notified explicitly for WebSocket recovery.
+                        self._notify_session_failure(supervisor.client, reason)
+                    else:
+                        self._handle_clock_failure(
+                            runtime,
+                            reason,
+                            diagnostics=exc.details,
+                        )
                     return
                 except Exception:
                     with self._lock:
@@ -594,7 +607,11 @@ class IqOptionAutoTrader:
             runtime.health_gate.clear_scope(
                 Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
             )
-        self._refresh_instrument_catalog(supervisor, runtime)
+        if not self._refresh_instrument_catalog(supervisor, runtime):
+            # The uncorrelated catalogue request retired the socket. Do not
+            # issue market or payout calls on that same dead generation while
+            # lifecycle reconnects it.
+            return
         try:
             self._restore_execution_state(runtime)
         except Exception:
@@ -1911,17 +1928,17 @@ class IqOptionAutoTrader:
         self,
         supervisor: ReadOnlyWorkerSupervisor,
         runtime: CoreRuntime,
-    ) -> None:
+    ) -> bool:
         now = self._monotonic()
         catalog_fn = getattr(supervisor.client, "iqoption_instrument_catalog", None)
         if not callable(catalog_fn):
-            return
+            return True
         if now - self._last_instrument_catalog_probe < IQOPTION_INSTRUMENT_CATALOG_TTL_SECONDS:
             if now - self._instrument_catalog_received_mono > (
                 IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS
             ):
                 self._instrument_catalog = None
-            return
+            return True
         self._last_instrument_catalog_probe = now
         # One catalogue refresh emits exactly two read-only broker messages:
         # initialization-data and digital underlying-list. Reserve both before
@@ -1933,7 +1950,7 @@ class IqOptionAutoTrader:
             self._report_operational_budget(runtime, decision)
         if not all(decision.allowed for decision in decisions):
             self._set_status("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
-            return
+            return True
         try:
             catalog = catalog_fn()
             if not isinstance(catalog, BrokerInstrumentCatalog):
@@ -1943,11 +1960,18 @@ class IqOptionAutoTrader:
                 IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS
             ):
                 self._instrument_catalog = None
+            reason = exc.code.value
             runtime.event_sink.emit(
                 "iqoption_instrument_catalog_failed",
-                reason_code=exc.code.value,
+                reason_code=reason,
             )
-            return
+            if reason in IQOPTION_CATALOG_SESSION_FAILURE_REASONS:
+                # Initialization-data timeouts retire the uncorrelated socket
+                # generation inside the worker.  Do not leave a live IPC
+                # process hiding that dead broker transport from lifecycle.
+                self._notify_session_failure(supervisor.client, reason)
+                return False
+            return True
         except Exception:
             if now - self._instrument_catalog_received_mono > (
                 IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS
@@ -1957,7 +1981,7 @@ class IqOptionAutoTrader:
                 "iqoption_instrument_catalog_failed",
                 reason_code="IQOPTION_CATALOG_INVALID",
             )
-            return
+            return True
         self._instrument_catalog = catalog
         self._instrument_catalog_received_mono = now
         self._sync_catalog_ranking(catalog)
@@ -1975,6 +1999,7 @@ class IqOptionAutoTrader:
             unavailable_products=",".join(item.value for item in catalog.unavailable_products)
             or None,
         )
+        return True
 
     def _sync_catalog_ranking(self, catalog: BrokerInstrumentCatalog) -> None:
         manifest = self._catalog_provider() if self._catalog_provider is not None else None
