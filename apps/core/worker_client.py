@@ -61,10 +61,13 @@ class WorkerDispatchError(RuntimeError):
         code: ProtocolErrorCode,
         delivery: DeliveryCertainty,
         message: str,
+        *,
+        details: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.delivery = delivery
+        self.details = dict(details or {})
 
 
 def _decimal_money_to_minor_units(value: Decimal, currency: str) -> int:
@@ -817,6 +820,22 @@ class SocketWorkerClient:
         response = self._read_only_request(MessageType.BROKER_CLOCK_REQUEST, {})
         return parse_broker_clock_response(response)
 
+    def iqoption_reconnect_session(self) -> None:
+        """Renew only the IQ Option WebSocket while retaining the worker SSID."""
+
+        if self._worker_role is not EndpointRole.IQOPTION_WORKER:
+            raise ValueError("IQ Option reconnect requires IQ Option worker")
+        response = self._read_only_request(MessageType.BROKER_SESSION_RECONNECT_REQUEST, {})
+        if (
+            response.message_type is not MessageType.BROKER_SESSION_RECONNECT_RESPONSE
+            or response.payload != {"connected": True}
+        ):
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IPC_INVALID_ENVELOPE,
+                DeliveryCertainty.NOT_SENT,
+                "IQ Option reconnect response is invalid",
+            )
+
     def broker_balance(self) -> BrokerAccountBalance:
         response = self._read_only_request(MessageType.BROKER_BALANCE_REQUEST, {})
         return parse_broker_balance_response(response)
@@ -886,6 +905,9 @@ class SocketWorkerClient:
                 code,
                 DeliveryCertainty.NOT_SENT,
                 "worker rejected read-only request",
+                details={
+                    key: value for key, value in response.payload.items() if key != "reason_code"
+                },
             )
         return response
 

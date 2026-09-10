@@ -125,6 +125,11 @@ class IQOptionReadOnlyWorkerServer:
             if request.message_type is MessageType.BROKER_CLOCK_REQUEST:
                 self._ensure_connected()
                 return MessageType.BROKER_CLOCK_RESPONSE, self._session.get_clock().to_payload()
+            if request.message_type is MessageType.BROKER_SESSION_RECONNECT_REQUEST:
+                if request.payload:
+                    return self._error_payload("IPC_INVALID_ENVELOPE")
+                self._session.reconnect()
+                return MessageType.BROKER_SESSION_RECONNECT_RESPONSE, {"connected": True}
             if request.message_type is MessageType.BROKER_CAPABILITIES_REQUEST:
                 return MessageType.BROKER_CAPABILITIES_RESPONSE, self._capabilities.to_payload()
             if request.message_type is MessageType.BROKER_INSTRUMENT_CATALOG_REQUEST:
@@ -233,7 +238,7 @@ class IQOptionReadOnlyWorkerServer:
                 self._stopping = True
                 return MessageType.SHUTDOWN_ACK, {}
         except IQOptionExternalError as exc:
-            return self._error_payload(exc.reason_code)
+            return self._error_payload(exc.reason_code, details=exc.details)
         return self._error_payload("IPC_UNKNOWN_MESSAGE_TYPE")
 
     def _start_event_pump(self, framed: FramedSocket) -> None:
@@ -297,12 +302,28 @@ class IQOptionReadOnlyWorkerServer:
         self._session.connect()
 
     @staticmethod
-    def _error_payload(reason_code: str) -> tuple[MessageType, dict[str, Any]]:
+    def _error_payload(
+        reason_code: str,
+        *,
+        details: dict[str, object] | None = None,
+    ) -> tuple[MessageType, dict[str, Any]]:
         try:
             normalized = ProtocolErrorCode(reason_code).value
         except ValueError:
             normalized = ProtocolErrorCode.IQOPTION_EXTERNAL_ERROR.value
-        return MessageType.ERROR, {"reason_code": normalized}
+        payload: dict[str, Any] = {"reason_code": normalized}
+        allowed = {
+            "operation",
+            "duration_ms",
+            "sample_age_ms",
+            "last_message_age_ms",
+            "connection_generation",
+            "retry_after_seconds",
+        }
+        for key, value in (details or {}).items():
+            if key in allowed and (value is None or type(value) in {str, int, float}):
+                payload[key] = value
+        return MessageType.ERROR, payload
 
     def _validate_routing(self, request: Envelope) -> None:
         if (

@@ -16,6 +16,7 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 3. [Estratégias Deriv e gestão de risco](DERIV_STRATEGIES_AND_RISK.md)
 4. [Solução de problemas](TROUBLESHOOTING.md)
 5. [IQ Option: correção da confirmação do relógio](IQ_CLOCK_SYNC_FIX_20260909.md)
+6. [IQ Option: resiliência de relógio, WebSocket e retomada](IQOPTION_CONNECTION_RESILIENCE_20260910.md)
 
 ### Para desenvolvimento e manutenção
 

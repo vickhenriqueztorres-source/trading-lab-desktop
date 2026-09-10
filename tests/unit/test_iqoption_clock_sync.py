@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from decimal import Decimal
 
 import pytest
@@ -90,7 +91,7 @@ def test_missing_server_time_never_falls_back_to_local_clock() -> None:
     session = make_session(clock, sock)
     session.connect()
     try:
-        with pytest.raises(IQOptionExternalError, match="CLOCK_UNAVAILABLE"):
+        with pytest.raises(IQOptionExternalError, match="CLOCK_NO_SAMPLE"):
             session.get_clock()
     finally:
         session.close()
@@ -102,7 +103,8 @@ def test_stale_source_or_wall_clock_jump_invalidates_clock(connected, advance) -
     assert session.get_clock().is_synced
     clock[0] += advance[0]
     clock[1] += advance[1]
-    with pytest.raises(IQOptionExternalError, match="CLOCK_UNAVAILABLE"):
+    expected = "CLOCK_STALE" if advance == (31, 31) else "CLOCK_WALL_JUMP"
+    with pytest.raises(IQOptionExternalError, match=expected):
         session.get_clock()
     session._handle_message(json.dumps({"name": "timeSync", "msg": int(clock[1] * 1000)}))
     assert session.get_clock().is_synced
@@ -121,11 +123,11 @@ def test_disconnected_cache_is_not_a_clock(connected) -> None:
     session, _, _ = connected
     assert session.get_clock().is_synced
     session.close()
-    with pytest.raises(IQOptionExternalError, match="CLOCK_UNAVAILABLE"):
+    with pytest.raises(IQOptionExternalError, match="WEBSOCKET_UNAVAILABLE"):
         session.get_clock()
 
 
-def test_pong_timeout_invalidates_cached_rtt(connected, monkeypatch) -> None:
+def test_isolated_pong_timeout_preserves_fresh_broker_sample(connected, monkeypatch) -> None:
     session, sock, clock = connected
     assert session.get_clock().is_synced
     clock[0] += 10
@@ -134,25 +136,55 @@ def test_pong_timeout_invalidates_cached_rtt(connected, monkeypatch) -> None:
     monkeypatch.setattr(
         "packages.brokers.iqoption.community_read_only.IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS", 0.001
     )
-    for _ in range(2):
-        with pytest.raises(IQOptionExternalError, match="CLOCK_UNAVAILABLE"):
-            session.get_clock()
-    assert sock.pings == 2  # bounded retry cadence, even after a failed probe
+    assert session.get_clock().is_synced
+    assert session.get_clock().is_synced
+    assert sock.pings == 2  # one successful probe and one isolated failed probe
 
 
-def test_reconnect_requires_new_timestamp_and_new_probe(connected) -> None:
+def test_reconnect_requires_new_timestamp_and_new_probe(connected, monkeypatch) -> None:
     session, sock, _ = connected
     assert session.get_clock().is_synced
     session.close()
     sock.messages.extend(json.dumps(m) for m in _messages() if m["name"] != "timeSync")
     session.connect()
-    with pytest.raises(IQOptionExternalError, match="CLOCK_UNAVAILABLE"):
+    monkeypatch.setattr(
+        "packages.brokers.iqoption.community_read_only.IQOPTION_CLOCK_REFRESH_TIMEOUT_SECONDS",
+        0.001,
+    )
+    with pytest.raises(IQOptionExternalError, match="CLOCK_NO_SAMPLE") as raised:
         session.get_clock()
+    assert raised.value.details == {
+        "operation": "BROKER_CLOCK_REQUEST",
+        "duration_ms": 125,
+        "sample_age_ms": None,
+        "last_message_age_ms": 125,
+        "connection_generation": 2,
+    }
     assert sock.pings == 2
 
 
+def test_stale_clock_refreshes_on_same_session_without_login(connected) -> None:
+    session, sock, clock = connected
+    assert session.get_clock().is_synced
+    clock[0] += 31
+    clock[1] += 31
+
+    def broker_timesync_reply() -> None:
+        time.sleep(0.01)
+        session._handle_message(json.dumps({"name": "timeSync", "msg": str(int(clock[1] * 1000))}))
+
+    reply = threading.Thread(target=broker_timesync_reply)
+    reply.start()
+    refreshed = session.get_clock()
+    reply.join(timeout=1.0)
+
+    assert refreshed.is_synced
+    assert sum(item["name"] == "authenticate" for item in sock.sent) == 1
+    assert sum(item["name"] == "timesync" for item in sock.sent) >= 2
+
+
 @pytest.mark.parametrize("failure", ["missing", "stale"])
-def test_core_degrades_transport_and_resumes_on_fresh_clock_without_rearm(failure) -> None:
+def test_core_suspends_entries_and_automatically_resumes_on_fresh_clock(failure) -> None:
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
 
@@ -179,9 +211,17 @@ def test_core_degrades_transport_and_resumes_on_fresh_clock_without_rearm(failur
         def broker_clock(self):
             if not self.healthy and failure == "missing":
                 raise WorkerDispatchError(
-                    ProtocolErrorCode.IQOPTION_CLOCK_UNAVAILABLE,
+                    ProtocolErrorCode.IQOPTION_CLOCK_NO_SAMPLE,
                     DeliveryCertainty.NOT_SENT,
                     "clock unavailable",
+                    details={
+                        "operation": "BROKER_CLOCK_REQUEST",
+                        "duration_ms": 2000,
+                        "sample_age_ms": None,
+                        "last_message_age_ms": 25,
+                        "connection_generation": 3,
+                        "credential": "must-not-be-logged",
+                    },
                 )
             return BrokerClockSnapshot(
                 int(now.timestamp()),
@@ -203,22 +243,35 @@ def test_core_degrades_transport_and_resumes_on_fresh_clock_without_rearm(failur
         monotonic=lambda: mono[0],
         recovery_notifier=recovery.append,
     )
-    trader._evaluate_cycle()
-    assert trader.status_reason == "TRANSPORT_DOWN"
+    for _ in range(50):
+        trader._evaluate_cycle()
+        mono[0] += 11
+    assert trader.status_reason == "MD_CLOCK_UNTRUSTED"
     assert not runtime.requests
-    assert trader.execution_state.value == "ARMED_DEGRADED"
+    assert trader.execution_state.value == "ARMED"
     assert runtime.health_gate.state_for(Broker.DERIV.value, "demo").is_open
-    assert recovery == ["IQOPTION_CLOCK_UNAVAILABLE"]
+    assert recovery == []
+    if failure == "missing":
+        clock_events = [
+            fields for name, fields in runtime.events if name == "iqoption_clock_unavailable"
+        ]
+        assert clock_events[-1] == {
+            "broker": "IQ_OPTION",
+            "reason_code": "IQOPTION_CLOCK_NO_SAMPLE",
+            "operation": "BROKER_CLOCK_REQUEST",
+            "duration_ms": 2000,
+            "sample_age_ms": None,
+            "last_message_age_ms": 25,
+            "connection_generation": 3,
+        }
     client.healthy = True
-    trader.on_transport_up()
     trader._armed_after_epoch = None
-    mono[0] += 11
     trader._evaluate_cycle()
     assert runtime.health_gate.state_for(
         Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
     ).is_open
     assert len(runtime.requests) == 1  # simulated Core pipeline only
-    assert recovery == ["IQOPTION_CLOCK_UNAVAILABLE"]
+    assert recovery == []
 
 
 def test_core_logs_high_rtt_but_does_not_block() -> None:

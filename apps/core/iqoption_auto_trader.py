@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -108,6 +108,25 @@ IQOPTION_INSTRUMENT_CATALOG_TTL_SECONDS = 60.0
 IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS = 180.0
 IQOPTION_PAYOUT_TICKET_MAX_AGE_SECONDS = 8.0
 IQOPTION_CLOCK_MAX_SKEW_SECONDS = Decimal("120")
+IQOPTION_CLOCK_FAILURE_REASONS = frozenset(
+    {
+        "IQOPTION_CLOCK_UNAVAILABLE",
+        "IQOPTION_CLOCK_NO_SAMPLE",
+        "IQOPTION_CLOCK_STALE",
+        "IQOPTION_CLOCK_PONG_TIMEOUT",
+        "IQOPTION_CLOCK_WALL_JUMP",
+    }
+)
+IQOPTION_TRANSPORT_FAILURE_REASONS = frozenset(
+    {
+        "IQOPTION_WEBSOCKET_UNAVAILABLE",
+        "IQOPTION_RESPONSE_TOO_LARGE",
+        "IQOPTION_AUTH_FAILED",
+        "IPC_CONNECTION_LOST",
+        "WORKER_CRASHED",
+        "WORKER_NOT_READY",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,11 +530,17 @@ class IqOptionAutoTrader:
                 except WorkerDispatchError as exc:
                     with self._lock:
                         self._latest_clock = None
-                    self._notify_session_failure(supervisor.client, exc.code.value)
+                    reason = exc.code.value
+                    if reason in IQOPTION_CLOCK_FAILURE_REASONS:
+                        self._handle_clock_failure(runtime, reason, diagnostics=exc.details)
+                    else:
+                        self._notify_session_failure(supervisor.client, reason)
                     return
                 except Exception:
                     with self._lock:
                         self._latest_clock = None
+                    self._handle_clock_failure(runtime, "IQOPTION_CLOCK_UNAVAILABLE")
+                    return
             balance_fn = getattr(supervisor.client, "broker_balance", None)
             if callable(balance_fn):
                 balance_budget = self._message_budget.try_acquire_operational(self._monotonic())
@@ -526,7 +551,10 @@ class IqOptionAutoTrader:
                     with self._lock:
                         self._latest_balance = balance
                 except WorkerDispatchError as exc:
-                    self._notify_session_failure(supervisor.client, exc.code.value)
+                    if exc.code.value in IQOPTION_TRANSPORT_FAILURE_REASONS:
+                        self._notify_session_failure(supervisor.client, exc.code.value)
+                    else:
+                        self._set_status("IQOPTION_BALANCE_UNAVAILABLE")
                     return
                 except Exception:
                     with self._lock:
@@ -537,9 +565,16 @@ class IqOptionAutoTrader:
                 0 <= (self._utc_clock() - clock.local_received_at).total_seconds() <= 30
             )
             if not clock_fresh or clock is None:
-                self._notify_session_failure(
-                    supervisor.client,
-                    "IQOPTION_CLOCK_UNAVAILABLE",
+                diagnostics: dict[str, object] = {}
+                if clock is not None:
+                    diagnostics["sample_age_ms"] = max(
+                        0,
+                        int((self._utc_clock() - clock.local_received_at).total_seconds() * 1000),
+                    )
+                self._handle_clock_failure(
+                    runtime,
+                    "IQOPTION_CLOCK_STALE",
+                    diagnostics=diagnostics,
                 )
                 return
             if clock.round_trip_milliseconds > 1_000:
@@ -729,12 +764,13 @@ class IqOptionAutoTrader:
                     runtime.health_gate.block_scope(
                         Broker.IQ_OPTION.value, "market-data", "HG_MARKET_DATA_DISCONNECTED"
                     )
-                    self._notify_session_failure(
-                        supervisor.client,
-                        exc.code.value
-                        if isinstance(exc, WorkerDispatchError)
-                        else "IQOPTION_BROKER_SESSION_UNAVAILABLE",
-                    )
+                    reason = "IQOPTION_MARKET_DATA_UNAVAILABLE"
+                    if isinstance(exc, WorkerDispatchError):
+                        reason = exc.code.value
+                        if reason in IQOPTION_CLOCK_FAILURE_REASONS:
+                            self._handle_clock_failure(runtime, reason, diagnostics=exc.details)
+                        elif reason in IQOPTION_TRANSPORT_FAILURE_REASONS:
+                            self._notify_session_failure(supervisor.client, reason)
                     self._set_status("IQOPTION_MARKET_DATA_UNAVAILABLE")
                     self._update_rank(
                         symbol,
@@ -1225,6 +1261,42 @@ class IqOptionAutoTrader:
         if self._recovery_notifier is not None and self._recovery_notified_generation != generation:
             self._recovery_notified_generation = generation
             self._recovery_notifier(reason)
+
+    def _handle_clock_failure(
+        self,
+        runtime: CoreRuntime,
+        reason: str,
+        *,
+        diagnostics: Mapping[str, object] | None = None,
+    ) -> None:
+        """Suspend entries for clock evidence without invalidating the session."""
+
+        runtime.health_gate.block_scope(
+            Broker.IQ_OPTION.value,
+            IQOPTION_PRACTICE_ACCOUNT_ID,
+            "MD_CLOCK_UNTRUSTED",
+        )
+        allowed_diagnostics: dict[str, str | int | bool | None] = {}
+        for key, value in (diagnostics or {}).items():
+            if key not in {
+                "operation",
+                "duration_ms",
+                "sample_age_ms",
+                "last_message_age_ms",
+                "connection_generation",
+            }:
+                continue
+            if value is None or isinstance(value, (str, int, bool)):
+                allowed_diagnostics[key] = value
+            elif isinstance(value, float):
+                allowed_diagnostics[key] = str(value)
+        runtime.event_sink.emit(
+            "iqoption_clock_unavailable",
+            broker=Broker.IQ_OPTION.value,
+            reason_code=reason,
+            **allowed_diagnostics,
+        )
+        self._set_status("MD_CLOCK_UNTRUSTED")
 
     def _prepare_execution(self, symbol: str, key: str, client: Any) -> str | None:
         self._execution_ticket = None

@@ -5875,3 +5875,31 @@ Validação:
 - Testes novos cobrem armamento offline Practice, preservação do bloqueio `DB_WRITE_FAILED`,
   continuidade após a rodada bounded e espera/retomada pós-quarentena. Validação: 25 testes focados,
   `tests/unit` 866 passed/1 skipped e `tests/integration` 282 passed/1 skipped.
+
+## 2026-09-10 — Recuperação definitiva do ciclo relógio/WebSocket IQ Option
+
+- Corrigida a regressão que promovia ausência ou vencimento da amostra do relógio a falha da
+  conexão inteira. `IQOPTION_CLOCK_NO_SAMPLE`, `IQOPTION_CLOCK_STALE`,
+  `IQOPTION_CLOCK_PONG_TIMEOUT` e `IQOPTION_CLOCK_WALL_JUMP` agora bloqueiam somente entradas IQ
+  por `MD_CLOCK_UNTRUSTED`; a intenção armada e o worker são preservados.
+- O worker solicita `timesync` no mesmo socket com espera limitada. Pong isolado não apaga uma
+  amostra válida. O diagnóstico informa operação, duração, idade da amostra, idade da última
+  mensagem e geração da conexão por allowlist IPC, sem credencial, SSID ou payload bruto.
+- Criado comando IPC explícito de reconexão da sessão. O Core tenta primeiro renovar somente o
+  WebSocket com o SSID em memória, confirma saldo/relógio e reconcilia; login HTTP fica reservado
+  a worker ausente ou rejeição explícita da sessão. Timeout comum de candles não reloga; payout
+  ambíguo aposenta a geração antes da recuperação.
+- O orçamento WebSocket ficou separado da quarentena HTTP. Ao esgotar, informa o tempo restante e
+  o Core acorda automaticamente após a janela; o backoff progressivo usa jitter de 10%. Parada
+  manual durante recovery não pode rearmar o bot.
+- Testes novos/reforçados comprovam 50 falhas de relógio seguidas com retomada automática sem
+  `on_transport_up()`, dez quedas WebSocket com um login HTTP, diagnóstico sanitizado, expiração do
+  orçamento e parada manual. Replay de 24 horas manteve zero correlações duplicadas.
+- Validação final do código: 1.393 passed, 4 skipped, 0 failed em 399,40 s; 84 testes focados
+  passaram. Ruff check/format no escopo executável (523 arquivos), mypy em 312 arquivos,
+  compileall e diff-check aprovados. O `ruff .` continua falhando somente no documento Markdown
+  legado `docs/##  Arquitetura.py`, preservado fora do escopo. O callback de limpeza temporária do
+  pytest continua emitindo `WinError 5` depois do exit 0.
+- A observação externa de duas horas em Practice não foi simulada nem declarada como concluída;
+  requer execução controlada com a sessão do operador. Nenhuma credencial ou ordem externa foi
+  usada nesta implementação.

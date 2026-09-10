@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from apps.core.execution_state import TransportSupervisor
+from apps.core.execution_state import StopReason, TransportSupervisor
 from apps.core.lifecycle_service import CoreLifecycleService, CoreServiceState
 from apps.core.read_only_worker_supervisor import ReadOnlyWorkerSpec
 from apps.core.worker_supervisor import WorkerHealthState
@@ -391,7 +391,9 @@ def test_armed_recovery_waits_out_quarantine_then_reconnects(monkeypatch) -> Non
 
     service._iqoption_recovery_loop()
 
-    assert service._iqoption_recovery_stop.waits == [341, 0.0]
+    # WebSocket reuse is considered before the HTTP-login quarantine. With no
+    # current worker this immediately falls through to the persisted cooldown.
+    assert service._iqoption_recovery_stop.waits == [0.0, 341, 0.0]
     assert calls == ["saved"]
     assert service._iqoption_bot_reason == "IQOPTION_BOT_ARMED"
     assert any(
@@ -399,6 +401,178 @@ def test_armed_recovery_waits_out_quarantine_then_reconnects(monkeypatch) -> Non
         and event.reason_code == "IQOPTION_CONNECTION_QUARANTINED"
         for event in service._runtime.event_sink.events
     )
+
+
+def test_websocket_recovery_bypasses_http_login_quarantine(monkeypatch) -> None:
+    now = datetime.now(UTC)
+
+    class Client:
+        is_ready = True
+
+        def __init__(self) -> None:
+            self.reconnects = 0
+
+        def iqoption_reconnect_session(self) -> None:
+            self.reconnects += 1
+
+        @staticmethod
+        def broker_balance() -> BrokerAccountBalance:
+            return BrokerAccountBalance(10000, "USD", "DEMO", now)
+
+        @staticmethod
+        def broker_clock() -> BrokerClockSnapshot:
+            return BrokerClockSnapshot(int(now.timestamp()), now, 0.01, Decimal(0))
+
+    class Stop:
+        @staticmethod
+        def is_set() -> bool:
+            return False
+
+        @staticmethod
+        def wait(_seconds: float) -> bool:
+            return False
+
+    client = Client()
+    safety = SimpleNamespace(snapshot=MagicMock())
+    transport = TransportSupervisor(initially_armed=True)
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._state = CoreServiceState.READY
+    service._transport_supervisor = transport
+    service._iqoption_bot_armed = True
+    service._iqoption_bot_reason = "TRANSPORT_DOWN"
+    service._iqoption_session_invalidated = True
+    service._iqoption_recovery_stop = Stop()
+    service._runtime = SimpleNamespace(event_sink=InMemoryEventSink())
+    service._iqoption = SimpleNamespace(client=client)
+    service._iqoption_connection_safety = safety
+    service._iqoption_auto_trader = SimpleNamespace(on_transport_up=transport.mark_up)
+    monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
+
+    service._iqoption_recovery_loop()
+
+    assert client.reconnects == 1
+    assert not safety.snapshot.called
+    assert service._iqoption_session_invalidated is False
+    assert service._transport_supervisor.state.value == "ARMED"
+    assert service._iqoption_bot_reason == "IQOPTION_BOT_ARMED"
+
+
+def test_websocket_budget_expiry_wakes_recovery_automatically(monkeypatch) -> None:
+    now = datetime.now(UTC)
+
+    class Client:
+        is_ready = True
+
+        def __init__(self) -> None:
+            self.reconnects = 0
+
+        def iqoption_reconnect_session(self) -> None:
+            from apps.core.worker_client import DeliveryCertainty, WorkerDispatchError
+
+            self.reconnects += 1
+            if self.reconnects == 1:
+                raise WorkerDispatchError(
+                    ProtocolErrorCode.IQOPTION_WEBSOCKET_RECONNECT_LIMIT_REACHED,
+                    DeliveryCertainty.NOT_SENT,
+                    "WebSocket reconnect budget exhausted",
+                    details={"retry_after_seconds": 37.0},
+                )
+
+        @staticmethod
+        def broker_balance() -> BrokerAccountBalance:
+            return BrokerAccountBalance(10000, "USD", "DEMO", now)
+
+        @staticmethod
+        def broker_clock() -> BrokerClockSnapshot:
+            return BrokerClockSnapshot(int(now.timestamp()), now, 0.01, Decimal(0))
+
+    class Stop:
+        def __init__(self) -> None:
+            self.waits: list[float] = []
+
+        @staticmethod
+        def is_set() -> bool:
+            return False
+
+        def wait(self, seconds: float) -> bool:
+            self.waits.append(seconds)
+            return False
+
+    client = Client()
+    stop = Stop()
+    transport = TransportSupervisor(initially_armed=True)
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._state = CoreServiceState.READY
+    service._transport_supervisor = transport
+    service._iqoption_bot_armed = True
+    service._iqoption_bot_reason = "TRANSPORT_DOWN"
+    service._iqoption_session_invalidated = True
+    service._iqoption_recovery_stop = stop
+    service._iqoption_recovery_jitter = lambda _low, _high: 0.0
+    service._runtime = SimpleNamespace(event_sink=InMemoryEventSink())
+    service._iqoption = SimpleNamespace(client=client)
+    service._iqoption_connection_safety = SimpleNamespace(snapshot=MagicMock())
+    service._iqoption_auto_trader = SimpleNamespace(on_transport_up=transport.mark_up)
+    monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
+
+    service._iqoption_recovery_loop()
+
+    assert client.reconnects == 2
+    assert stop.waits == [0.0, 37.0, 0.0]
+    assert service._transport_supervisor.state.value == "ARMED"
+    assert service._iqoption_bot_reason == "IQOPTION_BOT_ARMED"
+
+
+def test_manual_disarm_during_websocket_recovery_cannot_reactivate_bot(monkeypatch) -> None:
+    now = datetime.now(UTC)
+    transport = TransportSupervisor(initially_armed=True)
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+
+    class Client:
+        is_ready = True
+
+        @staticmethod
+        def iqoption_reconnect_session() -> None:
+            transport.safe_stop(caller=StopReason.USER_COMMAND)
+            service._iqoption_bot_armed = False
+            service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+
+        @staticmethod
+        def broker_balance() -> BrokerAccountBalance:
+            return BrokerAccountBalance(10000, "USD", "DEMO", now)
+
+        @staticmethod
+        def broker_clock() -> BrokerClockSnapshot:
+            return BrokerClockSnapshot(int(now.timestamp()), now, 0.01, Decimal(0))
+
+    class Stop:
+        @staticmethod
+        def is_set() -> bool:
+            return False
+
+        @staticmethod
+        def wait(_seconds: float) -> bool:
+            return False
+
+    service._state = CoreServiceState.READY
+    service._transport_supervisor = transport
+    service._iqoption_bot_armed = True
+    service._iqoption_bot_reason = "TRANSPORT_DOWN"
+    service._iqoption_session_invalidated = True
+    service._iqoption_recovery_stop = Stop()
+    service._iqoption_recovery_jitter = lambda _low, _high: 0.0
+    service._runtime = SimpleNamespace(event_sink=InMemoryEventSink())
+    service._iqoption = SimpleNamespace(client=Client())
+    service._iqoption_connection_safety = SimpleNamespace(snapshot=MagicMock())
+    service._iqoption_auto_trader = SimpleNamespace(on_transport_up=transport.mark_up)
+    monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
+
+    service._iqoption_recovery_loop()
+
+    assert service._transport_supervisor.state.value == "DISARMED"
+    assert service._transport_supervisor.armed_intent is False
+    assert service._iqoption_bot_armed is False
+    assert service._iqoption_bot_reason == "IQOPTION_BOT_DISARMED"
 
 
 def test_iq_recovery_preserves_deriv_entry_authority(

@@ -63,6 +63,7 @@ IQOPTION_DIGITAL_CATALOG_RETRY_SECONDS = 15 * 60.0
 IQOPTION_CLOCK_MAX_AGE_SECONDS = 30.0
 IQOPTION_CLOCK_PROBE_INTERVAL_SECONDS = 10.0
 IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS = 2.0
+IQOPTION_CLOCK_REFRESH_TIMEOUT_SECONDS = 2.0
 
 # Legacy bootstrap only. The first successful session catalogue atomically
 # replaces this map; it is retained for old fixtures and initial compatibility.
@@ -101,10 +102,17 @@ class IQOptionAccountMode(StrEnum):
 
 
 class IQOptionExternalError(RuntimeError):
-    def __init__(self, reason_code: str, *, submission_not_sent: bool = False) -> None:
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        submission_not_sent: bool = False,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
         self.submission_not_sent = submission_not_sent
+        self.details = dict(details or {})
 
 
 class IQOptionWebSocket(Protocol):
@@ -275,8 +283,11 @@ class IQOptionCommunityReadOnlySession:
         self._server_epoch_received_at = 0.0
         self._server_epoch_monotonic = 0.0
         self._connected_at_monotonic = 0.0
+        self._connection_generation = 0
         self._clock_round_trip: float | None = None
         self._clock_probe_at = float("-inf")
+        self._clock_updated = threading.Event()
+        self._last_rx_monotonic = float("-inf")
         self._pending: dict[str, queue.Queue[dict[str, Any]]] = {}
         self._contract_events: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
         # Legacy api_game_betinfo responses do not reliably echo request_id.
@@ -356,6 +367,7 @@ class IQOptionCommunityReadOnlySession:
         timeout: float,
     ) -> IQOptionConnectionSnapshot:
         self._close_transport(clear_session=False)
+        self._connection_generation += 1
         with self._lock:
             self._authenticated = False
             self._profile = None
@@ -365,6 +377,8 @@ class IQOptionCommunityReadOnlySession:
             self._server_epoch_monotonic = 0.0
             self._clock_round_trip = None
             self._clock_probe_at = float("-inf")
+            self._clock_updated.clear()
+            self._last_rx_monotonic = float("-inf")
             self._active_ids = dict(IQOPTION_ACTIVE_IDS)
             self._catalog_refreshed = False
             self._digital_catalog_response = None
@@ -455,43 +469,55 @@ class IQOptionCommunityReadOnlySession:
         latency, not server time: both it and a fresh broker timestamp are required.
         Cache only the probe for ten seconds; never substitute the PC's clock.
         """
+        started = self._monotonic()
         with self._clock_query_lock:
-            return self._get_clock_locked()
+            try:
+                return self._get_clock_locked()
+            except IQOptionExternalError as exc:
+                exc.details.update(self._clock_diagnostics("BROKER_CLOCK_REQUEST", started))
+                raise
 
     def _get_clock_locked(self) -> BrokerClockSnapshot:
         websocket = self._websocket
         if websocket is None or not self.is_connected:
-            raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
+            raise IQOptionExternalError("IQOPTION_WEBSOCKET_UNAVAILABLE")
         now = self._monotonic()
         if now - self._clock_probe_at >= IQOPTION_CLOCK_PROBE_INTERVAL_SECONDS:
-            self._clock_round_trip = None
             self._clock_probe_at = now
+            probe_failed = False
             try:
                 pong = websocket.ping()
                 if not pong.wait(IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS):
-                    raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
+                    probe_failed = True
             except (WebSocketException, OSError, RuntimeError) as exc:
-                raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE") from exc
-            self._clock_round_trip = max(0.0, self._monotonic() - now)
-        if (
-            self._clock_round_trip is None
-            or websocket is not self._websocket
-            or not self.is_connected
-        ):
-            raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
+                if not self.is_connected:
+                    raise IQOptionExternalError("IQOPTION_WEBSOCKET_UNAVAILABLE") from exc
+                probe_failed = True
+            observed_round_trip = max(0.0, self._monotonic() - now)
+            if not probe_failed or self._clock_round_trip is None:
+                self._clock_round_trip = observed_round_trip
+        if websocket is not self._websocket or not self.is_connected:
+            raise IQOptionExternalError("IQOPTION_WEBSOCKET_UNAVAILABLE")
+        invalid_reason = self._clock_invalid_reason()
+        if invalid_reason is not None:
+            # timeSync is an evidence refresh on the existing authenticated
+            # socket. It never performs login, reconnect, or order submission.
+            self._clock_updated.clear()
+            self._send({"name": "timesync", "msg": int(self._wall_time() * 1000)})
+            self._clock_updated.wait(IQOPTION_CLOCK_REFRESH_TIMEOUT_SECONDS)
+            invalid_reason = self._clock_invalid_reason()
+            if invalid_reason is not None:
+                raise IQOptionExternalError(invalid_reason)
+        if self._clock_round_trip is None:
+            raise IQOptionExternalError("IQOPTION_CLOCK_PONG_TIMEOUT")
         with self._lock:
             server_epoch = self._server_epoch
-            received_at = self._server_epoch_received_at
             received_mono = self._server_epoch_monotonic
         now_mono = self._monotonic()
         now_wall = self._wall_time()
         elapsed = now_mono - received_mono
-        if (
-            server_epoch is None
-            or not 0 <= elapsed <= IQOPTION_CLOCK_MAX_AGE_SECONDS
-            or abs((now_wall - received_at) - elapsed) > 1.0
-        ):
-            raise IQOptionExternalError("IQOPTION_CLOCK_UNAVAILABLE")
+        if server_epoch is None:
+            raise IQOptionExternalError("IQOPTION_CLOCK_NO_SAMPLE")
         projected_epoch = server_epoch + Decimal(str(elapsed))
         estimated_offset = projected_epoch - Decimal(str(now_wall))
         return BrokerClockSnapshot(
@@ -500,6 +526,37 @@ class IQOptionCommunityReadOnlySession:
             round_trip_seconds=self._clock_round_trip,
             estimated_offset_seconds=estimated_offset,
         )
+
+    def _clock_invalid_reason(self) -> str | None:
+        with self._lock:
+            server_epoch = self._server_epoch
+            received_at = self._server_epoch_received_at
+            received_mono = self._server_epoch_monotonic
+        if server_epoch is None:
+            return "IQOPTION_CLOCK_NO_SAMPLE"
+        elapsed = self._monotonic() - received_mono
+        if not 0 <= elapsed <= IQOPTION_CLOCK_MAX_AGE_SECONDS:
+            return "IQOPTION_CLOCK_STALE"
+        if abs((self._wall_time() - received_at) - elapsed) > 1.0:
+            return "IQOPTION_CLOCK_WALL_JUMP"
+        return None
+
+    def _clock_diagnostics(self, operation: str, started: float) -> dict[str, object]:
+        now = self._monotonic()
+        with self._lock:
+            sample_mono = self._server_epoch_monotonic
+            has_sample = self._server_epoch is not None
+        return {
+            "operation": operation,
+            "duration_ms": max(0, int((now - started) * 1000)),
+            "sample_age_ms": max(0, int((now - sample_mono) * 1000)) if has_sample else None,
+            "last_message_age_ms": (
+                max(0, int((now - self._last_rx_monotonic) * 1000))
+                if self._last_rx_monotonic != float("-inf")
+                else None
+            ),
+            "connection_generation": self._connection_generation,
+        }
 
     def get_candles(
         self,
@@ -887,7 +944,16 @@ class IQOptionCommunityReadOnlySession:
             item for item in self._websocket_reconnect_epochs if item > boundary
         ]
         if len(self._websocket_reconnect_epochs) >= IQOPTION_WEBSOCKET_RECONNECT_LIMIT:
-            raise IQOptionExternalError("IQOPTION_WEBSOCKET_RECONNECT_LIMIT_REACHED")
+            retry_after = max(
+                0.0,
+                self._websocket_reconnect_epochs[0]
+                + IQOPTION_WEBSOCKET_RECONNECT_WINDOW_SECONDS
+                - now,
+            )
+            raise IQOptionExternalError(
+                "IQOPTION_WEBSOCKET_RECONNECT_LIMIT_REACHED",
+                details={"retry_after_seconds": retry_after},
+            )
         self._websocket_reconnect_epochs.append(now)
 
     def _selected_balance(self) -> dict[str, object]:
@@ -934,6 +1000,7 @@ class IQOptionCommunityReadOnlySession:
                 waiter.put_nowait({"_transport_error": reason})
 
     def _handle_message(self, raw: str | bytes) -> None:
+        self._last_rx_monotonic = self._monotonic()
         if len(raw if isinstance(raw, bytes) else raw.encode("utf-8")) > IQOPTION_MAX_MESSAGE_BYTES:
             raise IQOptionExternalError("IQOPTION_RESPONSE_TOO_LARGE")
         if isinstance(raw, bytes):
@@ -1014,9 +1081,12 @@ class IQOptionCommunityReadOnlySession:
                     self._disconnected.set()
 
     def _record_server_time(self, raw_epoch: object) -> None:
-        if not isinstance(raw_epoch, (int, float, Decimal)) or isinstance(raw_epoch, bool):
+        if isinstance(raw_epoch, bool) or not isinstance(raw_epoch, (int, float, Decimal, str)):
             return
-        epoch = Decimal(str(raw_epoch))
+        try:
+            epoch = Decimal(str(raw_epoch).strip())
+        except InvalidOperation:
+            return
         if not epoch.is_finite() or epoch <= 0:
             return
         if epoch > 100_000_000_000:
@@ -1025,6 +1095,7 @@ class IQOptionCommunityReadOnlySession:
             self._server_epoch = epoch
             self._server_epoch_received_at = self._wall_time()
             self._server_epoch_monotonic = self._monotonic()
+        self._clock_updated.set()
 
     def _send(self, payload: Mapping[str, object]) -> None:
         websocket = self._websocket

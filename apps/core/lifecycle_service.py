@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 import sys
 import threading
 import time
@@ -22,7 +23,11 @@ from apps.core.execution_state import (
     StopReason,
     TransportSupervisor,
 )
-from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID, IqOptionAutoTrader
+from apps.core.iqoption_auto_trader import (
+    IQOPTION_CLOCK_FAILURE_REASONS,
+    IQOPTION_PRACTICE_ACCOUNT_ID,
+    IqOptionAutoTrader,
+)
 from apps.core.iqoption_candidates import TIMEFRAMES
 from apps.core.iqoption_connection_safety import (
     IQOptionConnectionSafetyController,
@@ -238,6 +243,7 @@ class CoreLifecycleService:
         self._iqoption_switch_lock = threading.RLock()
         self._deriv_recovery_stop = threading.Event()
         self._iqoption_recovery_stop = threading.Event()
+        self._iqoption_recovery_jitter = random.uniform
         self._deriv_recovery_thread: threading.Thread | None = None
         self._iqoption_startup_recovery_thread: threading.Thread | None = None
         self._deriv_generation = 0
@@ -620,6 +626,43 @@ class CoreLifecycleService:
                 CoreServiceState.STOPPED,
             }:
                 return
+            base_delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
+                min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
+            ]
+            jitter = getattr(self, "_iqoption_recovery_jitter", random.uniform)
+            radius = base_delay * 0.10
+            delay = max(0.0, base_delay + jitter(-radius, radius)) if radius else base_delay
+            if self._iqoption_recovery_stop.wait(delay):
+                return
+            attempt += 1
+            runtime.event_sink.emit(
+                "iqoption_recovery_attempt",
+                attempt=attempt,
+                delay_ms=int(delay * 1000),
+            )
+            soft_connected, soft_reason, retry_same_worker, retry_after = (
+                self._try_reconnect_iqoption_websocket()
+            )
+            if soft_connected:
+                runtime.event_sink.emit(
+                    "iqoption_recovery_connected",
+                    reason_code="IQOPTION_WEBSOCKET_SESSION_REUSED",
+                    attempt=attempt,
+                )
+                return
+            if retry_same_worker:
+                runtime.event_sink.emit(
+                    "iqoption_recovery_failed",
+                    reason_code=soft_reason,
+                    attempt=attempt,
+                    recovery_layer="WEBSOCKET",
+                    retry_after_seconds=int(retry_after),
+                )
+                if retry_after > 0:
+                    if self._iqoption_recovery_stop.wait(retry_after):
+                        return
+                    attempt = 0
+                continue
             controller = self._iqoption_connection_safety
             if controller is not None:
                 try:
@@ -641,17 +684,6 @@ class CoreLifecycleService:
                     if self._iqoption_recovery_stop.wait(safety.retry_after_seconds):
                         return
                     continue
-            delay = _IQOPTION_RECOVERY_DELAYS_SECONDS[
-                min(attempt, len(_IQOPTION_RECOVERY_DELAYS_SECONDS) - 1)
-            ]
-            if self._iqoption_recovery_stop.wait(delay):
-                return
-            attempt += 1
-            runtime.event_sink.emit(
-                "iqoption_recovery_attempt",
-                attempt=attempt,
-                delay_ms=int(delay * 1000),
-            )
             accepted, connected, reason = self.connect_iqoption_selected_account("saved")
             if accepted and connected and not self._iqoption_session_invalidated:
                 self._iqoption_bot_reason = (
@@ -688,6 +720,65 @@ class CoreLifecycleService:
                 attempts=attempt,
             )
             return
+
+    def _try_reconnect_iqoption_websocket(self) -> tuple[bool, str, bool, float]:
+        """Reuse the worker's in-memory SSID before considering another HTTP login."""
+
+        supervisor = getattr(self, "_iqoption", None)
+        runtime = getattr(self, "_runtime", None)
+        if supervisor is None or runtime is None:
+            return False, "WORKER_NOT_READY", False, 0.0
+        client = supervisor.client
+        reconnect = getattr(client, "iqoption_reconnect_session", None)
+        if not getattr(client, "is_ready", True) or not callable(reconnect):
+            return False, "WORKER_NOT_READY", False, 0.0
+        try:
+            reconnect()
+            balance = client.broker_balance()
+            clock: BrokerClockSnapshot | None = None
+            try:
+                clock = client.broker_clock()
+            except WorkerDispatchError as exc:
+                if exc.code.value not in IQOPTION_CLOCK_FAILURE_REASONS:
+                    raise
+                runtime.health_gate.block_scope(
+                    Broker.IQ_OPTION.value,
+                    IQOPTION_PRACTICE_ACCOUNT_ID,
+                    "MD_CLOCK_UNTRUSTED",
+                )
+                runtime.event_sink.emit(
+                    "iqoption_clock_unavailable",
+                    broker=Broker.IQ_OPTION.value,
+                    reason_code=exc.code.value,
+                )
+        except WorkerDispatchError as exc:
+            reason = exc.code.value
+            retry_same = reason not in {
+                "IQOPTION_AUTH_FAILED",
+                "IPC_CONNECTION_LOST",
+                "WORKER_CRASHED",
+                "WORKER_NOT_READY",
+            }
+            raw_retry_after = exc.details.get("retry_after_seconds", 0.0)
+            retry_after = (
+                max(0.0, float(raw_retry_after))
+                if isinstance(raw_retry_after, (int, float))
+                and not isinstance(raw_retry_after, bool)
+                else 0.0
+            )
+            return False, reason, retry_same, retry_after
+        except (ProtocolError, OSError, RuntimeError, ValueError):
+            return False, "IQOPTION_WEBSOCKET_UNAVAILABLE", True, 0.0
+        self._iqoption_balance = balance
+        self._iqoption_clock = clock
+        self._iqoption_session_invalidated = False
+        self._iqoption_auto_trader.on_transport_up()
+        if self._transport_supervisor.armed_intent:
+            self._iqoption_bot_armed = True
+            self._iqoption_bot_reason = (
+                "IQOPTION_BOT_ARMED" if clock is not None else "MD_CLOCK_UNTRUSTED"
+            )
+        return True, "IQOPTION_WEBSOCKET_SESSION_REUSED", False, 0.0
 
     def safe_stop(
         self,
@@ -920,8 +1011,13 @@ class CoreLifecycleService:
                     ).allowed:
                         clock = supervisor.client.broker_clock()
                 except WorkerDispatchError as exc:
-                    if exc.code is not ProtocolErrorCode.IQOPTION_CLOCK_UNAVAILABLE:
+                    if exc.code.value not in IQOPTION_CLOCK_FAILURE_REASONS:
                         raise
+                    runtime.health_gate.block_scope(
+                        Broker.IQ_OPTION.value,
+                        IQOPTION_PRACTICE_ACCOUNT_ID,
+                        "MD_CLOCK_UNTRUSTED",
+                    )
                 if normalized_mode == "practice":
                     runtime.attach_iqoption_worker(
                         supervisor.client,

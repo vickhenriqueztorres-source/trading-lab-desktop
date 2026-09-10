@@ -644,6 +644,54 @@ def test_websocket_reconnect_limit_stops_repeated_external_attempts() -> None:
     assert len(created) == 6  # initial transport plus five bounded reconnects
 
 
+def test_ten_websocket_drops_wait_for_budget_and_reuse_one_http_login() -> None:
+    clock = [100.0]
+    created: list[FakeWebSocket] = []
+    login_calls = 0
+
+    def websocket_factory() -> FakeWebSocket:
+        websocket = FakeWebSocket(_messages())
+        created.append(websocket)
+        return websocket
+
+    def login(_email: str, _credential: SecretValue, _timeout: float) -> SecretValue:
+        nonlocal login_calls
+        login_calls += 1
+        return SecretValue.from_text("memory-only-ssid")
+
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=login,
+        websocket_factory=websocket_factory,
+        monotonic=lambda: clock[0],
+    )
+    reconnects = 0
+    waits: list[float] = []
+    try:
+        session.connect()
+        while reconnects < 10:
+            session._disconnected.set()
+            try:
+                session.reconnect()
+            except IQOptionExternalError as exc:
+                assert exc.reason_code == "IQOPTION_WEBSOCKET_RECONNECT_LIMIT_REACHED"
+                retry_after = float(exc.details["retry_after_seconds"])
+                assert retry_after > 0
+                waits.append(retry_after)
+                clock[0] += retry_after
+                continue
+            reconnects += 1
+    finally:
+        session.close()
+
+    assert reconnects == 10
+    assert waits == [900.0]
+    assert login_calls == 1
+    assert len(created) == 11
+
+
 def test_read_only_session_rejects_unconfirmed_authentication() -> None:
     websocket = FakeWebSocket([{"name": "authenticated", "msg": False}])
     session = IQOptionCommunityReadOnlySession(
@@ -880,6 +928,57 @@ def test_iqoption_real_worker_has_no_financial_capability_or_order_route() -> No
     assert payload == {"reason_code": "WORKER_CAPABILITY_DENIED"}
 
 
+def test_worker_clock_error_exposes_only_structured_safe_diagnostics() -> None:
+    class FailingClockSession:
+        is_connected = True
+
+        @staticmethod
+        def get_clock() -> None:
+            raise IQOptionExternalError(
+                "IQOPTION_CLOCK_STALE",
+                details={
+                    "operation": "BROKER_CLOCK_REQUEST",
+                    "duration_ms": 2000,
+                    "sample_age_ms": 32000,
+                    "last_message_age_ms": 15,
+                    "connection_generation": 7,
+                    "credential": "must-not-cross-ipc",
+                },
+            )
+
+    server = IQOptionReadOnlyWorkerServer(
+        "127.0.0.1",
+        0,
+        1,
+        cast(IQOptionCommunityReadOnlySession, FailingClockSession()),
+        connection_mode="REAL_AUTH_READ_ONLY",
+    )
+    request = Envelope(
+        protocol_version=1,
+        message_id=str(uuid4()),
+        correlation_id=str(uuid4()),
+        causation_id=None,
+        source=EndpointRole.CORE,
+        target=EndpointRole.IQOPTION_WORKER,
+        message_type=MessageType.BROKER_CLOCK_REQUEST,
+        created_at_utc=datetime.now(UTC),
+        deadline_at=None,
+        payload={},
+    )
+
+    message_type, payload = server._dispatch(request)
+
+    assert message_type is MessageType.ERROR
+    assert payload == {
+        "reason_code": "IQOPTION_CLOCK_STALE",
+        "operation": "BROKER_CLOCK_REQUEST",
+        "duration_ms": 2000,
+        "sample_age_ms": 32000,
+        "last_message_age_ms": 15,
+        "connection_generation": 7,
+    }
+
+
 def test_iqoption_worker_connects_to_core_listener_before_handshake() -> None:
     """The worker must dial the supervisor; the two sides must not both listen."""
 
@@ -955,6 +1054,46 @@ def test_worker_request_never_reconnects_after_session_loss() -> None:
 
     assert session.connect_calls == 1
     assert session.reconnect_calls == 0
+
+
+def test_worker_reconnect_command_reuses_existing_session() -> None:
+    class SessionSpy:
+        is_connected = False
+
+        def __init__(self) -> None:
+            self.reconnect_calls = 0
+
+        def reconnect(self) -> None:
+            self.reconnect_calls += 1
+            self.is_connected = True
+
+    session = SessionSpy()
+    server = IQOptionReadOnlyWorkerServer(
+        "127.0.0.1",
+        1,
+        1,
+        cast(IQOptionCommunityReadOnlySession, session),
+        connection_mode="DEMO_AUTH_FINANCIAL",
+    )
+    now = datetime.now(UTC)
+    request = Envelope(
+        protocol_version=1,
+        message_id="reconnect-message",
+        correlation_id="reconnect-correlation",
+        causation_id=None,
+        source=EndpointRole.CORE,
+        target=EndpointRole.IQOPTION_WORKER,
+        message_type=MessageType.BROKER_SESSION_RECONNECT_REQUEST,
+        created_at_utc=now,
+        deadline_at=None,
+        payload={},
+    )
+
+    response_type, payload = server._dispatch(request)
+
+    assert response_type is MessageType.BROKER_SESSION_RECONNECT_RESPONSE
+    assert payload == {"connected": True}
+    assert session.reconnect_calls == 1
 
 
 def test_ping_is_ipc_liveness_only_and_never_reconnects() -> None:
