@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import secrets
 import socket
 import threading
@@ -24,6 +25,11 @@ from packages.brokers.iqoption.community_read_only import (
     _login,
     _websocket_factory,
 )
+from packages.brokers.iqoption.result_parser import (
+    IQOPTION_CLOSED_OPTIONS,
+    IQOPTION_HISTORY_CONTAINER_KEY,
+)
+from packages.domain.market import BrokerAccountBalance
 from packages.domain.models import Broker
 from packages.protocol import EndpointRole, Envelope, MessageType
 from packages.protocol.transport import FramedSocket
@@ -231,6 +237,45 @@ def test_websocket_uses_dedicated_host_then_main_fallback(
     assert calls == list(IQOPTION_WEBSOCKET_URLS)
 
 
+def test_late_order_ack_is_routed_without_resubmitting() -> None:
+    websocket = FakeWebSocket(())
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: websocket,
+    )
+    session._connection_generation = 7
+    session._authenticated = True
+    session._websocket = websocket
+    session._disconnected.clear()
+    with session._pending_lock:
+        session._remember_late_order_request_locked(
+            "late-request",
+            "order-local-1",
+            "correlation-1",
+        )
+
+    session._handle_message(
+        json.dumps(
+            {
+                "name": "option",
+                "request_id": "late-request",
+                "msg": {"id": 987654, "status": True},
+            }
+        ),
+        connection_generation=7,
+    )
+
+    late = session.receive_contract(timeout=0.01)
+    assert late is not None
+    assert late["name"] == "option-opened"
+    assert late["msg"]["id"] == 987654
+    assert late["msg"]["client_order_id"] == "order-local-1"
+    assert websocket.sent == []
+
+
 class FakeWebSocket:
     def __init__(self, messages: Iterable[dict[str, object]]) -> None:
         self.messages = [json.dumps(item) for item in messages]
@@ -278,6 +323,7 @@ class RequestDrivenWebSocket(FakeWebSocket):
                 json.dumps(
                     {
                         "name": "balances",
+                        "request_id": "broker-rewritten-request-id",
                         "msg": [
                             {
                                 "id": 2,
@@ -442,6 +488,169 @@ def test_read_only_session_authenticates_and_selects_explicit_balance(
     finally:
         session.close()
     assert websocket.closed is True
+
+
+def test_balance_push_updates_selected_practice_balance_and_preserves_receive_time() -> None:
+    clock = [1_800_000_000.0]
+    websocket = FakeWebSocket(_messages())
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: websocket,
+        monotonic=lambda: clock[0],
+        wall_time=lambda: clock[0],
+    )
+    try:
+        initial = session.connect().balance
+        clock[0] += 5
+        session._handle_message(
+            json.dumps(
+                {
+                    "name": "balance-changed",
+                    "msg": {
+                        "current_balance": {
+                            "id": 2,
+                            "type": 4,
+                            "amount": "10000.87",
+                            "currency": "USD",
+                        }
+                    },
+                }
+            ),
+            connection_generation=session._connection_generation,
+        )
+        updated = session.snapshot().balance
+        clock[0] += 5
+        reread = session.snapshot().balance
+    finally:
+        session.close()
+
+    assert initial.balance_minor_units == 1_000_000
+    assert updated.balance_minor_units == 1_000_087
+    assert updated.observed_at_utc == datetime.fromtimestamp(1_800_000_005, UTC)
+    assert reread.observed_at_utc == updated.observed_at_utc
+
+
+def test_balance_push_completes_an_inflight_balance_refresh() -> None:
+    websocket = FakeWebSocket(_messages())
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: websocket,
+    )
+    result: list[object] = []
+    try:
+        session.connect()
+        reader = threading.Thread(target=lambda: result.append(session.get_balance()))
+        reader.start()
+        for _ in range(100):
+            with session._pending_lock:
+                if session._balance_pending is not None:
+                    break
+            threading.Event().wait(0.01)
+        session._handle_message(
+            json.dumps(
+                {
+                    "name": "balance-changed",
+                    "msg": {
+                        "current_balance": {
+                            "id": 2,
+                            "type": 4,
+                            "amount": "10001.23",
+                            "currency": "USD",
+                        }
+                    },
+                }
+            ),
+            connection_generation=session._connection_generation,
+        )
+        reader.join(timeout=1.0)
+    finally:
+        session.close()
+
+    assert not reader.is_alive()
+    assert len(result) == 1
+    balance = cast(BrokerAccountBalance, result[0])
+    assert balance.balance_minor_units == 1_000_123
+    assert balance.source == "BALANCE_PUSH"
+
+
+def test_uncorrelated_full_balance_cannot_overwrite_a_newer_push() -> None:
+    websocket = FakeWebSocket(_messages())
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: websocket,
+    )
+    try:
+        session.connect()
+        session._handle_message(
+            json.dumps(
+                {
+                    "name": "balance-changed",
+                    "msg": {
+                        "current_balance": {
+                            "id": 2,
+                            "type": 4,
+                            "amount": "10001.23",
+                            "currency": "USD",
+                        }
+                    },
+                }
+            ),
+            connection_generation=session._connection_generation,
+        )
+        session._handle_message(
+            json.dumps(
+                {
+                    "name": "balances",
+                    "request_id": "old-or-rewritten-request",
+                    "msg": [
+                        {
+                            "id": 2,
+                            "type": 4,
+                            "amount": "10000.00",
+                            "currency": "USD",
+                        }
+                    ],
+                }
+            ),
+            connection_generation=session._connection_generation,
+        )
+        balance = session.snapshot().balance
+    finally:
+        session.close()
+
+    assert balance.balance_minor_units == 1_000_123
+    assert balance.source == "BALANCE_PUSH"
+
+
+def test_cached_balance_becomes_stale_instead_of_minting_a_new_timestamp() -> None:
+    clock = [1_800_000_000.0]
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: FakeWebSocket(_messages()),
+        monotonic=lambda: clock[0],
+        wall_time=lambda: clock[0],
+    )
+    try:
+        observed = session.connect().balance.observed_at_utc
+        clock[0] += 16
+        with pytest.raises(IQOptionExternalError, match="IQOPTION_BALANCE_STALE"):
+            session.snapshot()
+    finally:
+        session.close()
+
+    assert observed == datetime.fromtimestamp(1_800_000_000, UTC)
 
 
 def test_websocket_authentication_gets_a_fresh_deadline_after_slow_http_login() -> None:
@@ -734,6 +943,26 @@ def test_read_only_session_requests_profile_and_balances_after_authentication() 
         session.close()
 
 
+def test_balance_read_accepts_valid_snapshot_when_broker_rewrites_request_id() -> None:
+    websocket = RequestDrivenWebSocket()
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda _email, _credential, _timeout: SecretValue.from_text(
+            secrets.token_urlsafe(24)
+        ),
+        websocket_factory=lambda: websocket,
+    )
+    try:
+        session.connect()
+        balance = session.get_balance()
+    finally:
+        session.close()
+
+    assert balance.balance_minor_units == 1_000_000
+
+
 def test_read_only_session_fails_closed_when_requested_balance_does_not_exist() -> None:
     websocket = FakeWebSocket(
         [
@@ -869,6 +1098,233 @@ def test_practice_session_recent_options_accepts_response_without_request_id() -
 
     assert result["isSuccessful"] is True
     assert result["result"]["id"] == 12345
+    assert result["result"][IQOPTION_HISTORY_CONTAINER_KEY] == IQOPTION_CLOSED_OPTIONS
+
+
+def test_options_response_with_another_request_id_is_not_accepted() -> None:
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: FakeWebSocket(_messages()),
+    )
+    response_queue: queue.Queue[dict[str, object]] = queue.Queue(maxsize=1)
+    session._connection_generation = 9
+    session._options_pending = (9, "current-request", response_queue)  # type: ignore[assignment]
+
+    session._handle_message(
+        json.dumps({"name": "options", "request_id": "retired-request", "msg": {}}),
+        connection_generation=9,
+    )
+
+    assert response_queue.empty()
+    session._handle_message(
+        json.dumps({"name": "options", "request_id": "current-request", "msg": {}}),
+        connection_generation=9,
+    )
+    assert response_queue.get_nowait()["request_id"] == "current-request"
+
+
+def test_options_timeout_retires_connection_generation() -> None:
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: FakeWebSocket(_messages()),
+    )
+    try:
+        session.connect()
+        with pytest.raises(IQOptionExternalError, match="IQOPTION_REQUEST_TIMEOUT"):
+            session.request("get_options", {"id": 12345}, timeout=0.01)
+        assert session.is_connected is False
+    finally:
+        session.close()
+
+
+def test_old_option_without_client_reference_is_recovered_by_unique_fingerprint() -> None:
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda _email, _credential, _timeout: SecretValue.from_text(
+            secrets.token_urlsafe(24)
+        ),
+        websocket_factory=lambda: FakeWebSocket(_messages()),
+    )
+    submitted_at = datetime(2026, 9, 11, 9, 40, 16, tzinfo=UTC)
+    raw = {
+        "open_options": [],
+        "closed_options": [
+            {
+                "id": [987654],
+                "active_id": 79,
+                "dir": "put",
+                "amount": "1.00",
+                "created": int(submitted_at.timestamp()),
+                "win": "win",
+                "win_amount": "1.85",
+            }
+        ],
+    }
+
+    matched, ambiguous, identity_complete = session._find_unique_contract_by_fingerprint(
+        raw,
+        {
+            "client_order_id": "old-local-order",
+            "symbol": "EURJPY-OTC",
+            "direction": "PUT",
+            "amount_minor": 100,
+            "currency": "USD",
+            "submitted_at": submitted_at.isoformat(),
+        },
+    )
+
+    assert ambiguous is False
+    assert identity_complete is True
+    assert matched is not None
+    assert matched["id"] == "987654"
+    assert matched["client_order_id"] == "old-local-order"
+    assert matched["_iq_identity_source"] == "HISTORY_FINGERPRINT"
+    assert matched[IQOPTION_HISTORY_CONTAINER_KEY] == IQOPTION_CLOSED_OPTIONS
+
+    duplicate = dict(raw)
+    duplicate["closed_options"] = [
+        raw["closed_options"][0],
+        {**raw["closed_options"][0], "id": [987655]},
+    ]
+    matched, ambiguous, _ = session._find_unique_contract_by_fingerprint(
+        duplicate,
+        {
+            "client_order_id": "old-local-order",
+            "symbol": "EURJPY-OTC",
+            "direction": "PUT",
+            "amount_minor": 100,
+            "currency": "USD",
+            "submitted_at": submitted_at.isoformat(),
+        },
+    )
+    assert matched is None
+    assert ambiguous is True
+
+
+def test_fingerprint_rejects_unique_match_when_nearby_candidate_is_incomplete() -> None:
+    session = IQOptionCommunityReadOnlySession(
+        "trader@example.com",
+        SecretValue.from_text(secrets.token_urlsafe(24)),
+        IQOptionAccountMode.PRACTICE,
+        login=lambda *_: SecretValue.from_text(secrets.token_urlsafe(24)),
+        websocket_factory=lambda: FakeWebSocket(_messages()),
+    )
+    submitted_at = datetime(2026, 9, 11, 9, 40, 16, tzinfo=UTC)
+    raw = {
+        "open_options": [],
+        "closed_options": [
+            {
+                "id": [987654],
+                "active": 79,
+                "dir": "put",
+                "amount": "1.00",
+                "created": int(submitted_at.timestamp()),
+            },
+            {
+                "active": 79,
+                "created": int(submitted_at.timestamp()) + 1,
+            },
+        ],
+    }
+
+    matched, ambiguous, identity_complete = session._find_unique_contract_by_fingerprint(
+        raw,
+        {
+            "client_order_id": "old-local-order",
+            "symbol": "EURJPY-OTC",
+            "direction": "PUT",
+            "amount_minor": 100,
+            "currency": "USD",
+            "submitted_at": submitted_at.isoformat(),
+        },
+    )
+
+    assert matched is None
+    assert ambiguous is True
+    assert identity_complete is False
+
+
+def test_short_truncated_history_with_has_more_is_not_negative_proof() -> None:
+    submitted_at = datetime(2026, 9, 11, 9, 40, 16, tzinfo=UTC)
+    closed = [
+        {
+            "id": index + 1,
+            "active_id": 1,
+            "dir": "call",
+            "amount": "1.00",
+            "created": int(submitted_at.timestamp()) + 60 + index,
+        }
+        for index in range(100)
+    ]
+
+    proof = IQOptionCommunityReadOnlySession._options_negative_coverage(
+        {"open_options": [], "closed_options": closed},
+        history_identity_complete=True,
+        submitted_at=submitted_at.isoformat(),
+        response_metadata={"msg": {"has_more": True}},
+    )
+
+    assert proof is None
+
+
+def test_negative_option_history_proof_requires_complete_untruncated_containers() -> None:
+    complete = {"open_options": [], "closed_options": []}
+    truncated = {"open_options": [], "closed_options": [{} for _ in range(500)]}
+
+    proof = IQOptionCommunityReadOnlySession._options_negative_coverage(
+        complete,
+        history_identity_complete=True,
+    )
+
+    assert proof is not None
+    assert proof["statement_checked"] is True
+    assert proof["portfolio_checked"] is True
+    assert (
+        IQOptionCommunityReadOnlySession._options_negative_coverage(
+            truncated,
+            history_identity_complete=True,
+        )
+        is None
+    )
+    assert (
+        IQOptionCommunityReadOnlySession._options_negative_coverage(
+            complete,
+            history_identity_complete=False,
+        )
+        is None
+    )
+
+
+def test_negative_option_history_proof_accepts_full_page_covering_submit_window() -> None:
+    submitted_at = datetime(2026, 9, 11, 9, 40, 16, tzinfo=UTC)
+    closed = [
+        {
+            "id": index,
+            "active_id": 1,
+            "dir": "call",
+            "amount": "1.00",
+            "created": int(submitted_at.timestamp()) - 30 - index,
+        }
+        for index in range(500)
+    ]
+
+    proof = IQOptionCommunityReadOnlySession._options_negative_coverage(
+        {"open_options": [], "closed_options": closed},
+        history_identity_complete=True,
+        submitted_at=submitted_at.isoformat(),
+    )
+
+    assert proof is not None
+    assert proof["statement_checked"] is True
+    assert proof["portfolio_checked"] is True
 
 
 def test_real_session_rejects_financial_operation_before_network_send() -> None:
@@ -1018,6 +1474,73 @@ def test_iqoption_worker_connects_to_core_listener_before_handshake() -> None:
         listener.close()
         thread.join(timeout=2.0)
     assert result == [0]
+
+
+def test_worker_ping_is_not_blocked_by_slow_catalog_request() -> None:
+    class SlowCatalogSession:
+        is_connected = True
+
+        def __init__(self) -> None:
+            self.catalog_started = threading.Event()
+            self.release_catalog = threading.Event()
+
+        def get_instrument_catalog(self):
+            self.catalog_started.set()
+            self.release_catalog.wait(2.0)
+            raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT")
+
+        def close(self) -> None:
+            return None
+
+    session = SlowCatalogSession()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = int(listener.getsockname()[1])
+    server = IQOptionReadOnlyWorkerServer(
+        "127.0.0.1",
+        port,
+        1,
+        cast(IQOptionCommunityReadOnlySession, session),
+        connection_mode="REAL_AUTH_READ_ONLY",
+    )
+    server_result: list[int] = []
+    thread = threading.Thread(target=lambda: server_result.append(server.run()))
+    thread.start()
+    connection, _ = listener.accept()
+    client = SocketWorkerClient.handshake(
+        FramedSocket(connection),
+        timeout_seconds=2.0,
+        response_timeout=1.0,
+        expected_worker_role=EndpointRole.IQOPTION_WORKER,
+        expected_broker="IQOPTION",
+    )
+    catalog_finished = threading.Event()
+
+    def request_catalog() -> None:
+        try:
+            client.iqoption_instrument_catalog()
+        except Exception:
+            pass
+        finally:
+            catalog_finished.set()
+
+    catalog_thread = threading.Thread(target=request_catalog)
+    try:
+        catalog_thread.start()
+        assert session.catalog_started.wait(1.0)
+        client.ping(timeout=0.5)
+        assert not catalog_finished.is_set()
+    finally:
+        session.release_catalog.set()
+        catalog_thread.join(timeout=2.0)
+        client.shutdown(1.0)
+        listener.close()
+        thread.join(timeout=2.0)
+
+    assert catalog_finished.is_set()
+    assert server_result == [0]
 
 
 def test_worker_request_never_reconnects_after_session_loss() -> None:

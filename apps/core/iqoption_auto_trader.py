@@ -37,11 +37,17 @@ from apps.core.iqoption_connection_safety import (
     IQOptionMessageBudgetDecision,
 )
 from apps.core.iqoption_failures import IQFailurePolicy, ScopedFailure
+from apps.core.iqoption_martingale import (
+    IQOPTION_MARTINGALE_ENTRY_WINDOW_SECONDS,
+    IqOptionMartingaleCycle,
+    next_binary_expiry,
+)
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.iqoption_series_hub import (
     IQOPTION_SERIES_PRODUCT,
     IQOptionSeriesHub,
     IQOptionSeriesKey,
+    IQOptionSeriesPriority,
     IQOptionSeriesReason,
 )
 from apps.core.live_monitor import LiveMonitor
@@ -107,6 +113,7 @@ IQOPTION_TELEMETRY_CACHE_TTL_SECONDS = 10.0
 IQOPTION_INSTRUMENT_CATALOG_TTL_SECONDS = 60.0
 IQOPTION_INSTRUMENT_CATALOG_MAX_STALE_SECONDS = 180.0
 IQOPTION_PAYOUT_TICKET_MAX_AGE_SECONDS = 8.0
+IQOPTION_ENTRY_CUTOFF_SECOND = 25
 IQOPTION_CLOCK_MAX_SKEW_SECONDS = Decimal("120")
 IQOPTION_CLOCK_FAILURE_REASONS = frozenset(
     {
@@ -234,7 +241,9 @@ class IqOptionAutoTrader:
         # Negative availability only, never cached permission to submit.
         # Bounded by supported symbols; expiry requires a fresh payout probe.
         self._unavailable_assets: dict[str, tuple[float, str]] = {}
-        self._execution_ticket: tuple[str, str, str | None, object, float, Decimal] | None = None
+        self._execution_ticket: tuple[str, str, str | None, object, float, Decimal, int] | None = (
+            None
+        )
         self._utc_clock = utc_clock
         self._decision_epochs: dict[tuple[str, str, int, str, str], None] = {}
         self._last_payout_gate: dict[str, str | int | bool | None] | None = None
@@ -252,6 +261,7 @@ class IqOptionAutoTrader:
         self._failures = IQFailurePolicy()
         self._state_runtime: object | None = None
         self._pending_dispatch: dict[str, Any] | None = None
+        self._martingale_cycle: IqOptionMartingaleCycle | None = None
         self._last_dispatch_reasons: dict[str, str] = {}
         self._last_evaluated_epochs: dict[str, int] = {}
         self._armed_after_epoch: int | None = None
@@ -281,6 +291,8 @@ class IqOptionAutoTrader:
         self._asset_ranking = self._ordered_ranking()
         self._strategy = IQOptionRsiDemoStrategy()
         self._latest_clock: BrokerClockSnapshot | None = None
+        self._latest_clock_received_mono = float("-inf")
+        self._latest_clock_ipc_seconds = 0.0
         self._latest_balance: BrokerAccountBalance | None = None
         self._last_telemetry_probe = 0.0
         self._instrument_catalog: BrokerInstrumentCatalog | None = None
@@ -296,6 +308,30 @@ class IqOptionAutoTrader:
     def latest_clock(self) -> BrokerClockSnapshot | None:
         with self._lock:
             return self._latest_clock
+
+    @property
+    def latest_clock_age_seconds(self) -> float | None:
+        with self._lock:
+            clock = self._latest_clock
+            received_mono = self._latest_clock_received_mono
+            ipc_seconds = self._latest_clock_ipc_seconds
+        if clock is None:
+            return None
+        if clock.connection_generation > 0:
+            return (
+                clock.source_age_seconds
+                + ipc_seconds
+                + max(
+                    0.0,
+                    self._monotonic() - received_mono,
+                )
+            )
+        return (self._utc_clock() - clock.local_received_at).total_seconds()
+
+    @property
+    def latest_clock_is_fresh(self) -> bool | None:
+        age = self.latest_clock_age_seconds
+        return None if age is None else -1.0 <= age <= 30.0
 
     @property
     def latest_balance(self) -> BrokerAccountBalance | None:
@@ -467,7 +503,15 @@ class IqOptionAutoTrader:
             thread.join(timeout=2.0)
         self._thread = None
         with self._lock:
+            # Disarming cancels technical recovery ownership. Any already
+            # submitted order remains financially owned by durable order
+            # reconciliation and is never hidden or altered here.
+            self._martingale_cycle = None
             self._status_reason = "IQOPTION_BOT_DISARMED"
+        runtime = self._runtime_provider()
+        if runtime is not None:
+            with suppress(Exception):
+                self._save_execution_state(runtime)
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
@@ -523,6 +567,8 @@ class IqOptionAutoTrader:
             with self._lock:
                 self._latest_balance = None
                 self._latest_clock = None
+                self._latest_clock_received_mono = float("-inf")
+                self._latest_clock_ipc_seconds = 0.0
         now_mono = self._monotonic()
         if now_mono - self._last_telemetry_probe >= IQOPTION_TELEMETRY_CACHE_TTL_SECONDS:
             self._last_telemetry_probe = now_mono
@@ -532,9 +578,44 @@ class IqOptionAutoTrader:
                 self._report_operational_budget(runtime, clock_budget)
             if callable(clock_fn) and clock_budget.allowed:
                 try:
+                    clock_call_started = self._monotonic()
                     clock = clock_fn()
+                    clock_received_mono = self._monotonic()
+                    with self._lock:
+                        previous_clock = self._latest_clock
+                    invalid_clock_reason = self._clock_progression_failure(
+                        previous_clock,
+                        clock,
+                    )
+                    if invalid_clock_reason is not None:
+                        with self._lock:
+                            self._latest_clock = None
+                        self._handle_clock_failure(
+                            runtime,
+                            invalid_clock_reason,
+                            diagnostics={
+                                "connection_generation": clock.connection_generation,
+                                "sample_sequence": clock.sample_sequence,
+                                "previous_connection_generation": (
+                                    None
+                                    if previous_clock is None
+                                    else previous_clock.connection_generation
+                                ),
+                                "previous_sample_sequence": (
+                                    None
+                                    if previous_clock is None
+                                    else previous_clock.sample_sequence
+                                ),
+                            },
+                        )
+                        return
                     with self._lock:
                         self._latest_clock = clock
+                        self._latest_clock_received_mono = clock_received_mono
+                        self._latest_clock_ipc_seconds = max(
+                            0.0,
+                            clock_received_mono - clock_call_started,
+                        )
                 except WorkerDispatchError as exc:
                     with self._lock:
                         self._latest_clock = None
@@ -556,35 +637,39 @@ class IqOptionAutoTrader:
                         self._latest_clock = None
                     self._handle_clock_failure(runtime, "IQOPTION_CLOCK_UNAVAILABLE")
                     return
-            balance_fn = getattr(supervisor.client, "broker_balance", None)
-            if callable(balance_fn):
-                balance_budget = self._message_budget.try_acquire_operational(self._monotonic())
-                self._report_operational_budget(runtime, balance_budget)
-            if callable(balance_fn) and balance_budget.allowed:
-                try:
-                    balance = balance_fn()
-                    with self._lock:
-                        self._latest_balance = balance
-                except WorkerDispatchError as exc:
-                    if exc.code.value in IQOPTION_TRANSPORT_FAILURE_REASONS:
-                        self._notify_session_failure(supervisor.client, exc.code.value)
-                    else:
-                        self._set_status("IQOPTION_BALANCE_UNAVAILABLE")
-                    return
-                except Exception:
-                    with self._lock:
-                        self._latest_balance = None
+            # Balance observation is intentionally owned by the lifecycle's
+            # independent IQOptionBalanceMonitor. It continues while the bot is
+            # disarmed or a clock probe fails and avoids duplicate wire reads.
         if callable(getattr(supervisor.client, "broker_clock", None)):
             clock = self.latest_clock
-            clock_fresh = clock is not None and (
-                0 <= (self._utc_clock() - clock.local_received_at).total_seconds() <= 30
-            )
+            with self._lock:
+                core_cache_age = max(
+                    0.0,
+                    self._monotonic() - self._latest_clock_received_mono,
+                )
+                ipc_seconds = self._latest_clock_ipc_seconds
+            if clock is None:
+                conservative_age = None
+            elif clock.connection_generation > 0:
+                conservative_age = clock.source_age_seconds + ipc_seconds + core_cache_age
+            else:
+                conservative_age = (self._utc_clock() - clock.local_received_at).total_seconds()
+            clock_fresh = conservative_age is not None and -1.0 <= conservative_age <= 30
             if not clock_fresh or clock is None:
                 diagnostics: dict[str, object] = {}
                 if clock is not None:
-                    diagnostics["sample_age_ms"] = max(
-                        0,
-                        int((self._utc_clock() - clock.local_received_at).total_seconds() * 1000),
+                    signed_wall_delta = (
+                        self._utc_clock() - clock.local_received_at
+                    ).total_seconds()
+                    diagnostics.update(
+                        {
+                            "sample_age_ms": int((conservative_age or 0.0) * 1000),
+                            "source_age_ms": int(clock.source_age_seconds * 1000),
+                            "core_snapshot_age_ms": int(core_cache_age * 1000),
+                            "ipc_rtt_ms": int(ipc_seconds * 1000),
+                            "signed_wall_delta_ms": int(signed_wall_delta * 1000),
+                            "connection_generation": clock.connection_generation,
+                        }
                     )
                 self._handle_clock_failure(
                     runtime,
@@ -607,15 +692,30 @@ class IqOptionAutoTrader:
             runtime.health_gate.clear_scope(
                 Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID, "MD_CLOCK_UNTRUSTED"
             )
-        if not self._refresh_instrument_catalog(supervisor, runtime):
-            # The uncorrelated catalogue request retired the socket. Do not
-            # issue market or payout calls on that same dead generation while
-            # lifecycle reconnects it.
-            return
         try:
             self._restore_execution_state(runtime)
         except Exception:
             self._set_status("IQOPTION_EXECUTION_STATE_UNAVAILABLE")
+            return
+        # Existing financial/candle recovery is followed before global
+        # discovery. A slow or empty catalogue may block submission, but it
+        # must not hide the cycle or consume its entry window first.
+        account_type = self._account_type_provider()
+        if account_type.upper() not in {"DEMO", "PRACTICE"}:
+            self._set_status("IQOPTION_PRACTICE_ACCOUNT_REQUIRED")
+            return
+        now_utc = self._utc_clock()
+        if self._handle_martingale_cycle(
+            supervisor=supervisor,
+            runtime=runtime,
+            risk_config=risk_config,
+            now_utc=now_utc,
+        ):
+            return
+        if not self._refresh_instrument_catalog(supervisor, runtime):
+            # The uncorrelated catalogue request retired the socket. Do not
+            # issue market or payout calls on that same dead generation while
+            # lifecycle reconnects it.
             return
         flags = self._execution_flags_provider()
         if not flags.legacy_entries_enabled and not flags.incremental_entries_enabled:
@@ -632,11 +732,6 @@ class IqOptionAutoTrader:
             return
 
         catalog = self._catalog_provider() if self._catalog_provider is not None else None
-        account_type = self._account_type_provider()
-        if account_type.upper() not in {"DEMO", "PRACTICE"}:
-            self._set_status("IQOPTION_PRACTICE_ACCOUNT_REQUIRED")
-            return
-        now_utc = self._utc_clock()
         # Manifest replacement invalidates the old warmup/history projection.
         fingerprint = (
             None if catalog is None else catalog.manifest_version,
@@ -1035,6 +1130,21 @@ class IqOptionAutoTrader:
             self._set_status("IQOPTION_NEW_SIGNAL_REQUIRED_AFTER_ARM")
             return
 
+        entry_server_time = self._estimated_server_time(now_utc)
+        if entry_server_time.second >= IQOPTION_ENTRY_CUTOFF_SECOND:
+            self._record_decision(
+                runtime,
+                symbol,
+                strat_key,
+                winner.candidate.timeframe_seconds if winner is not None else 60,
+                candle_epoch,
+                "IQOPTION_M1_ENTRY_WINDOW_MISSED",
+                phase="ADMISSION",
+            )
+            self._set_status("IQOPTION_M1_ENTRY_WINDOW_MISSED")
+            return
+        target_candle_close_utc = next_binary_expiry(entry_server_time)
+
         risk_reason = self._risk_block_reason(risk_config)
         if risk_reason is not None:
             self._record_decision(
@@ -1107,6 +1217,10 @@ class IqOptionAutoTrader:
             "correlation_id": correlation_id,
             "symbol": symbol,
             "config": asdict(risk_config),
+            "kind": "BASE_ENTRY",
+            "direction": direction.value,
+            "strategy_id": strat_key or risk_config.strategy_id,
+            "target_candle_close_utc": target_candle_close_utc.isoformat(),
         }
         # Crash before/after submit retains the consumed signal. The pending
         # correlation is resolved against durable order/outbox evidence on startup.
@@ -1119,6 +1233,12 @@ class IqOptionAutoTrader:
             strategy_id=strat_key or risk_config.strategy_id,
             manifest_context=manifest_context,
             correlation_id=correlation_id,
+            amount_minor_units=risk_config.stake_minor_units,
+            deadline_at=entry_server_time.replace(
+                second=IQOPTION_ENTRY_CUTOFF_SECOND,
+                microsecond=0,
+            ),
+            contract_expiry_at=target_candle_close_utc,
         )
         payout, payout_min, payout_age_ms, payout_allowed = self._payout_event_fields(
             symbol, strat_key
@@ -1140,6 +1260,19 @@ class IqOptionAutoTrader:
         )
         self._pending_dispatch = None
         self._last_dispatch_reasons.pop(symbol, None)
+        if (
+            risk_config.martingale_enabled
+            and dispatch.order_id is not None
+            and dispatch.state not in {OrderState.REJECTED, OrderState.SEND_BLOCKED}
+        ):
+            self._martingale_cycle = IqOptionMartingaleCycle.start(
+                config=risk_config,
+                strategy_id=strat_key or risk_config.strategy_id,
+                symbol=symbol,
+                direction=direction,
+                order_id=dispatch.order_id,
+                target_candle_close_utc=target_candle_close_utc,
+            )
         if dispatch.reason_code == "MANIFEST_MONITOR_PENDING":
             # Writer proves zero new intent/reservation/outbox and no send occurred.
             # This is a pre-admission gate, not a retry of an uncertain submission.
@@ -1205,13 +1338,277 @@ class IqOptionAutoTrader:
             self._set_status(dispatch.reason_code)
         self._save_execution_state(runtime)
 
+    def _handle_martingale_cycle(
+        self,
+        *,
+        supervisor: ReadOnlyWorkerSupervisor,
+        runtime: CoreRuntime,
+        risk_config: IqOptionRiskConfig,
+        now_utc: datetime,
+    ) -> bool:
+        """Own an IQ recovery cycle before evaluating unrelated fresh signals."""
+
+        cycle = self._martingale_cycle
+        if cycle is None:
+            return False
+        if not self._operator_armed():
+            self._martingale_cycle = None
+            self._save_execution_state(runtime)
+            self._set_status("IQOPTION_BOT_DISARMED")
+            return True
+        if not cycle.matches_policy(risk_config):
+            self._close_martingale_cycle(runtime, cycle, "IQOPTION_MARTINGALE_POLICY_CHANGED")
+            return True
+        cycle_now = self._estimated_server_time(now_utc)
+
+        if not cycle.recovery_pending:
+            if cycle_now < cycle.target_candle_close_utc:
+                self._set_status("IQOPTION_MARTINGALE_WAITING_CANDLE_CLOSE")
+                return True
+            candle = self._martingale_target_candle(
+                supervisor=supervisor,
+                runtime=runtime,
+                cycle=cycle,
+            )
+            if candle is None:
+                observation_deadline = cycle.target_candle_close_utc + timedelta(
+                    seconds=IQOPTION_MARTINGALE_ENTRY_WINDOW_SECONDS
+                )
+                if cycle_now >= observation_deadline:
+                    self._close_martingale_cycle(
+                        runtime,
+                        cycle,
+                        "IQOPTION_MARTINGALE_TARGET_CANDLE_UNAVAILABLE",
+                    )
+                else:
+                    self._set_status("IQOPTION_MARTINGALE_WAITING_TARGET_CANDLE")
+                return True
+            technical_outcome = cycle.outcome_for_candle(cycle.direction, candle)
+            evidence_id = cycle.evidence_id_for_candle(candle)
+            next_cycle = cycle.after_candle_close(candle)
+            runtime.event_sink.emit(
+                "iqoption_martingale_candle_outcome",
+                cycle_id=cycle.cycle_id,
+                strategy_id=cycle.strategy_id,
+                symbol=cycle.symbol,
+                order_id=cycle.last_order_id,
+                step=cycle.step,
+                status=technical_outcome.value,
+                evidence=evidence_id,
+                target_close_utc=cycle.target_candle_close_utc.isoformat(),
+            )
+            self._martingale_cycle = next_cycle
+            self._save_execution_state(runtime)
+            if next_cycle is None:
+                self._set_status(f"IQOPTION_MARTINGALE_CANDLE_{technical_outcome.value}")
+                return True
+            cycle = next_cycle
+
+        if cycle.recovery_not_before_utc is not None and cycle_now < cycle.recovery_not_before_utc:
+            self._set_status(f"IQOPTION_MARTINGALE_G{cycle.step}_WAITING_WINDOW")
+            return True
+        if cycle.recovery_deadline_utc is None or cycle_now >= cycle.recovery_deadline_utc:
+            self._close_martingale_cycle(
+                runtime,
+                cycle,
+                "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
+            )
+            return True
+        if self._has_nonterminal_iq_order(runtime):
+            self._set_status("IQOPTION_MARTINGALE_WAITING_FINANCIAL_SETTLEMENT")
+            return True
+        risk_reason = self._risk_block_reason(risk_config)
+        if risk_reason is not None and not risk_reason.startswith("IQOPTION_LOSS_COOLDOWN"):
+            self._close_martingale_cycle(runtime, cycle, risk_reason)
+            return True
+
+        entry_server_time = self._estimated_server_time(self._utc_clock())
+        if cycle.recovery_deadline_utc is None or entry_server_time >= cycle.recovery_deadline_utc:
+            self._close_martingale_cycle(
+                runtime,
+                cycle,
+                "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
+            )
+            return True
+        if entry_server_time.second >= IQOPTION_ENTRY_CUTOFF_SECOND:
+            self._close_martingale_cycle(
+                runtime,
+                cycle,
+                "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
+            )
+            return True
+        target_candle_close_utc = cycle.target_candle_close_utc + timedelta(minutes=1)
+        try:
+            amount_minor = cycle.expected_stake_minor_units(risk_config)
+            manifest_context = self._prepare_execution(
+                cycle.symbol,
+                cycle.strategy_id,
+                supervisor.client,
+                expected_amount_minor_units=amount_minor,
+            )
+        except Exception as exc:
+            entry_server_time = self._estimated_server_time(self._utc_clock())
+            if (
+                cycle.recovery_deadline_utc is None
+                or entry_server_time >= cycle.recovery_deadline_utc
+            ):
+                self._close_martingale_cycle(
+                    runtime,
+                    cycle,
+                    "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
+                )
+                return True
+            reason = str(exc) if isinstance(exc, RuntimeError | ValueError) else ""
+            if not reason or not all(
+                character.isupper() or character == "_" for character in reason
+            ):
+                reason = "IQOPTION_MARTINGALE_ENTRY_BLOCKED"
+            self._set_status(reason)
+            return True
+
+        entry_server_time = self._estimated_server_time(self._utc_clock())
+        if cycle.recovery_deadline_utc is None or entry_server_time >= cycle.recovery_deadline_utc:
+            self._close_martingale_cycle(
+                runtime,
+                cycle,
+                "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
+            )
+            return True
+
+        correlation_id = str(uuid4())
+        self._pending_dispatch = {
+            "correlation_id": correlation_id,
+            "symbol": cycle.symbol,
+            "config": asdict(risk_config),
+            "kind": "MARTINGALE_RECOVERY",
+            "direction": cycle.direction.value,
+            "strategy_id": cycle.strategy_id,
+            "cycle_id": cycle.cycle_id,
+            "step": cycle.step,
+            "amount_minor_units": amount_minor,
+            "target_candle_close_utc": target_candle_close_utc.isoformat(),
+        }
+        self._save_execution_state(runtime)
+        dispatch = self._dispatch_order(
+            runtime,
+            symbol=cycle.symbol,
+            direction=cycle.direction,
+            risk_config=risk_config,
+            strategy_id=cycle.strategy_id,
+            manifest_context=manifest_context,
+            correlation_id=correlation_id,
+            amount_minor_units=amount_minor,
+            deadline_at=cycle.recovery_deadline_utc,
+            contract_expiry_at=target_candle_close_utc,
+        )
+        self._pending_dispatch = None
+        if dispatch.order_id is not None and dispatch.state not in {
+            OrderState.REJECTED,
+            OrderState.SEND_BLOCKED,
+        }:
+            self._martingale_cycle = cycle.bind_recovery_order(
+                dispatch.order_id,
+                stake_minor_units=amount_minor,
+                target_candle_close_utc=target_candle_close_utc,
+            )
+            self._daily_trades_count += 1
+            runtime.event_sink.emit(
+                "iqoption_martingale_recovery_submitted",
+                cycle_id=cycle.cycle_id,
+                strategy_id=cycle.strategy_id,
+                symbol=cycle.symbol,
+                order_id=dispatch.order_id,
+                step=cycle.step,
+                amount_minor=amount_minor,
+                reason_code=dispatch.reason_code,
+            )
+            self._set_status(
+                f"IQOPTION_MARTINGALE_G{cycle.step}_{dispatch.state.value}"
+                if dispatch.state is not None
+                else f"IQOPTION_MARTINGALE_G{cycle.step}_UNKNOWN"
+            )
+        elif dispatch.state in {OrderState.REJECTED, OrderState.SEND_BLOCKED}:
+            self._martingale_cycle = None
+            self._set_status(dispatch.reason_code)
+        else:
+            # No durable order exists, so the pending recovery may be evaluated
+            # again after the admission blocker clears.
+            self._set_status(dispatch.reason_code)
+        self._save_execution_state(runtime)
+        return True
+
+    def _martingale_target_candle(
+        self,
+        *,
+        supervisor: ReadOnlyWorkerSupervisor,
+        runtime: CoreRuntime,
+        cycle: IqOptionMartingaleCycle,
+    ) -> MarketCandle | None:
+        key = IQOptionSeriesKey(
+            broker=Broker.IQ_OPTION,
+            account_id=IQOPTION_PRACTICE_ACCOUNT_ID,
+            product=IQOPTION_SERIES_PRODUCT,
+            generation=self._series_generation(supervisor.client),
+            asset=cycle.symbol,
+            timeframe_seconds=60,
+        )
+        self._series_hub.replace_message_budget(self._message_budget)
+        outcome = self._series_hub.snapshot(
+            client=supervisor.client,
+            key=key,
+            warmup_required=2,
+            close_epoch=int(cycle.target_candle_close_utc.timestamp()) // 60,
+            priority=IQOptionSeriesPriority.RECOVERY,
+            fetcher=lambda _client, series_key, _count: self._fetch_candles(
+                supervisor,
+                series_key.asset,
+                series_key.timeframe_seconds,
+                warmup_need=3,
+            ),
+            required_close_time=cycle.target_candle_close_utc,
+        )
+        if outcome.reason in {
+            IQOptionSeriesReason.MESSAGE_BUDGET_EXHAUSTED,
+            IQOptionSeriesReason.TARGET_CANDLE_UNAVAILABLE,
+        }:
+            return None
+        if outcome.snapshot is None:
+            raise RuntimeError(f"IQOPTION_{outcome.reason.value}")
+        return next(
+            (
+                candle
+                for candle in outcome.snapshot.candles
+                if candle.close_time == cycle.target_candle_close_utc
+            ),
+            None,
+        )
+
+    def _close_martingale_cycle(
+        self,
+        runtime: CoreRuntime,
+        cycle: IqOptionMartingaleCycle,
+        reason: str,
+    ) -> None:
+        runtime.event_sink.emit(
+            "iqoption_martingale_cycle_closed",
+            cycle_id=cycle.cycle_id,
+            strategy_id=cycle.strategy_id,
+            symbol=cycle.symbol,
+            step=cycle.step,
+            reason_code=reason,
+        )
+        self._martingale_cycle = None
+        self._save_execution_state(runtime)
+        self._set_status(reason)
+
     def _restore_execution_state(self, runtime: CoreRuntime) -> None:
         if self._state_runtime is runtime:
             return
         writer = getattr(runtime, "writer", None)
         payload = None if writer is None else writer.load_iqoption_execution_state()
         if payload is not None:
-            if payload.get("version") != 1:
+            version = payload.get("version")
+            if version not in {1, 2, 3}:
                 raise ValueError("IQOPTION_EXECUTION_STATE_INVALID")
             signals = payload["signals"]
             if (
@@ -1222,6 +1619,16 @@ class IqOptionAutoTrader:
                 raise ValueError("IQOPTION_EXECUTION_STATE_INVALID")
             self._failures.restore(payload["policy"], self._monotonic(), self._utc_clock())
             self._last_evaluated_epochs = dict(signals)
+            # Version 2 used broker settlement/PnL as the Martingale trigger.
+            # That state is intentionally not migrated: an old result must not
+            # create a candle-based recovery after an upgrade. Durable orders
+            # remain owned by the normal financial reconciliation pipeline.
+            cycle_payload = payload.get("martingale_cycle") if version == 3 else None
+            self._martingale_cycle = (
+                None
+                if cycle_payload is None
+                else IqOptionMartingaleCycle.from_payload(cycle_payload)
+            )
             pending = payload.get("pending")
             evidence = payload.get("pending_evidence")
             if pending is not None and evidence is not None:
@@ -1234,21 +1641,89 @@ class IqOptionAutoTrader:
                         self._monotonic(),
                         confirmed_rejection=True,
                     )
+                order_id = evidence.get("order_id")
+                kind = pending.get("kind")
+                if (
+                    version == 3
+                    and kind == "MARTINGALE_RECOVERY"
+                    and self._martingale_cycle is not None
+                    and isinstance(order_id, str)
+                    and state not in {OrderState.REJECTED, OrderState.SEND_BLOCKED}
+                ):
+                    cycle_id = pending.get("cycle_id")
+                    if cycle_id != self._martingale_cycle.cycle_id:
+                        raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
+                    if self._martingale_cycle.recovery_pending:
+                        amount_minor = pending.get("amount_minor_units")
+                        target_raw = pending.get("target_candle_close_utc")
+                        if type(amount_minor) is not int or not isinstance(target_raw, str):
+                            raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
+                        self._martingale_cycle = self._martingale_cycle.bind_recovery_order(
+                            order_id,
+                            stake_minor_units=amount_minor,
+                            target_candle_close_utc=datetime.fromisoformat(target_raw).astimezone(
+                                UTC
+                            ),
+                        )
+                elif (
+                    version == 3
+                    and kind == "BASE_ENTRY"
+                    and isinstance(order_id, str)
+                    and state not in {OrderState.REJECTED, OrderState.SEND_BLOCKED}
+                ):
+                    pending_config = IqOptionRiskConfig(**pending["config"])
+                    if pending_config.martingale_enabled:
+                        target_raw = pending.get("target_candle_close_utc")
+                        if not isinstance(target_raw, str):
+                            raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
+                        self._martingale_cycle = IqOptionMartingaleCycle.start(
+                            config=pending_config,
+                            strategy_id=str(pending["strategy_id"]),
+                            symbol=str(pending["symbol"]),
+                            direction=Direction(str(pending["direction"])),
+                            order_id=order_id,
+                            target_candle_close_utc=datetime.fromisoformat(target_raw).astimezone(
+                                UTC
+                            ),
+                        )
+                if state in {OrderState.REJECTED, OrderState.SEND_BLOCKED}:
+                    self._martingale_cycle = None
                 # Nonterminal evidence remains owned by recovery/HealthGate.
                 # No matching intent means the crash preceded durable admission.
             self._pending_dispatch = None
+            self._reconcile_martingale_cycle(runtime)
             self._save_execution_state(runtime)
         self._state_runtime = runtime
+
+    def _reconcile_martingale_cycle(self, runtime: CoreRuntime) -> None:
+        cycle = self._martingale_cycle
+        if cycle is None:
+            return
+        row = runtime.reader.one("orders", "order_id", cycle.last_order_id)
+        if row is None:
+            return
+        state = OrderState(str(row["state"]))
+        if state in {OrderState.REJECTED, OrderState.SEND_BLOCKED}:
+            self._martingale_cycle = None
+            return
+        # SETTLED and realized_pnl_minor are financial facts from IQ. They
+        # deliberately do not advance G1/G2. Only the exact closed M1 candle
+        # observed by _handle_martingale_cycle may do that.
 
     def _save_execution_state(self, runtime: CoreRuntime) -> None:
         writer = getattr(runtime, "writer", None)
         if writer is not None:
             writer.save_iqoption_execution_state(
                 {
-                    "version": 1,
+                    "version": 3,
                     "signals": self._last_evaluated_epochs,
                     "policy": self._failures.dump(self._monotonic(), self._utc_clock()),
                     "pending": self._pending_dispatch,
+                    "martingale_cycle": (
+                        None
+                        if self._martingale_cycle is None
+                        else self._martingale_cycle.to_payload()
+                    ),
                 }
             )
 
@@ -1310,7 +1785,14 @@ class IqOptionAutoTrader:
         )
         self._set_status("MD_CLOCK_UNTRUSTED")
 
-    def _prepare_execution(self, symbol: str, key: str, client: Any) -> str | None:
+    def _prepare_execution(
+        self,
+        symbol: str,
+        key: str,
+        client: Any,
+        *,
+        expected_amount_minor_units: int | None = None,
+    ) -> str | None:
         self._execution_ticket = None
         self._last_payout_gate = None
         if self._account_type_provider().upper() not in {"DEMO", "PRACTICE"}:
@@ -1350,7 +1832,12 @@ class IqOptionAutoTrader:
             "payout_allowed": True,
         }
         context = self._check_manifest_execution(symbol, key, payout)
-        self._execution_ticket = (symbol, key, context, client, started, payout)
+        amount = (
+            self._risk_config_provider().stake_minor_units
+            if expected_amount_minor_units is None
+            else expected_amount_minor_units
+        )
+        self._execution_ticket = (symbol, key, context, client, started, payout, amount)
         self._validate_execution_ticket(symbol, key, context, current_client=client)
         return context
 
@@ -1433,6 +1920,9 @@ class IqOptionAutoTrader:
             or request.duration_unit != "m"
         ):
             raise RuntimeError("IQOPTION_EXECUTION_CONTEXT_MISMATCH")
+        ticket = self._execution_ticket
+        if ticket is None or request.amount.minor_units != ticket[6]:
+            raise RuntimeError("IQOPTION_EXECUTION_STAKE_MISMATCH")
         self._execution_ticket = None
 
     def _dispatch_order(
@@ -1445,8 +1935,14 @@ class IqOptionAutoTrader:
         strategy_id: str | None = None,
         manifest_context: str | None = None,
         correlation_id: str | None = None,
+        amount_minor_units: int | None = None,
+        deadline_at: datetime | None = None,
+        contract_expiry_at: datetime | None = None,
     ) -> _DispatchResult:
         try:
+            effective_deadline = deadline_at or (self._utc_clock() + timedelta(seconds=15))
+            if self._estimated_server_time(self._utc_clock()) >= effective_deadline:
+                raise _EntryAdmissionBlocked("IQOPTION_ENTRY_WINDOW_MISSED")
             dispatch_budget = self._message_budget.try_acquire_operational(self._monotonic())
             self._report_operational_budget(runtime, dispatch_budget)
             if not dispatch_budget.allowed:
@@ -1459,12 +1955,18 @@ class IqOptionAutoTrader:
                     product="BINARY_OPTION",
                     symbol=symbol,
                     direction=direction,
-                    amount=Money(risk_config.stake_minor_units, risk_config.currency),
+                    amount=Money(
+                        risk_config.stake_minor_units
+                        if amount_minor_units is None
+                        else amount_minor_units,
+                        risk_config.currency,
+                    ),
                     strategy_id=strategy_id or risk_config.strategy_id,
                     strategy_version="1.0.0",
-                    deadline_at=self._utc_clock() + timedelta(seconds=15),
+                    deadline_at=effective_deadline,
                     duration=1,
                     duration_unit="m",
+                    contract_expiry_at=contract_expiry_at,
                     manifest_context=manifest_context,
                 )
             )
@@ -1647,6 +2149,40 @@ class IqOptionAutoTrader:
     @staticmethod
     def _timeframe_seconds(timeframe: str) -> int:
         return {"M1": 60, "M5": 300, "M15": 900}.get(timeframe, 0)
+
+    @staticmethod
+    def _clock_progression_failure(
+        previous: BrokerClockSnapshot | None,
+        current: BrokerClockSnapshot,
+    ) -> str | None:
+        """Reject regressive provenance without comparing clocks across processes."""
+
+        if (
+            previous is None
+            or previous.connection_generation <= 0
+            or current.connection_generation <= 0
+        ):
+            return None
+        if current.connection_generation < previous.connection_generation:
+            return "IQOPTION_CLOCK_GENERATION_REGRESSION"
+        if current.connection_generation > previous.connection_generation:
+            return None
+        if current.sample_sequence < previous.sample_sequence:
+            return "IQOPTION_CLOCK_SEQUENCE_REGRESSION"
+        if (
+            current.sample_sequence > previous.sample_sequence
+            and current.server_epoch + 1 < previous.server_epoch
+        ):
+            return "IQOPTION_CLOCK_TIME_REGRESSION"
+        return None
+
+    def _estimated_server_time(self, fallback: datetime) -> datetime:
+        clock = self.latest_clock
+        if clock is None:
+            return fallback.astimezone(UTC)
+        with self._lock:
+            elapsed = max(0.0, self._monotonic() - self._latest_clock_received_mono)
+        return datetime.fromtimestamp(clock.server_epoch + elapsed, tz=UTC)
 
     def _evaluate_local_rsi_candidate(
         self,
@@ -1906,7 +2442,13 @@ class IqOptionAutoTrader:
             else:
                 self._consecutive_losses = 0
                 self._cooldown_until = 0.0
-                self._status_reason = "IQOPTION_ORDER_SETTLED_WIN"
+                self._status_reason = (
+                    "IQOPTION_ORDER_SETTLED_TIE"
+                    if event.result_minor == 0
+                    else "IQOPTION_ORDER_SETTLED_WIN"
+                )
+            # Financial settlement updates only P&L, streak and cooldown.
+            # Martingale progression is owned exclusively by candle evidence.
 
     def _symbols_for_cycle(self, selected_symbol: str) -> tuple[tuple[str, str], ...]:
         available = self._executable_symbols()
@@ -1989,12 +2531,31 @@ class IqOptionAutoTrader:
             product.value: sum(1 for item in catalog.instruments if item.product is product)
             for product in BrokerInstrumentProduct
         }
+        manifest = self._catalog_provider() if self._catalog_provider is not None else None
+        allowed_assets = {
+            info.entry.asset
+            for info in (() if manifest is None else manifest.active_strategies.values())
+        }
         runtime.event_sink.emit(
             "iqoption_instrument_catalog_refreshed",
             generation=catalog.generation,
             binary_count=counts[BrokerInstrumentProduct.BINARY.value],
             turbo_count=counts[BrokerInstrumentProduct.TURBO.value],
             digital_count=counts[BrokerInstrumentProduct.DIGITAL.value],
+            open_count=sum(
+                item.availability is BrokerInstrumentAvailability.OPEN
+                for item in catalog.instruments
+            ),
+            turbo_open_count=sum(
+                item.product is BrokerInstrumentProduct.TURBO
+                and item.availability is BrokerInstrumentAvailability.OPEN
+                for item in catalog.instruments
+            ),
+            analyzable_count=sum(item.analyzable for item in catalog.instruments),
+            broker_executable_count=sum(item.executable for item in catalog.instruments),
+            manifest_allowed_count=sum(
+                item.broker_symbol in allowed_assets for item in catalog.instruments
+            ),
             executable_count=len(self._executable_symbols()),
             unavailable_products=",".join(item.value for item in catalog.unavailable_products)
             or None,

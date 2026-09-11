@@ -355,6 +355,51 @@ def test_iqoption_bot_button_does_not_arm_or_stop_deriv(qapp: QApplication) -> N
     window.close()
 
 
+def test_iqoption_unknown_order_enters_silent_automatic_recovery(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_controller = MagicMock()
+    mock_controller.connected = True
+    mock_controller.control_iqoption_bot.return_value = UiCommandAck(
+        False,
+        "HG_ORDER_UNKNOWN",
+        False,
+    )
+    mock_controller.snapshot = UiProjectionSnapshot(
+        global_state=UiGlobalState.READY,
+        safe_stop_active=False,
+        health_gates=(HealthGateStatus("HG_GLOBAL", False, "HG_ORDER_UNKNOWN", "Recovery"),),
+        broker_cards=(
+            BrokerCardStatus(
+                "IQOPTION",
+                UiAccountMode.PRACTICE,
+                True,
+                100000,
+                "USD",
+                True,
+                "Practice",
+            ),
+        ),
+        active_orders=(),
+        daily_pnl_minor_units=0,
+        daily_pnl_currency="USD",
+        iqoption_bot_armed=False,
+        iqoption_bot_reason="HG_ORDER_UNKNOWN",
+        iqoption_entry_ready=False,
+        iqoption_entry_blocker="HG_ORDER_UNKNOWN",
+    )
+    warning = MagicMock()
+    monkeypatch.setattr("apps.ui.app.QMessageBox.warning", warning)
+
+    window = TradingLabMainWindow(mock_controller)
+    window._on_toggle_iqoption_bot()
+
+    warning.assert_not_called()
+    assert "HG_ORDER_UNKNOWN" not in window._btn_iqoption_bot.toolTip()
+    assert "verific" in window._btn_iqoption_bot.toolTip().lower()
+    window.close()
+
+
 def test_applying_digit_risk_config_disarms_running_bot_first(qapp: QApplication) -> None:
     mock_controller = MagicMock()
     mock_controller.connected = True

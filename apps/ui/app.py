@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from apps.ui.components import (
     SyntheticStrategyConfigWidget,
     SyntheticStrategyLiveWidget,
 )
+from apps.ui.components.iqoption_workspace import iqoption_bot_reason_text
 from apps.ui.controller import UiController
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import I18nManager, t
@@ -650,7 +652,9 @@ class TradingLabMainWindow(QMainWindow):
         self._btn_deriv_bot.setEnabled(connected)
         self._btn_iqoption_bot.setEnabled(connected)
         self._btn_iqoption_bot.setToolTip(
-            snapshot.iqoption_entry_blocker or snapshot.iqoption_bot_reason
+            iqoption_bot_reason_text(
+                snapshot.iqoption_entry_blocker or snapshot.iqoption_bot_reason
+            )
         )
         self._update_bot_buttons()
         deriv_connected = any(
@@ -723,12 +727,20 @@ class TradingLabMainWindow(QMainWindow):
                         if isinstance(first_e, dict)
                         else getattr(first_e, "asset", "EURUSD-OTC")
                     )
+                    current = self._controller.snapshot
+                    current_iq = (
+                        None if current is None else current.iqoption_risk_config
+                    ) or UiIqOptionRiskConfig()
                     self._controller.update_iqoption_risk_config(
-                        UiIqOptionRiskConfig(strategy_id=first.strategy_key, symbol=first_asset)
+                        replace(current_iq, strategy_id=first.strategy_key, symbol=first_asset)
                     )
                 elif len(remaining_iq) > 1:
+                    current = self._controller.snapshot
+                    current_iq = (
+                        None if current is None else current.iqoption_risk_config
+                    ) or UiIqOptionRiskConfig()
                     self._controller.update_iqoption_risk_config(
-                        UiIqOptionRiskConfig(strategy_id="AUTO", symbol="AUTO")
+                        replace(current_iq, strategy_id="AUTO", symbol="AUTO")
                     )
             return
 
@@ -809,7 +821,8 @@ class TradingLabMainWindow(QMainWindow):
                     else getattr(entry, "asset", "EURUSD-OTC")
                 )
 
-            iq_config = UiIqOptionRiskConfig(
+            iq_config = replace(
+                iq_current_config or UiIqOptionRiskConfig(),
                 strategy_id=strat_id,
                 symbol=asset,
                 timeframe_seconds=60,
@@ -879,7 +892,13 @@ class TradingLabMainWindow(QMainWindow):
         try:
             ack = self._controller.control_iqoption_bot(not self._iqoption_bot_enabled)
             self._refresh_projection()
-            if not ack.accepted:
+            automatic_recovery = {
+                "HG_ORDER_UNKNOWN",
+                "HG_RECONCILIATION_REQUIRED",
+                "HG_RECONCILIATION_UNAVAILABLE",
+                "HG_SETTLEMENT_UNKNOWN",
+            }
+            if not ack.accepted and ack.reason_code not in automatic_recovery:
                 QMessageBox.warning(
                     self,
                     "IQ Option",

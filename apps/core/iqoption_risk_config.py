@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from pathlib import Path
+
+from packages.domain.models import Money
+from packages.portfolio_allocation.martingale import (
+    BoundedMartingaleAllocator,
+    BoundedMartingaleConfig,
+)
 
 IQOPTION_RSI_STRATEGY_ID = "iqoption-rsi-demo"
 IQOPTION_MIN_STAKE_MINOR_UNITS = 100
@@ -50,6 +57,10 @@ class IqOptionRiskConfig:
     max_daily_trades: int = 10
     max_concurrent_positions: int = 1
     currency: str = "USD"
+    martingale_enabled: bool = False
+    martingale_multiplier_basis_points: int = 20_000
+    martingale_max_steps: int = 1
+    martingale_max_stake_minor_units: int = 400
 
     @property
     def active_strategy_key(self) -> str:
@@ -93,6 +104,47 @@ class IqOptionRiskConfig:
             raise ValueError("IQOPTION_SINGLE_POSITION_REQUIRED")
         if self.currency != "USD":
             raise ValueError("IQOPTION_CURRENCY_UNSUPPORTED")
+        if type(self.martingale_enabled) is not bool:
+            raise ValueError("IQOPTION_MARTINGALE_OPT_IN_INVALID")
+        if (
+            type(self.martingale_multiplier_basis_points) is not int
+            or not 11_000 <= self.martingale_multiplier_basis_points <= 30_000
+        ):
+            raise ValueError("IQOPTION_MARTINGALE_MULTIPLIER_INVALID")
+        if type(self.martingale_max_steps) is not int or self.martingale_max_steps not in {1, 2}:
+            raise ValueError("IQOPTION_MARTINGALE_STEPS_INVALID")
+        if (
+            type(self.martingale_max_stake_minor_units) is not int
+            or self.martingale_max_stake_minor_units <= 0
+        ):
+            raise ValueError("IQOPTION_MARTINGALE_MAX_STAKE_INVALID")
+        if self.martingale_enabled:
+            if (
+                self.martingale_max_stake_minor_units < self.stake_minor_units
+                or self.martingale_max_stake_minor_units > self.daily_stop_loss_minor_units
+            ):
+                raise ValueError("IQOPTION_MARTINGALE_MAX_STAKE_INVALID")
+            if self.max_consecutive_losses < self.martingale_max_steps + 1:
+                raise ValueError("IQOPTION_MARTINGALE_LOSS_LIMIT_TOO_LOW")
+            if self.max_daily_trades < self.martingale_max_steps + 1:
+                raise ValueError("IQOPTION_MARTINGALE_DAILY_TRADES_TOO_LOW")
+            projection = BoundedMartingaleAllocator().project(self.martingale_config)
+            if projection.maximum_sequence_loss.minor_units > self.daily_stop_loss_minor_units:
+                raise ValueError("IQOPTION_MARTINGALE_STOP_LOSS_TOO_LOW")
+
+    @property
+    def martingale_multiplier(self) -> Decimal:
+        return Decimal(self.martingale_multiplier_basis_points) / Decimal(10_000)
+
+    @property
+    def martingale_config(self) -> BoundedMartingaleConfig:
+        return BoundedMartingaleConfig(
+            base_stake=Money(self.stake_minor_units, self.currency),
+            multiplier=self.martingale_multiplier,
+            max_steps=self.martingale_max_steps,
+            max_stake=Money(self.martingale_max_stake_minor_units, self.currency),
+            daily_stop_loss=Money(self.daily_stop_loss_minor_units, self.currency),
+        )
 
 
 class IqOptionRiskConfigStore:

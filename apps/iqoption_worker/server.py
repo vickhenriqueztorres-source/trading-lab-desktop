@@ -18,6 +18,7 @@ from packages.protocol.envelope import EndpointRole, Envelope, MessageType
 from packages.protocol.errors import ProtocolError, ProtocolErrorCode
 from packages.protocol.messages import (
     WorkerCapabilities,
+    order_status_response_payload,
     parse_order_status_request,
     parse_order_submit,
 )
@@ -157,6 +158,16 @@ class IQOptionWorkerServer:
             self._stopping.set()
 
     def _dispatch(self, request: Envelope) -> tuple[MessageType, dict[str, Any]]:
+        if request.message_type is MessageType.WORKER_HEALTH_REQUEST:
+            reconciliation_required = self._order_session.reconciliation_required
+            return MessageType.WORKER_HEALTH_RESPONSE, {
+                "status": "DEGRADED" if reconciliation_required else "READY",
+                "contract_events_overflow_total": (
+                    self._order_session.contract_events_overflow_total
+                ),
+                "reconciliation_required": reconciliation_required,
+            }
+
         if request.message_type is MessageType.ORDER_SUBMIT:
             command = parse_order_submit(request)
             result = self._order_session.submit_order(command)
@@ -183,14 +194,7 @@ class IQOptionWorkerServer:
             status_result = self._reconciliation_handler.query_order_status(
                 status_query, causation_id=request.message_id
             )
-            evidence_payload = (
-                status_result.evidence.to_payload() if status_result.evidence is not None else None
-            )
-            return MessageType.ORDER_STATUS_RESPONSE, {
-                "query_outcome": status_result.outcome.value,
-                "evidence": evidence_payload,
-                "reason_code": status_result.reason_code,
-            }
+            return MessageType.ORDER_STATUS_RESPONSE, order_status_response_payload(status_result)
 
         if request.message_type is MessageType.BROKER_BALANCE_REQUEST:
             balance = self._session.get_balance()

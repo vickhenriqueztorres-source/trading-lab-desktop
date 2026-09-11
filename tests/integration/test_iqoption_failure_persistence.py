@@ -121,11 +121,10 @@ def test_write_failure_prevents_buy_and_does_not_drop_pending_signal(tmp_path):
 def test_migration_8_upgrade_preserves_published_checksums(tmp_path):
     path = tmp_path / "state.db"
     connection = open_writer_connection(path)
-    # Seed through migration 8, then let the writer apply the current tail
-    # (migrations 9 and 10).  The assertion below intentionally compares only
-    # the published migrations before v9; CAT-16 adds v10 without rewriting
-    # any historical checksum.
-    apply_migrations(connection, MIGRATIONS[:-2])
+    # Seed through migration 8, then let the writer apply the current tail.
+    # Select by published version so adding a new tail migration cannot change
+    # which historical checksums this regression protects.
+    apply_migrations(connection, tuple(item for item in MIGRATIONS if item.version <= 8))
     before = connection.execute("SELECT version, checksum FROM schema_migrations").fetchall()
     connection.close()
     writer = SingleDatabaseWriter(path)
@@ -134,4 +133,7 @@ def test_migration_8_upgrade_preserves_published_checksums(tmp_path):
         assert connection.execute(
             "SELECT version, checksum FROM schema_migrations WHERE version<9"
         ).fetchall() == [tuple(row) for row in before]
-        assert connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 10
+        assert (
+            connection.execute("SELECT max(version) FROM schema_migrations").fetchone()[0]
+            == MIGRATIONS[-1].version
+        )

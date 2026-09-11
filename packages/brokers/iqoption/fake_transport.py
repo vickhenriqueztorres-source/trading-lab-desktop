@@ -4,11 +4,17 @@ import contextlib
 import queue
 import time
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
 from apps.iqoption_worker.schema import IQOptionErrorCategory, IQOptionWorkerError
+from packages.brokers.iqoption.result_parser import (
+    IQOPTION_CLOSED_OPTIONS,
+    IQOPTION_HISTORY_CONTAINER_KEY,
+    IQOPTION_OPEN_OPTIONS,
+)
 from packages.brokers.iqoption.validators import PRACTICE_BALANCE_TYPE, REAL_BALANCE_TYPE
 
 
@@ -120,7 +126,7 @@ class FakeIQOptionTransport:
             price = str(msg.get("price", "10.00"))
             symbol = str(msg.get("active", msg.get("symbol", "EURUSD")))
             direction = str(msg.get("direction", "call")).lower()
-            exp_time = int(msg.get("exp_time", self._server_epoch + 60))
+            exp_time = int(msg.get("expiry_epoch", msg.get("exp_time", self._server_epoch + 60)))
             client_order_id = str(msg.get("client_order_id", msg.get("order_id", "")))
             correlation_id = str(msg.get("correlation_id", ""))
 
@@ -137,6 +143,9 @@ class FakeIQOptionTransport:
                 "status": "open",
                 "win": "equal",
                 "win_amount": "0.00",
+                "game_state": 0,
+                "deposit": price,
+                "profit": price,
                 "client_order_id": client_order_id,
                 "correlation_id": correlation_id,
             }
@@ -191,6 +200,8 @@ class FakeIQOptionTransport:
                 contract_record["status"] = "win"
                 contract_record["win"] = "win"
                 contract_record["win_amount"] = payout
+                contract_record["game_state"] = 1
+                contract_record["profit"] = payout
                 settle_event = {
                     "name": "option-closed",
                     "msg": {
@@ -213,6 +224,8 @@ class FakeIQOptionTransport:
                 contract_record["status"] = "loose"
                 contract_record["win"] = "loose"
                 contract_record["win_amount"] = "0.00"
+                contract_record["game_state"] = 1
+                contract_record["profit"] = "0.00"
                 settle_event = {
                     "name": "option-closed",
                     "msg": {
@@ -250,12 +263,34 @@ class FakeIQOptionTransport:
             if contract_id_arg is not None:
                 contract = self._contracts.get(int(contract_id_arg))
                 if contract is not None:
-                    return {"isSuccessful": True, "result": contract}
+                    result = dict(contract)
+                    if name == "get_options":
+                        result[IQOPTION_HISTORY_CONTAINER_KEY] = (
+                            IQOPTION_CLOSED_OPTIONS
+                            if contract.get("game_state") == 1
+                            else IQOPTION_OPEN_OPTIONS
+                        )
+                    return {"isSuccessful": True, "result": result}
             if lookup_client_id is not None:
                 for contract in self._contracts.values():
                     if contract.get("client_order_id") == str(lookup_client_id):
-                        return {"isSuccessful": True, "result": contract}
-            return {"isSuccessful": False, "message": "Option not found"}
+                        result = dict(contract)
+                        if name == "get_options":
+                            result[IQOPTION_HISTORY_CONTAINER_KEY] = (
+                                IQOPTION_CLOSED_OPTIONS
+                                if contract.get("game_state") == 1
+                                else IQOPTION_OPEN_OPTIONS
+                            )
+                        return {"isSuccessful": True, "result": result}
+            return {
+                "isSuccessful": False,
+                "message": "Option not found",
+                "not_found_coverage": {
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "statement_checked": True,
+                    "portfolio_checked": True,
+                },
+            }
 
         return {"isSuccessful": True, "result": {}}
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+import queue
 import socket
 import threading
 import time
@@ -18,6 +20,7 @@ from packages.protocol.envelope import EndpointRole, Envelope, MessageType
 from packages.protocol.errors import ProtocolError, ProtocolErrorCode
 from packages.protocol.messages import (
     WorkerCapabilities,
+    order_status_response_payload,
     parse_order_status_request,
     parse_order_submit,
 )
@@ -52,6 +55,13 @@ class IQOptionReadOnlyWorkerServer:
         )
         self._pump_stop = threading.Event()
         self._pump_thread: threading.Thread | None = None
+        self._dispatch_stop = threading.Event()
+        self._dispatch_sequence = itertools.count()
+        self._critical_requests: queue.PriorityQueue[tuple[int, int, Envelope]] = (
+            queue.PriorityQueue(maxsize=32)
+        )
+        self._background_requests: queue.Queue[Envelope] = queue.Queue(maxsize=4)
+        self._dispatch_threads: list[threading.Thread] = []
         self._capabilities = WorkerCapabilities(
             broker="IQOPTION",
             account_modes=("PRACTICE", "REAL"),
@@ -90,18 +100,112 @@ class IQOptionReadOnlyWorkerServer:
             if not self._handshake(framed):
                 return 3
             self._start_event_pump(framed)
+            self._start_dispatchers(framed)
             while not self._stopping:
                 request = framed.receive()
                 self._validate_routing(request)
-                message_type, payload = self._dispatch(request)
-                framed.send(self._response(request, message_type, payload))
+                if request.message_type in {
+                    MessageType.PING,
+                    MessageType.WORKER_HEALTH_REQUEST,
+                    MessageType.BROKER_CAPABILITIES_REQUEST,
+                    MessageType.SHUTDOWN,
+                }:
+                    message_type, payload = self._dispatch(request)
+                    framed.send(self._response(request, message_type, payload))
+                    continue
+                self._enqueue_request(framed, request)
         except (ConnectionError, EOFError, OSError, ProtocolError):
             return 1
         finally:
+            self._stop_dispatchers()
             self._stop_event_pump()
             self._session.close()
             framed.close()
         return 0
+
+    def _enqueue_request(self, framed: FramedSocket, request: Envelope) -> None:
+        try:
+            if request.message_type is MessageType.BROKER_INSTRUMENT_CATALOG_REQUEST:
+                self._background_requests.put_nowait(request)
+                return
+            self._critical_requests.put_nowait(
+                (
+                    self._request_priority(request.message_type),
+                    next(self._dispatch_sequence),
+                    request,
+                )
+            )
+        except queue.Full:
+            message_type, payload = self._error_payload("IPC_BACKPRESSURE")
+            framed.send(self._response(request, message_type, payload))
+
+    @staticmethod
+    def _request_priority(message_type: MessageType) -> int:
+        return {
+            MessageType.ORDER_SUBMIT: 0,
+            MessageType.ORDER_STATUS_REQUEST: 1,
+            MessageType.MARKET_HISTORY_REQUEST: 2,
+            MessageType.BROKER_QUOTE_REQUEST: 2,
+            MessageType.BROKER_BALANCE_REQUEST: 3,
+            MessageType.BROKER_CLOCK_REQUEST: 3,
+            MessageType.BROKER_SESSION_RECONNECT_REQUEST: 4,
+        }.get(message_type, 5)
+
+    def _start_dispatchers(self, framed: FramedSocket) -> None:
+        self._dispatch_stop.clear()
+
+        def critical_dispatcher() -> None:
+            while not self._dispatch_stop.is_set():
+                try:
+                    _, _, request = self._critical_requests.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                try:
+                    self._dispatch_and_reply(framed, request)
+                finally:
+                    self._critical_requests.task_done()
+
+        def background_dispatcher() -> None:
+            while not self._dispatch_stop.is_set():
+                try:
+                    request = self._background_requests.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                try:
+                    self._dispatch_and_reply(framed, request)
+                finally:
+                    self._background_requests.task_done()
+
+        self._dispatch_threads = [
+            threading.Thread(
+                target=critical_dispatcher,
+                name="iqoption-critical-dispatcher",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=background_dispatcher,
+                name="iqoption-background-dispatcher",
+                daemon=True,
+            ),
+        ]
+        for thread in self._dispatch_threads:
+            thread.start()
+
+    def _dispatch_and_reply(self, framed: FramedSocket, request: Envelope) -> None:
+        try:
+            message_type, payload = self._dispatch(request)
+            framed.send(self._response(request, message_type, payload))
+        except (ConnectionError, EOFError, OSError, ProtocolError):
+            self._dispatch_stop.set()
+            framed.close()
+
+    def _stop_dispatchers(self) -> None:
+        self._dispatch_stop.set()
+        threads = self._dispatch_threads
+        self._dispatch_threads = []
+        for thread in threads:
+            if thread is not threading.current_thread():
+                thread.join(timeout=0.25)
 
     def _handshake(self, framed: FramedSocket) -> bool:
         request = framed.receive()
@@ -119,6 +223,18 @@ class IQOptionReadOnlyWorkerServer:
                 # IPC liveness is deliberately independent from broker session
                 # health.  Heartbeat must never login, reconnect or submit.
                 return MessageType.PONG, {}
+            if request.message_type is MessageType.WORKER_HEALTH_REQUEST:
+                order_session = self._order_session
+                reconciliation_required = bool(
+                    order_session is not None and order_session.reconciliation_required
+                )
+                return MessageType.WORKER_HEALTH_RESPONSE, {
+                    "status": "DEGRADED" if reconciliation_required else "READY",
+                    "contract_events_overflow_total": (
+                        0 if order_session is None else order_session.contract_events_overflow_total
+                    ),
+                    "reconciliation_required": reconciliation_required,
+                }
             if request.message_type is MessageType.BROKER_BALANCE_REQUEST:
                 self._ensure_connected()
                 return MessageType.BROKER_BALANCE_RESPONSE, self._session.get_balance().to_payload()
@@ -225,15 +341,9 @@ class IQOptionReadOnlyWorkerServer:
                     query,
                     causation_id=request.message_id,
                 )
-                return MessageType.ORDER_STATUS_RESPONSE, {
-                    "query_outcome": status_result.outcome.value,
-                    "evidence": (
-                        None
-                        if status_result.evidence is None
-                        else status_result.evidence.to_payload()
-                    ),
-                    "reason_code": status_result.reason_code,
-                }
+                return MessageType.ORDER_STATUS_RESPONSE, order_status_response_payload(
+                    status_result
+                )
             if request.message_type is MessageType.SHUTDOWN:
                 self._stopping = True
                 return MessageType.SHUTDOWN_ACK, {}

@@ -71,7 +71,12 @@ def test_slow_startup_uses_ping_rtt_and_caches_probe(connected) -> None:
     assert snapshot.round_trip_milliseconds == 125
     assert session.get_clock().is_synced
     assert sock.pings == 1
-    assert {r["name"] for r in sock.sent} <= {"authenticate", "sendMessage", "timesync"}
+    assert {r["name"] for r in sock.sent} <= {
+        "authenticate",
+        "sendMessage",
+        "subscribeMessage",
+        "timesync",
+    }
 
 
 def test_excessive_rtt_stays_blocked_and_recovers_without_login(connected) -> None:
@@ -202,7 +207,7 @@ def test_core_suspends_entries_and_automatically_resumes_on_fresh_clock(failure)
         _make_candles,
     )
 
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(second=10, microsecond=0)
     mono = [100.0]
 
     class Client(FakeClient):
@@ -289,7 +294,7 @@ def test_core_logs_high_rtt_but_does_not_block() -> None:
         _make_candles,
     )
 
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(second=10, microsecond=0)
 
     class Client(FakeClient):
         def broker_clock(self):
@@ -311,6 +316,101 @@ def test_core_logs_high_rtt_but_does_not_block() -> None:
 
     assert len(runtime.requests) == 1
     assert any(name == "iqoption_clock_rtt_observed" for name, _ in runtime.events)
+
+
+def test_core_uses_worker_sample_age_when_wall_clocks_disagree() -> None:
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from apps.core.health import HealthGate
+    from apps.core.iqoption_auto_trader import IqOptionAutoTrader
+    from apps.core.iqoption_risk_config import IqOptionRiskConfig
+    from packages.domain.market import BrokerClockSnapshot
+    from tests.unit.test_iqoption_auto_trader import (
+        FakeClient,
+        FakeRuntime,
+        _falling_prices,
+        _make_candles,
+    )
+
+    now = datetime.now(UTC).replace(second=10, microsecond=0)
+
+    class Client(FakeClient):
+        def broker_clock(self):
+            return BrokerClockSnapshot(
+                int(now.timestamp()),
+                now + timedelta(seconds=5),
+                0.1,
+                Decimal(0),
+                source_age_seconds=0.2,
+                connection_generation=3,
+                sample_sequence=17,
+            )
+
+    client = Client(_make_candles(_falling_prices()))
+    runtime = FakeRuntime()
+    runtime.health_gate = HealthGate()
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,
+        risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
+        operator_armed=lambda: True,
+        utc_clock=lambda: now,
+        monotonic=lambda: 100.0,
+    )
+
+    trader._evaluate_cycle()
+
+    assert len(runtime.requests) == 1
+    assert trader.status_reason != "MD_CLOCK_UNTRUSTED"
+    assert trader.latest_clock is not None
+    assert trader.latest_clock.source_age_seconds == pytest.approx(0.2)
+    assert trader.latest_clock.connection_generation == 3
+    assert trader.latest_clock.sample_sequence == 17
+
+
+@pytest.mark.parametrize(
+    ("generation", "sequence", "epoch_delta", "expected"),
+    [
+        (2, 20, 1, None),
+        (3, 1, 0, None),
+        (1, 30, 0, "IQOPTION_CLOCK_GENERATION_REGRESSION"),
+        (2, 18, 0, "IQOPTION_CLOCK_SEQUENCE_REGRESSION"),
+        (2, 20, -2, "IQOPTION_CLOCK_TIME_REGRESSION"),
+    ],
+)
+def test_core_rejects_regressive_clock_provenance(
+    generation: int,
+    sequence: int,
+    epoch_delta: int,
+    expected: str | None,
+) -> None:
+    from datetime import UTC, datetime
+
+    from apps.core.iqoption_auto_trader import IqOptionAutoTrader
+    from packages.domain.market import BrokerClockSnapshot
+
+    observed = datetime(2026, 9, 11, tzinfo=UTC)
+    previous = BrokerClockSnapshot(
+        1_800_000_000,
+        observed,
+        0.1,
+        Decimal(0),
+        source_age_seconds=0.1,
+        connection_generation=2,
+        sample_sequence=19,
+    )
+    current = BrokerClockSnapshot(
+        previous.server_epoch + epoch_delta,
+        observed,
+        0.1,
+        Decimal(0),
+        source_age_seconds=0.1,
+        connection_generation=generation,
+        sample_sequence=sequence,
+    )
+
+    assert IqOptionAutoTrader._clock_progression_failure(previous, current) == expected
 
 
 def test_core_blocks_only_when_clock_skew_exceeds_120_seconds() -> None:

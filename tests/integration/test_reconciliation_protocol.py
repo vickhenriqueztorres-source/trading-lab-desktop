@@ -429,6 +429,46 @@ def test_rec_16_unavailable_worker_uses_only_bounded_read_retries(tmp_path: Path
     assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
 
 
+def test_unresolved_order_escalates_to_review_without_releasing_exposure(
+    tmp_path: Path,
+) -> None:
+    fixture = create_ambiguous(tmp_path)
+    writer = SingleDatabaseWriter(fixture.database_path)
+    reader = StateReader(fixture.database_path)
+    for _ in range(7):
+        attempt_id = str(uuid4())
+        writer.begin_reconciliation_attempt(
+            attempt_id,
+            fixture.persisted.order_id,
+            fixture.request.correlation_id,
+        )
+        writer.complete_reconciliation_attempt(
+            attempt_id,
+            "UNRESOLVED",
+            "RECONCILIATION_UNAVAILABLE",
+        )
+
+    report = ReconciliationCoordinator(
+        writer,
+        reader,
+        UnavailableStatusWorker(),
+        HealthGate(),
+        max_query_attempts=1,
+    ).reconcile_all()
+    writer.close()
+
+    assert report.results[0].outcome is ReconciliationOutcome.MANUAL_REVIEW_REQUIRED
+    assert report.results[0].reason_code == "RECONCILIATION_EVIDENCE_INSUFFICIENT"
+    assert reader.count("reconciliation_attempts") == 8
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+    reservation = reader.one(
+        "risk_reservations",
+        "reservation_id",
+        fixture.persisted.reservation_id,
+    )
+    assert reservation is not None and reservation["state"] == "ACTIVE"
+
+
 def test_slow_query_within_new_timeout_resolves(tmp_path: Path) -> None:
     fixture = create_ambiguous(tmp_path, WorkerScenario.REJECT_BUT_DROP_RESPONSE)
     store = SimulatedBrokerStore(fixture.broker_store_path)

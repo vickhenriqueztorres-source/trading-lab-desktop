@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import queue
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from http.cookies import SimpleCookie
@@ -27,6 +29,12 @@ from uuid import uuid4
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect as websocket_connect
 
+from packages.brokers.iqoption.result_parser import (
+    IQOPTION_CLOSED_OPTIONS,
+    IQOPTION_EVENT_NAME_KEY,
+    IQOPTION_HISTORY_CONTAINER_KEY,
+    IQOPTION_OPEN_OPTIONS,
+)
 from packages.domain.market import (
     BrokerAccountBalance,
     BrokerClockSnapshot,
@@ -64,6 +72,12 @@ IQOPTION_CLOCK_MAX_AGE_SECONDS = 30.0
 IQOPTION_CLOCK_PROBE_INTERVAL_SECONDS = 10.0
 IQOPTION_CLOCK_PROBE_TIMEOUT_SECONDS = 5.0
 IQOPTION_CLOCK_REFRESH_TIMEOUT_SECONDS = 2.0
+IQOPTION_BALANCE_REQUEST_TIMEOUT_SECONDS = 3.0
+IQOPTION_BALANCE_MAX_AGE_SECONDS = 15.0
+IQOPTION_LATE_ORDER_ACK_TTL_SECONDS = 180.0
+IQOPTION_LATE_ORDER_ACK_CAPACITY = 64
+IQOPTION_OPTIONS_HISTORY_LIMIT = 500
+IQOPTION_AMBIGUOUS_SUBMIT_WINDOW_SECONDS = 20.0
 
 # Legacy bootstrap only. The first successful session catalogue atomically
 # replaces this map; it is retained for old fixtures and initial compatibility.
@@ -266,6 +280,7 @@ class IQOptionCommunityReadOnlySession:
         self._lock = threading.Lock()
         self._connect_lock = threading.Lock()
         self._clock_query_lock = threading.Lock()
+        self._balance_query_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._betinfo_query_lock = threading.Lock()
@@ -286,9 +301,17 @@ class IQOptionCommunityReadOnlySession:
         self._authenticated = False
         self._profile: dict[str, object] | None = None
         self._balances: list[dict[str, object]] | None = None
+        self._selected_balance_identity: tuple[int, int, str] | None = None
+        self._balance_observed_at_wall = 0.0
+        self._balance_observed_at_monotonic = float("-inf")
+        self._balance_generation = 0
+        self._balance_revision = 0
+        self._balance_source = "BROKER_SNAPSHOT"
+        self._balance_pending: tuple[int, str, queue.Queue[dict[str, object]], int] | None = None
         self._server_epoch: Decimal | None = None
         self._server_epoch_received_at = 0.0
         self._server_epoch_monotonic = 0.0
+        self._clock_sample_sequence = 0
         self._connected_at_monotonic = 0.0
         self._connection_generation = 0
         self._clock_round_trip: float | None = None
@@ -296,12 +319,20 @@ class IQOptionCommunityReadOnlySession:
         self._clock_updated = threading.Event()
         self._last_rx_monotonic = float("-inf")
         self._pending: dict[str, queue.Queue[dict[str, Any]]] = {}
+        # A submit timeout removes the synchronous waiter but must not discard
+        # an ACK that arrives later.  This bounded generation-fenced registry
+        # never resends the order; it only routes late identity evidence.
+        self._late_order_requests: OrderedDict[str, tuple[int, float, str, str]] = OrderedDict()
         self._contract_events: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
         # Legacy api_game_betinfo responses do not reliably echo request_id.
         # Keep one serialized, bounded response lane and validate the exact
         # broker option id before accepting any result.
         self._betinfo_responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
-        self._options_responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=4)
+        # ``get-options`` is a legacy endpoint that may omit request_id.  It
+        # therefore owns one generation-fenced single-flight lane.  A timeout
+        # invalidates the transport so a late uncorrelated frame can never be
+        # consumed by a later reconciliation query.
+        self._options_pending: tuple[int, str, queue.Queue[dict[str, Any]]] | None = None
         # Static ids are a bounded bootstrap for the first catalogue request.
         # Once a catalogue is observed, only the broker's current session map
         # is authoritative.
@@ -401,10 +432,16 @@ class IQOptionCommunityReadOnlySession:
     ) -> IQOptionConnectionSnapshot:
         self._close_transport(clear_session=False)
         self._connection_generation += 1
+        connection_generation = self._connection_generation
         with self._lock:
             self._authenticated = False
             self._profile = None
             self._balances = None
+            self._selected_balance_identity = None
+            self._balance_observed_at_wall = 0.0
+            self._balance_observed_at_monotonic = float("-inf")
+            self._balance_generation = 0
+            self._balance_revision = 0
             self._server_epoch = None
             self._server_epoch_received_at = 0.0
             self._server_epoch_monotonic = 0.0
@@ -439,7 +476,7 @@ class IQOptionCommunityReadOnlySession:
                     raw = websocket.recv(timeout=remaining)
                 except TimeoutError as exc:
                     raise IQOptionExternalError("IQOPTION_AUTH_TIMEOUT") from exc
-                self._handle_message(raw)
+                self._handle_message(raw, connection_generation=connection_generation)
                 with self._lock:
                     authenticated = self._authenticated
                     ready = (
@@ -460,6 +497,7 @@ class IQOptionCommunityReadOnlySession:
         self._connected_at_monotonic = self._monotonic()
         self._reader = threading.Thread(
             target=self._reader_loop,
+            args=(websocket, connection_generation),
             name="iqoption-read-only-receiver",
             daemon=True,
         )
@@ -469,13 +507,103 @@ class IQOptionCommunityReadOnlySession:
     def snapshot(self) -> IQOptionConnectionSnapshot:
         return IQOptionConnectionSnapshot(
             account_mode=self._account_mode,
-            balance=self.get_balance(),
+            balance=self._cached_balance(),
             profile_confirmed=self._profile is not None,
             connected=self.is_connected,
         )
 
     def get_balance(self) -> BrokerAccountBalance:
-        raw = self._selected_balance()
+        """Return a newly observed balance from this WebSocket generation.
+
+        The broker's initial ``balances`` frame is not treated as fresh forever.
+        Each IPC balance read performs one bounded, single-flight
+        ``get-balances`` request.  A validated full ``balances`` frame received
+        in the same connection generation satisfies that single-flight read even
+        when a legacy server omits or rewrites ``request_id``.  The receive
+        timestamp is retained instead of being minted when Core reads the cache.
+        """
+
+        timeout = IQOPTION_BALANCE_REQUEST_TIMEOUT_SECONDS
+        started = self._monotonic()
+        responses: queue.Queue[dict[str, object]] | None = None
+        if not self._balance_query_lock.acquire(timeout=timeout):
+            raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT")
+        try:
+            if not self.is_connected:
+                raise IQOptionExternalError(self._disconnect_reason)
+            generation = self._connection_generation
+            with self._lock:
+                starting_revision = self._balance_revision
+            request_id = f"tl-{uuid4()}"
+            responses = queue.Queue(maxsize=1)
+            with self._pending_lock:
+                self._balance_pending = (
+                    generation,
+                    request_id,
+                    responses,
+                    starting_revision,
+                )
+            self._send(
+                {
+                    "name": "sendMessage",
+                    "msg": {"name": "get-balances", "version": "1.0", "body": {}},
+                    "request_id": request_id,
+                }
+            )
+            remaining = max(0.0, timeout - (self._monotonic() - started))
+            try:
+                response = responses.get(timeout=remaining)
+            except queue.Empty as exc:
+                with self._lock:
+                    revision_advanced = (
+                        self._balance_generation == generation
+                        and self._balance_revision > starting_revision
+                    )
+                if revision_advanced:
+                    return self._cached_balance()
+                raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
+            transport_error = response.get("_transport_error")
+            if isinstance(transport_error, str):
+                raise IQOptionExternalError(transport_error)
+            if generation != self._connection_generation or not self.is_connected:
+                raise IQOptionExternalError(self._disconnect_reason)
+            return self._cached_balance()
+        finally:
+            with self._pending_lock:
+                pending = self._balance_pending
+                if pending is not None and pending[2] is responses:
+                    self._balance_pending = None
+            self._balance_query_lock.release()
+
+    def _cached_balance(self) -> BrokerAccountBalance:
+        with self._lock:
+            raw = next(
+                (
+                    dict(item)
+                    for item in self._balances or ()
+                    if item.get("type") == self._account_mode.balance_type
+                ),
+                None,
+            )
+            observed_wall = self._balance_observed_at_wall
+            observed_mono = self._balance_observed_at_monotonic
+            generation = self._balance_generation
+            current_generation = self._connection_generation
+            revision = self._balance_revision
+            source = self._balance_source
+            connected = self.is_connected
+        if raw is None:
+            raise IQOptionExternalError("IQOPTION_ACCOUNT_MODE_UNAVAILABLE")
+        age = self._monotonic() - observed_mono
+        if (
+            not connected
+            or generation != current_generation
+            or not math.isfinite(age)
+            or not 0 <= age <= IQOPTION_BALANCE_MAX_AGE_SECONDS
+            or not math.isfinite(observed_wall)
+            or observed_wall <= 0
+        ):
+            raise IQOptionExternalError("IQOPTION_BALANCE_STALE")
         currency = raw.get("currency") or raw.get("currency_code")
         if not isinstance(currency, str):
             raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
@@ -492,7 +620,11 @@ class IQOptionCommunityReadOnlySession:
             balance_minor_units=int(minor_units),
             currency=currency,
             account_type=self._account_mode.domain_account_type,
-            observed_at_utc=datetime.now(UTC),
+            observed_at_utc=datetime.fromtimestamp(observed_wall, UTC),
+            source_age_seconds=age,
+            connection_generation=generation,
+            revision=revision,
+            source=source,
         )
 
     def get_clock(self) -> BrokerClockSnapshot:
@@ -558,6 +690,9 @@ class IQOptionCommunityReadOnlySession:
             local_received_at=datetime.fromtimestamp(now_wall, UTC),
             round_trip_seconds=self._clock_round_trip,
             estimated_offset_seconds=estimated_offset,
+            source_age_seconds=elapsed,
+            connection_generation=self._connection_generation,
+            sample_sequence=self._clock_sample_sequence,
         )
 
     def _clock_invalid_reason(self) -> str | None:
@@ -969,6 +1104,7 @@ class IQOptionCommunityReadOnlySession:
             self._websocket_reconnect_epochs.clear()
         with self._pending_lock:
             self._pending.clear()
+            self._late_order_requests.clear()
 
     def _reserve_websocket_reconnect(self) -> None:
         now = self._monotonic()
@@ -997,17 +1133,158 @@ class IQOptionCommunityReadOnlySession:
                 return balance
         raise IQOptionExternalError("IQOPTION_ACCOUNT_MODE_UNAVAILABLE")
 
-    def _reader_loop(self) -> None:
-        websocket = self._websocket
-        if websocket is None:
-            return
+    def _record_balances(
+        self,
+        raw_balances: list[object],
+        *,
+        connection_generation: int,
+        observed_at_wall: float,
+        observed_at_monotonic: float,
+        requested_after_revision: int | None = None,
+        request_correlated: bool = False,
+    ) -> int | None:
+        """Validate and atomically install one full account balance snapshot."""
+
+        if connection_generation != self._connection_generation:
+            return None
+        parsed = [dict(item) for item in raw_balances if isinstance(item, Mapping)]
+        selected = [item for item in parsed if item.get("type") == self._account_mode.balance_type]
+        if not selected:
+            # Preserve the historical ACCOUNT_MODE_UNAVAILABLE diagnosis during
+            # login while withholding freshness evidence for a missing account.
+            with self._lock:
+                if connection_generation == self._connection_generation and self._balances is None:
+                    self._balances = parsed
+            return None
+        if len(selected) != 1:
+            raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+        normalized, identity = self._normalize_balance_record(selected[0])
+        for index, item in enumerate(parsed):
+            if item is selected[0]:
+                parsed[index] = normalized
+                break
+        with self._lock:
+            if connection_generation != self._connection_generation:
+                return None
+            previous_identity = self._selected_balance_identity
+            if previous_identity is not None and requested_after_revision is None:
+                # A full snapshot after login must belong to the current
+                # single-flight refresh; otherwise it may be a retired reply.
+                return None
+            if (
+                previous_identity is not None
+                and request_correlated
+                and (requested_after_revision != self._balance_revision)
+            ):
+                return None
+            if (
+                previous_identity is not None
+                and self._balance_source == "BALANCE_PUSH"
+                and (not request_correlated or requested_after_revision != self._balance_revision)
+            ):
+                # This legacy route can omit/rewrite request_id. Without exact
+                # correlation it cannot prove that an arriving full snapshot
+                # was taken after the newer push already installed above.
+                return None
+            if previous_identity is not None and previous_identity != identity:
+                raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+            self._balances = parsed
+            self._selected_balance_identity = identity
+            self._balance_observed_at_wall = observed_at_wall
+            self._balance_observed_at_monotonic = observed_at_monotonic
+            self._balance_generation = connection_generation
+            self._balance_revision += 1
+            self._balance_source = "GET_BALANCES"
+            return self._balance_revision
+
+    def _record_balance_change(
+        self,
+        current_balance: Mapping[str, object],
+        *,
+        connection_generation: int,
+        observed_at_wall: float,
+        observed_at_monotonic: float,
+    ) -> int | None:
+        """Apply only a validated push for the explicitly selected balance id."""
+
+        with self._lock:
+            identity = self._selected_balance_identity
+            if identity is None or connection_generation != self._connection_generation:
+                return None
+            balances = [dict(item) for item in self._balances or ()]
+            raw_id = current_balance.get("id")
+            if isinstance(raw_id, bool) or not isinstance(raw_id, int) or raw_id != identity[0]:
+                # The broker can publish updates for other account modes. They are
+                # outside the selected account scope and must not replace its value.
+                return None
+            selected_index = next(
+                (
+                    index
+                    for index, item in enumerate(balances)
+                    if item.get("id") == identity[0]
+                    and item.get("type") == self._account_mode.balance_type
+                ),
+                None,
+            )
+            if selected_index is None:
+                raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+            merged = {**balances[selected_index], **dict(current_balance)}
+            normalized, pushed_identity = self._normalize_balance_record(merged)
+            if pushed_identity != identity:
+                raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+            balances[selected_index] = normalized
+            self._balances = balances
+            self._balance_observed_at_wall = observed_at_wall
+            self._balance_observed_at_monotonic = observed_at_monotonic
+            self._balance_generation = connection_generation
+            self._balance_revision += 1
+            self._balance_source = "BALANCE_PUSH"
+            return self._balance_revision
+
+    @staticmethod
+    def _normalize_balance_record(
+        raw: Mapping[str, object],
+    ) -> tuple[dict[str, object], tuple[int, int, str]]:
+        balance_id = raw.get("id")
+        balance_type = raw.get("type")
+        currency = raw.get("currency") or raw.get("currency_code")
+        if (
+            isinstance(balance_id, bool)
+            or not isinstance(balance_id, int)
+            or isinstance(balance_type, bool)
+            or not isinstance(balance_type, int)
+            or not isinstance(currency, str)
+        ):
+            raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+        normalized_currency = currency.strip().upper()
+        if (
+            len(normalized_currency) != 3
+            or not normalized_currency.isascii()
+            or not normalized_currency.isalpha()
+        ):
+            raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+        try:
+            amount = Decimal(str(raw.get("amount")))
+        except (InvalidOperation, ValueError) as exc:
+            raise IQOptionExternalError("IQOPTION_BALANCE_INVALID") from exc
+        if not amount.is_finite() or amount < 0:
+            raise IQOptionExternalError("IQOPTION_BALANCE_INVALID")
+        minor_units = amount * Decimal(100)
+        if minor_units != minor_units.to_integral_value():
+            raise IQOptionExternalError("IQOPTION_BALANCE_PRECISION_UNSUPPORTED")
+        normalized = dict(raw)
+        normalized["currency"] = normalized_currency
+        normalized["amount"] = str(amount)
+        return normalized, (balance_id, balance_type, normalized_currency)
+
+    def _reader_loop(self, websocket: IQOptionWebSocket, connection_generation: int) -> None:
         try:
             while not self._stop.is_set() and not self._disconnected.is_set():
                 try:
                     raw = websocket.recv(timeout=1.0)
                 except TimeoutError:
                     continue
-                self._handle_message(raw)
+                self._handle_message(raw, connection_generation=connection_generation)
         except (WebSocketException, OSError, RuntimeError, IQOptionExternalError) as exc:
             reason = "IQOPTION_WEBSOCKET_UNAVAILABLE"
             if isinstance(exc, IQOptionExternalError):
@@ -1028,11 +1305,26 @@ class IQOptionCommunityReadOnlySession:
                 waiters.append(self._initialization_pending[1])
             if self._underlying_pending is not None:
                 waiters.append(self._underlying_pending[1])
+            if self._balance_pending is not None:
+                waiters.append(self._balance_pending[2])
+            if self._options_pending is not None:
+                waiters.append(self._options_pending[2])
         for waiter in waiters:
             with suppress(queue.Full):
                 waiter.put_nowait({"_transport_error": reason})
 
-    def _handle_message(self, raw: str | bytes) -> None:
+    def _handle_message(
+        self,
+        raw: str | bytes,
+        *,
+        connection_generation: int | None = None,
+    ) -> None:
+        if (
+            connection_generation is not None
+            and connection_generation != self._connection_generation
+        ):
+            return
+        generation = self._connection_generation
         self._last_rx_monotonic = self._monotonic()
         if len(raw if isinstance(raw, bytes) else raw.encode("utf-8")) > IQOPTION_MAX_MESSAGE_BYTES:
             raise IQOptionExternalError("IQOPTION_RESPONSE_TOO_LARGE")
@@ -1071,10 +1363,16 @@ class IQOptionCommunityReadOnlySession:
                 self._disconnected.set()
             return
         if name == "options":
-            try:
-                self._options_responses.put_nowait(dict(message))
-            except queue.Full:
-                self._disconnected.set()
+            with self._pending_lock:
+                options_pending = self._options_pending
+            request_id = message.get("request_id")
+            if (
+                options_pending is not None
+                and options_pending[0] == generation
+                and request_id in (None, "", options_pending[1])
+            ):
+                with suppress(queue.Full):
+                    options_pending[2].put_nowait(dict(message))
             return
         if name == "authenticated":
             authenticated = bool(message.get("msg"))
@@ -1095,9 +1393,66 @@ class IQOptionCommunityReadOnlySession:
         if name == "balances":
             balances = message.get("msg")
             if isinstance(balances, list):
-                parsed = [dict(item) for item in balances if isinstance(item, Mapping)]
-                with self._lock:
-                    self._balances = parsed
+                with self._pending_lock:
+                    balance_pending = self._balance_pending
+                raw_request_id = message.get("request_id")
+                revision = self._record_balances(
+                    balances,
+                    connection_generation=generation,
+                    observed_at_wall=self._wall_time(),
+                    observed_at_monotonic=self._last_rx_monotonic,
+                    requested_after_revision=(
+                        None if balance_pending is None else balance_pending[3]
+                    ),
+                    request_correlated=(
+                        balance_pending is not None
+                        and isinstance(raw_request_id, str)
+                        and raw_request_id == balance_pending[1]
+                    ),
+                )
+                if (
+                    revision is not None
+                    and balance_pending is not None
+                    and balance_pending[0] == generation
+                ):
+                    # Balance reads have one dedicated in-flight lane.  Any newly
+                    # validated full snapshot in this connection is authoritative
+                    # observation evidence; requiring an echoed wire ID caused
+                    # valid IQ legacy responses to be reported as timeouts.
+                    with suppress(queue.Full):
+                        balance_pending[2].put_nowait({"revision": revision})
+            return
+        if name in {
+            "balance-changed",
+            "internal-billing.auth-balance-changed",
+            "internal-billing.balance-changed",
+        }:
+            raw_change = message.get("msg")
+            current = raw_change.get("current_balance") if isinstance(raw_change, Mapping) else None
+            if (
+                isinstance(raw_change, Mapping)
+                and not isinstance(current, Mapping)
+                and not isinstance(current, bool)
+                and isinstance(current, (int, float, Decimal, str))
+            ):
+                balance_id = raw_change.get("balance_id", raw_change.get("id"))
+                current = {"id": balance_id, "amount": current}
+            if isinstance(current, Mapping):
+                revision = self._record_balance_change(
+                    current,
+                    connection_generation=generation,
+                    observed_at_wall=self._wall_time(),
+                    observed_at_monotonic=self._last_rx_monotonic,
+                )
+                with self._pending_lock:
+                    balance_pending = self._balance_pending
+                if (
+                    revision is not None
+                    and balance_pending is not None
+                    and balance_pending[0] == generation
+                ):
+                    with suppress(queue.Full):
+                        balance_pending[2].put_nowait({"revision": revision, "source": "push"})
             return
         if name in {"timeSync", "timesync"}:
             raw_epoch = message.get("msg")
@@ -1128,6 +1483,7 @@ class IQOptionCommunityReadOnlySession:
             self._server_epoch = epoch
             self._server_epoch_received_at = self._wall_time()
             self._server_epoch_monotonic = self._monotonic()
+            self._clock_sample_sequence += 1
         self._clock_updated.set()
 
     def _send(self, payload: Mapping[str, object]) -> None:
@@ -1157,6 +1513,21 @@ class IQOptionCommunityReadOnlySession:
                 "request_id": "iqoption-read-balances",
             }
         )
+        for event_name in (
+            "internal-billing.auth-balance-changed",
+            "internal-billing.balance-changed",
+        ):
+            self._send(
+                {
+                    "name": "subscribeMessage",
+                    "msg": {
+                        "name": event_name,
+                        "version": "1.0",
+                        "params": {"routingFilters": {}},
+                    },
+                    "request_id": f"tl-{uuid4()}",
+                }
+            )
         with suppress(Exception):
             self._send({"name": "timesync", "msg": int(self._wall_time() * 1000)})
 
@@ -1242,6 +1613,7 @@ class IQOptionCommunityReadOnlySession:
         *,
         expected_names: frozenset[str],
         timeout: float,
+        late_order_context: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         if timeout <= 0:
             raise ValueError("IQ Option request timeout must be positive")
@@ -1256,7 +1628,21 @@ class IQOptionCommunityReadOnlySession:
             try:
                 response = response_queue.get(timeout=timeout)
             except queue.Empty as exc:
-                raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
+                # Atomically retire the synchronous waiter and, for a
+                # potentially-sent order only, retain enough local routing
+                # identity for a late ACK.  The wire command is never retried.
+                with self._pending_lock:
+                    self._pending.pop(request_id, None)
+                    try:
+                        response = response_queue.get_nowait()
+                    except queue.Empty:
+                        if late_order_context is not None:
+                            self._remember_late_order_request_locked(
+                                request_id,
+                                late_order_context[0],
+                                late_order_context[1],
+                            )
+                        raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
         finally:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
@@ -1272,12 +1658,82 @@ class IQOptionCommunityReadOnlySession:
             return
         with self._pending_lock:
             response_queue = self._pending.get(raw_request_id)
+            self._purge_late_order_requests_locked()
+            late_context = (
+                None
+                if response_queue is not None
+                else self._late_order_requests.pop(raw_request_id, None)
+            )
         if response_queue is None:
+            if late_context is not None:
+                self._route_late_order_ack(message, late_context)
             return
         try:
             response_queue.put_nowait(dict(message))
         except queue.Full:
             return
+
+    def _remember_late_order_request_locked(
+        self,
+        request_id: str,
+        client_order_id: str,
+        correlation_id: str,
+    ) -> None:
+        self._purge_late_order_requests_locked()
+        self._late_order_requests[request_id] = (
+            self._connection_generation,
+            self._monotonic() + IQOPTION_LATE_ORDER_ACK_TTL_SECONDS,
+            client_order_id,
+            correlation_id,
+        )
+        while len(self._late_order_requests) > IQOPTION_LATE_ORDER_ACK_CAPACITY:
+            self._late_order_requests.popitem(last=False)
+
+    def _purge_late_order_requests_locked(self) -> None:
+        now = self._monotonic()
+        expired = [
+            request_id
+            for request_id, (generation, deadline, _, _) in self._late_order_requests.items()
+            if generation != self._connection_generation or deadline < now
+        ]
+        for request_id in expired:
+            self._late_order_requests.pop(request_id, None)
+
+    def _route_late_order_ack(
+        self,
+        message: Mapping[str, object],
+        context: tuple[int, float, str, str],
+    ) -> None:
+        generation, deadline, client_order_id, correlation_id = context
+        if (
+            generation != self._connection_generation
+            or deadline < self._monotonic()
+            or message.get("name") != "option"
+        ):
+            return
+        raw = message.get("msg")
+        if not isinstance(raw, Mapping) or raw.get("status") is False:
+            return
+        option_id = raw.get("id", raw.get("option_id"))
+        if (
+            isinstance(option_id, bool)
+            or not isinstance(option_id, (int, str))
+            or not str(option_id).isdigit()
+            or int(str(option_id)) <= 0
+        ):
+            return
+        normalized = self._normalize_contract_event(
+            "option-opened",
+            {
+                **dict(raw),
+                "id": option_id,
+                "client_order_id": client_order_id,
+                "correlation_id": correlation_id,
+            },
+        )
+        if normalized is not None:
+            with suppress(queue.Full):
+                self._contract_events.put_nowait({"name": "option-opened", "msg": normalized})
 
     def _buy_binary_option(
         self,
@@ -1296,7 +1752,21 @@ class IQOptionCommunityReadOnlySession:
             balance_id = balance.get("id")
             if isinstance(balance_id, bool) or not isinstance(balance_id, int):
                 raise IQOptionExternalError("IQOPTION_BALANCE_ID_INVALID")
-            expiry = self._binary_expiration(duration)
+            requested_expiry = msg.get("expiry_epoch")
+            if requested_expiry is None:
+                expiry = self._binary_expiration(duration)
+            else:
+                if (
+                    isinstance(requested_expiry, bool)
+                    or not isinstance(requested_expiry, int)
+                    or requested_expiry <= 0
+                    or requested_expiry % 60 != 0
+                ):
+                    raise IQOptionExternalError("IQOPTION_EXPIRY_INVALID")
+                server_epoch = self.get_clock().server_epoch
+                if requested_expiry <= server_epoch or requested_expiry - server_epoch > 120:
+                    raise IQOptionExternalError("IQOPTION_ENTRY_WINDOW_MISSED")
+                expiry = requested_expiry
             active_id = self._active_id(symbol)
         except IQOptionExternalError as exc:
             # This boundary is strictly before _request_message/_send.
@@ -1319,6 +1789,10 @@ class IQOptionCommunityReadOnlySession:
             },
             expected_names=frozenset({"option"}),
             timeout=timeout,
+            late_order_context=(
+                str(msg.get("client_order_id", "")),
+                str(msg.get("correlation_id", "")),
+            ),
         )
         raw = response.get("msg")
         if not isinstance(raw, Mapping):
@@ -1348,36 +1822,74 @@ class IQOptionCommunityReadOnlySession:
         if not self.is_connected:
             raise IQOptionExternalError("IQOPTION_WEBSOCKET_UNAVAILABLE")
         with self._options_query_lock:
-            while True:
-                try:
-                    self._options_responses.get_nowait()
-                except queue.Empty:
-                    break
-            self._send(
-                {
-                    "name": "sendMessage",
-                    "msg": {
-                        "name": "get-options",
-                        "body": {
-                            "limit": 100,
-                            "instrument_type": "binary,turbo",
-                            "user_balance_id": balance_id,
-                        },
-                    },
-                    "request_id": f"tl-{uuid4()}",
-                }
-            )
+            generation = self._connection_generation
+            request_id = f"tl-{uuid4()}"
+            responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+            with self._pending_lock:
+                self._options_pending = (generation, request_id, responses)
             try:
-                response = self._options_responses.get(timeout=timeout)
-            except queue.Empty as exc:
-                raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
+                self._send(
+                    {
+                        "name": "sendMessage",
+                        "msg": {
+                            "name": "get-options",
+                            "body": {
+                                "limit": IQOPTION_OPTIONS_HISTORY_LIMIT,
+                                "instrument_type": "binary,turbo",
+                                "user_balance_id": balance_id,
+                            },
+                        },
+                        "request_id": request_id,
+                    }
+                )
+                try:
+                    response = responses.get(timeout=timeout)
+                except queue.Empty as exc:
+                    # An id-less response arriving after this point cannot be
+                    # distinguished from the next response on the same socket.
+                    # Retire the generation; recovery reconnects read-only and
+                    # never resubmits the original order.
+                    self._fail_transport("IQOPTION_REQUEST_TIMEOUT")
+                    raise IQOptionExternalError("IQOPTION_REQUEST_TIMEOUT") from exc
+                if response.get("_transport_error"):
+                    raise IQOptionExternalError(str(response["_transport_error"]))
+            finally:
+                with self._pending_lock:
+                    if (
+                        self._options_pending is not None
+                        and self._options_pending[0] == generation
+                        and self._options_pending[1] == request_id
+                    ):
+                        self._options_pending = None
         wanted = str(msg.get("id", ""))
         wanted_client_ref = str(msg.get("client_order_id", ""))
         raw = response.get("msg")
         matched = self._find_exact_contract(raw, wanted, wanted_client_ref)
+        history_identity_complete = True
+        ambiguous = False
+        if matched is None and wanted_client_ref:
+            matched, ambiguous, history_identity_complete = (
+                self._find_unique_contract_by_fingerprint(raw, msg)
+            )
         if matched is not None:
             return {"isSuccessful": True, "result": matched}
-        return {"isSuccessful": False, "message": "Option not found"}
+        if ambiguous:
+            return {
+                "isSuccessful": False,
+                "message": "Ambiguous option match",
+                "reason_code": "IQOPTION_RECONCILIATION_AMBIGUOUS_MATCH",
+            }
+        coverage = self._options_negative_coverage(
+            raw,
+            history_identity_complete=history_identity_complete,
+            submitted_at=msg.get("submitted_at"),
+            response_metadata=response,
+        )
+        return {
+            "isSuccessful": False,
+            "message": "Option not found",
+            "not_found_coverage": coverage,
+        }
 
     def _get_betinfo(
         self,
@@ -1435,12 +1947,18 @@ class IQOptionCommunityReadOnlySession:
         raw: object,
         wanted_id: str,
         wanted_client_ref: str,
+        history_container: str | None = None,
     ) -> dict[str, Any] | None:
         """Extract only an exact id/client-ref match from known response containers."""
 
         if isinstance(raw, list):
             for item in raw:
-                matched = cls._find_exact_contract(item, wanted_id, wanted_client_ref)
+                matched = cls._find_exact_contract(
+                    item,
+                    wanted_id,
+                    wanted_client_ref,
+                    history_container,
+                )
                 if matched is not None:
                     return matched
             return None
@@ -1459,6 +1977,8 @@ class IQOptionCommunityReadOnlySession:
         if id_matches or ref_matches:
             normalized = dict(raw)
             normalized["id"] = exact_id if exact_id is not None else wanted_id
+            if history_container is not None:
+                normalized[IQOPTION_HISTORY_CONTAINER_KEY] = history_container
             return normalized
 
         for key in (
@@ -1470,14 +1990,304 @@ class IQOptionCommunityReadOnlySession:
             "option",
         ):
             child = raw.get(key)
+            child_container = (
+                IQOPTION_OPEN_OPTIONS
+                if key == "open_options"
+                else IQOPTION_CLOSED_OPTIONS
+                if key == "closed_options"
+                else history_container
+            )
             if isinstance(child, Mapping) and wanted_id and wanted_id in child:
                 keyed = child[wanted_id]
                 if isinstance(keyed, Mapping):
-                    return {"id": wanted_id, **dict(keyed)}
-            matched = cls._find_exact_contract(child, wanted_id, wanted_client_ref)
+                    normalized = {"id": wanted_id, **dict(keyed)}
+                    if child_container is not None:
+                        normalized[IQOPTION_HISTORY_CONTAINER_KEY] = child_container
+                    return normalized
+            matched = cls._find_exact_contract(
+                child,
+                wanted_id,
+                wanted_client_ref,
+                child_container,
+            )
             if matched is not None:
                 return matched
         return None
+
+    def _find_unique_contract_by_fingerprint(
+        self,
+        raw: object,
+        query: Mapping[str, Any],
+    ) -> tuple[dict[str, Any] | None, bool, bool]:
+        """Recover an old ACK only from one complete historical fingerprint.
+
+        IQ's binary open call does not echo our durable client reference in old
+        history rows.  A unique active/direction/stake/time match is therefore
+        the strongest available positive identity.  Missing fields or multiple
+        candidates never become negative proof.
+        """
+
+        submitted_at = self._history_datetime(query.get("submitted_at"))
+        symbol = str(query.get("symbol", "")).strip().upper()
+        direction = str(query.get("direction", "")).strip().lower()
+        amount_minor = query.get("amount_minor")
+        if (
+            submitted_at is None
+            or not symbol
+            or direction not in {"call", "put"}
+            or isinstance(amount_minor, bool)
+            or not isinstance(amount_minor, int)
+            or amount_minor <= 0
+        ):
+            return None, False, False
+        try:
+            expected_active_id = self._active_id(symbol)
+        except IQOptionExternalError:
+            return None, False, False
+
+        containers = self._option_history_containers(raw)
+        if containers is None:
+            return None, False, False
+        matches: list[dict[str, Any]] = []
+        identity_complete = True
+        for container_name, items in containers:
+            for item in items:
+                if not isinstance(item, Mapping):
+                    identity_complete = False
+                    continue
+                created_at = self._history_datetime(
+                    self._first_present(
+                        item,
+                        (
+                            "created",
+                            "created_at",
+                            "created_time",
+                            "open_time",
+                            "open_time_msec",
+                            "purchase_time",
+                            "purchased_at",
+                            "buy_time",
+                        ),
+                    )
+                )
+                if created_at is None:
+                    identity_complete = False
+                    continue
+                if (
+                    abs((created_at - submitted_at).total_seconds())
+                    > IQOPTION_AMBIGUOUS_SUBMIT_WINDOW_SECONDS
+                ):
+                    continue
+                item_id = self._history_contract_id(item)
+                item_active = self._first_present(
+                    item, ("active_id", "active", "activeId", "instrument_id", "asset_id")
+                )
+                item_direction = (
+                    str(
+                        self._first_present(
+                            item,
+                            ("dir", "direction", "option_type", "type"),
+                        )
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+                item_amount = self._history_money_minor(
+                    self._first_present(item, ("amount", "price", "invest", "stake"))
+                )
+                item_currency = str(item.get("currency", "")).strip().upper()
+                expected_currency = str(query.get("currency", "USD")).strip().upper()
+                active_matches = str(item_active).strip().upper() in {
+                    symbol,
+                    str(expected_active_id),
+                }
+                if (
+                    item_id is None
+                    or item_active is None
+                    or item_direction not in {"call", "put"}
+                    or item_amount is None
+                    or (item_currency and item_currency != expected_currency)
+                ):
+                    identity_complete = False
+                    continue
+                if active_matches and item_direction == direction and item_amount == amount_minor:
+                    normalized = dict(item)
+                    normalized["id"] = item_id
+                    # The broker often puts a numeric active id in ``active``.
+                    # It has already been validated above, so expose the
+                    # canonical symbol to the financial evidence boundary.
+                    normalized["active"] = symbol
+                    normalized["direction"] = direction
+                    normalized["currency"] = expected_currency
+                    # IQ omits our client reference from legacy binary history.
+                    # The transport adds it only after a unique, complete
+                    # fingerprint match so the next boundary can verify which
+                    # durable query this normalized row answers.
+                    normalized["client_order_id"] = str(query["client_order_id"])
+                    normalized["_iq_identity_source"] = "HISTORY_FINGERPRINT"
+                    normalized[IQOPTION_HISTORY_CONTAINER_KEY] = container_name
+                    matches.append(normalized)
+        if len(matches) == 1 and identity_complete:
+            return matches[0], False, identity_complete
+        return (
+            None,
+            len(matches) > 1 or (len(matches) == 1 and not identity_complete),
+            identity_complete,
+        )
+
+    @classmethod
+    def _options_negative_coverage(
+        cls,
+        raw: object,
+        *,
+        history_identity_complete: bool,
+        submitted_at: object = None,
+        response_metadata: object = None,
+    ) -> dict[str, object] | None:
+        containers = cls._option_history_containers(raw)
+        if containers is None or not history_identity_complete:
+            return None
+        by_name = {name: items for name, items in containers}
+        open_items = by_name.get(IQOPTION_OPEN_OPTIONS)
+        closed_items = by_name.get(IQOPTION_CLOSED_OPTIONS)
+        # A full open portfolio is authoritative.  A non-empty closed history
+        # is never called exhaustive merely because it is shorter than the
+        # requested limit: broker hard caps and pagination can do that too.
+        # It must either explicitly report no following page or contain valid
+        # timestamps reaching beyond the entire submission identity window.
+        portfolio_checked = open_items is not None
+        has_more = cls._history_has_more(response_metadata)
+        statement_checked = closed_items == [] or (closed_items is not None and has_more is False)
+        submitted = cls._history_datetime(submitted_at)
+        if closed_items and submitted is not None:
+            created = tuple(
+                timestamp
+                for item in closed_items
+                if isinstance(item, Mapping)
+                and (
+                    timestamp := cls._history_datetime(
+                        cls._first_present(
+                            item,
+                            (
+                                "created",
+                                "created_at",
+                                "created_time",
+                                "open_time",
+                                "open_time_msec",
+                                "purchase_time",
+                                "purchased_at",
+                                "buy_time",
+                            ),
+                        )
+                    )
+                )
+                is not None
+            )
+            if created:
+                page_oldest = min(created)
+                window_covered = page_oldest <= submitted - timedelta(
+                    seconds=IQOPTION_AMBIGUOUS_SUBMIT_WINDOW_SECONDS
+                )
+                statement_checked = statement_checked or window_covered
+        if not (statement_checked and portfolio_checked):
+            return None
+        return {
+            "observed_at": datetime.now(UTC).isoformat(),
+            "statement_checked": True,
+            "portfolio_checked": True,
+        }
+
+    @classmethod
+    def _history_has_more(cls, raw: object) -> bool | None:
+        if not isinstance(raw, Mapping):
+            return None
+        for key in ("has_more", "hasMore"):
+            value = raw.get(key)
+            if isinstance(value, bool):
+                return value
+        for key in ("msg", "result", "data", "options", "pagination"):
+            nested = cls._history_has_more(raw.get(key))
+            if nested is not None:
+                return nested
+        return None
+
+    @classmethod
+    def _option_history_containers(
+        cls,
+        raw: object,
+    ) -> tuple[tuple[str, list[object]], ...] | None:
+        if not isinstance(raw, Mapping):
+            return None
+        open_items = raw.get("open_options")
+        closed_items = raw.get("closed_options")
+        if isinstance(open_items, list) and isinstance(closed_items, list):
+            return (
+                (IQOPTION_OPEN_OPTIONS, open_items),
+                (IQOPTION_CLOSED_OPTIONS, closed_items),
+            )
+        for key in ("result", "data", "options"):
+            nested = cls._option_history_containers(raw.get(key))
+            if nested is not None:
+                return nested
+        return None
+
+    @staticmethod
+    def _first_present(item: Mapping[str, Any], names: tuple[str, ...]) -> object | None:
+        for name in names:
+            if name in item and item[name] is not None:
+                value: object = item[name]
+                return value
+        return None
+
+    @staticmethod
+    def _history_contract_id(item: Mapping[str, Any]) -> str | None:
+        raw = item.get("id", item.get("option_id", item.get("contract_id")))
+        if isinstance(raw, (list, tuple)):
+            raw = raw[0] if len(raw) == 1 else None
+        if isinstance(raw, bool) or raw is None or not str(raw).isdigit():
+            return None
+        return str(raw)
+
+    @staticmethod
+    def _history_datetime(raw: object) -> datetime | None:
+        if isinstance(raw, bool) or raw is None:
+            return None
+        if isinstance(raw, datetime):
+            value = raw
+        elif (
+            isinstance(raw, (int, float, Decimal)) or str(raw).strip().replace(".", "", 1).isdigit()
+        ):
+            try:
+                epoch = Decimal(str(raw).strip())
+                if epoch > Decimal("100000000000000"):
+                    epoch /= Decimal(1_000_000)
+                elif epoch > Decimal("100000000000"):
+                    epoch /= Decimal(1_000)
+                value = datetime.fromtimestamp(float(epoch), UTC)
+            except (InvalidOperation, OSError, OverflowError, ValueError):
+                return None
+        else:
+            try:
+                value = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            return None
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _history_money_minor(raw: object) -> int | None:
+        if isinstance(raw, bool) or raw is None:
+            return None
+        try:
+            value = Decimal(str(raw).strip()) * Decimal(100)
+        except (InvalidOperation, ValueError):
+            return None
+        integral = value.to_integral_value()
+        if not value.is_finite() or value < 0 or value != integral:
+            return None
+        return int(integral)
 
     def _binary_expiration(self, duration: int) -> int:
         if duration != 1:
@@ -1499,17 +2309,9 @@ class IQOptionCommunityReadOnlySession:
             return None
         normalized = dict(raw)
         normalized["id"] = option_id
+        normalized[IQOPTION_EVENT_NAME_KEY] = str(name)
         if name == "option-opened":
             normalized["status"] = "open"
-            return normalized
-        try:
-            amount = Decimal(str(raw.get("amount", "0")))
-            profit = Decimal(str(raw.get("profit_amount", raw.get("win_amount", "0"))))
-        except InvalidOperation:
-            return None
-        normalized["status"] = "win" if profit > amount else "loose"
-        normalized["win"] = normalized["status"]
-        normalized["win_amount"] = str(profit)
         return normalized
 
     @staticmethod

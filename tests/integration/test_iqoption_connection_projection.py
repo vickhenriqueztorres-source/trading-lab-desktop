@@ -446,6 +446,7 @@ def test_websocket_recovery_bypasses_http_login_quarantine(monkeypatch) -> None:
     service._iqoption = SimpleNamespace(client=client)
     service._iqoption_connection_safety = safety
     service._iqoption_auto_trader = SimpleNamespace(on_transport_up=transport.mark_up)
+    service._start_iqoption_balance_monitor = lambda *_args: None
     monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
 
     service._iqoption_recovery_loop()
@@ -513,6 +514,7 @@ def test_websocket_budget_expiry_wakes_recovery_automatically(monkeypatch) -> No
     service._iqoption = SimpleNamespace(client=client)
     service._iqoption_connection_safety = SimpleNamespace(snapshot=MagicMock())
     service._iqoption_auto_trader = SimpleNamespace(on_transport_up=transport.mark_up)
+    service._start_iqoption_balance_monitor = lambda *_args: None
     monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
 
     service._iqoption_recovery_loop()
@@ -565,6 +567,7 @@ def test_manual_disarm_during_websocket_recovery_cannot_reactivate_bot(monkeypat
     service._iqoption = SimpleNamespace(client=Client())
     service._iqoption_connection_safety = SimpleNamespace(snapshot=MagicMock())
     service._iqoption_auto_trader = SimpleNamespace(on_transport_up=transport.mark_up)
+    service._start_iqoption_balance_monitor = lambda *_args: None
     monkeypatch.setattr("apps.core.lifecycle_service._IQOPTION_RECOVERY_DELAYS_SECONDS", (0.0,))
 
     service._iqoption_recovery_loop()

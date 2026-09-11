@@ -5967,3 +5967,214 @@ Validação:
   `dist/iq-websocket-recovery-final-20260910/TradingLab-Desktop-v1.9.11-IQ-WEBSOCKET-RECOVERY-FINAL.exe`;
   59.200.512 bytes; SHA-256
   `C9B59089031404A58FCD80D1BD9EEE1CD505573FACA9ADFBD01C2627916C6BE4`.
+
+## 2026-09-10 — Martingale delimitado G1/G2 integrado ao executor IQ Option
+
+- O painel atual de estratégia IQ recebeu seleção explícita `Desligado`, `Até G1` e `Até G2`,
+  multiplicador de 1,10x a 3,00x, teto de stake e projeção visível de G0/G1/G2 e da perda máxima
+  da sequência. O padrão permanece desligado e a configuração anterior continua compatível.
+- O Core, e não a estratégia, calcula e admite o stake. O ticket de payout passou a vincular também
+  o valor exato, bloqueando submissão com stake divergente. Limites de perda consecutiva,
+  quantidade diária, teto por entrada e stop loss diário são validados antes de habilitar o ciclo.
+- Perda liquidada e confirmada agenda a recuperação na próxima fronteira de minuto, mantendo
+  estratégia efetiva, ativo, direção e produto. Vitória, empate, perda no último nível, rejeição ou
+  gate financeiro definitivo encerram o ciclo. Cooldown apenas posterga a tentativa.
+- Estado do ciclo e correlação são persistidos antes do envio. Restart reconstrói a exposição pela
+  ordem/outbox duráveis; estado desconhecido continua sob reconciliação e nunca gera retry cego.
+  Desarme cancela somente recuperação ainda não enviada e preserva acompanhamento de ordem aberta.
+- O escopo é exclusivamente IQ Option Practice/Demo. Nenhum arquivo do executor Deriv foi
+  modificado e nenhum login ou ordem externa foi usado na validação.
+- Testes focados: 55 passed, mais 10 testes do contrato de ticket/ciclo. Validação final: 1.420
+  passed, 4 skipped, 0 failed em 377,52 s. Ruff check e format em 531 arquivos, mypy em 314
+  arquivos, compileall e diff-check aprovados. Permanece o aviso conhecido `WinError 5` no callback
+  de limpeza temporária do pytest após o resultado aprovado.
+- Build canônico PyInstaller 6.22.2 aprovado com 445 arquivos no manifesto, scanner com zero
+  segredos, integridade e health-check interno aprovados. Portátil com 884 entradas, recurso único
+  `TradingLab.payload.zip`, ProductVersion 1.9.11, 48.388.096 bytes e SHA-256
+  `1A0BB608DBC371ABD8D491F4FF2753B73A6C626111A2E363AD32870FD3738232`. Artefato:
+  `dist/mg/TradingLab-Desktop-v1.9.11-IQ-MARTINGALE-G1-G2.exe`.
+
+## 2026-09-11 — Resultado IQ, saldo ao vivo e martingale por fechamento de candle
+
+- Diagnóstico somente leitura no perfil real comprovou 114 de 115 liquidações IQ com P&L zero e
+  origem `STATUS_QUERY`. As 13 mais recentes haviam sido encerradas entre 3,48 e 7,41 segundos
+  após a criação apesar do contrato M1; a ordem `14250937747` foi criada às
+  `00:02:06.314641Z` e marcada `SETTLED` às `00:02:10.002510Z`.
+- A causa era um parser que aceitava `win/status` antes da expiração, misturava campos monetários
+  de schemas diferentes e preenchia ausência como zero. O normalizador agora é específico por
+  `betinfo`, evento fechado e histórico; exige finalidade e valores completos, valida o stake e
+  mantém contrato aberto/indisponível quando a evidência não basta. Zero terminal confirmado é
+  empate/reembolso; os zeros históricos suspeitos aparecem como resultado sob revisão.
+- O saldo antigo parecia atual porque cada leitura do cache recebia `datetime.now()`. O worker agora
+  preserva o horário real da recepção, faz `get-balances` single-flight e correlacionado, aceita
+  push apenas do balance ID/modo/moeda selecionados e rejeita cache com mais de 15 segundos. Um
+  monitor Core independente consulta a cada 5 segundos, inclusive com bot desarmado ou clock
+  indisponível, projeta freshness na UI e bloqueia novas entradas quando stale.
+- Martingale IQ passou a usar exclusivamente a cor do candle M1 fechado exato: CALL vence em
+  `close > open`, PUT em `close < open` e igualdade encerra como empate. O fechamento-alvo,
+  ativo, direção, estratégia, stake e hash da evidência são persistidos; callback/P&L da IQ não
+  avança G1/G2. A recuperação exige exposição financeira anterior reconciliada, mantém todos os
+  gates e deve ocorrer em até 20 segundos após o fechamento, sem retry atrasado ou duplicado.
+- Overflow de evento terminal não remove mais o tracking da ordem e fica observável como
+  `reconciliation_required`. A migração 11 adiciona trilha append-only para eventual reparo
+  aprovado por nova evidência, sem alterar automaticamente o banco real.
+- Validação: 1.443 passed, 4 skipped, 0 failed em 452,12 s; Ruff check/format em 540 arquivos,
+  mypy em 321 módulos, compileall e diff-check aprovados. O aviso conhecido `WinError 5` ocorreu
+  somente na limpeza temporária do pytest após exit 0.
+- Build canônico PyInstaller 6.22.2 aprovado em caminho Windows curto: scanner com zero segredos,
+  manifesto de 554 arquivos, integridade e health-check interno aprovados. Portátil com 1.000
+  entradas, recurso único `TradingLab.payload.zip`, ProductVersion 1.9.11, 59.332.608 bytes e
+  SHA-256 `626F4AC2AA2E7775D6E68F7B2DC5B2410B7F22C267E512DDBE6A7355154E1A4F`. Artefato:
+  `dist/iqfix/TradingLab-Desktop-v1.9.11-IQ-RESULT-BALANCE-CANDLE-MG-FIX.exe`.
+- O smoke do onedir passou pelo health-check canônico. O portátil não foi iniciado porque a versão
+  anterior estava aberta sob o mutex único; nenhum processo do operador foi interrompido e nenhuma
+  credencial, login ou ordem externa foi usada.
+
+## 2026-09-11 — Projeção resiliente do saldo IQ e histórico financeiro explícito
+
+- O journal real confirmou flapping, não indisponibilidade contínua: entre `02:00:12Z` e
+  `02:08:29Z` ocorreram 19 `health_gate_blocked` e 19 `health_gate_cleared` com
+  `IQOPTION_BALANCE_STALE`. Uma falha transitória de uma consulta a cada cinco segundos convertia
+  imediatamente uma leitura ainda recente em stale, produzindo a tela permanentemente instável.
+- A leitura `get-balances` também exigia o mesmo `request_id` enviado pelo cliente. A IQ pode omitir
+  ou reescrever esse identificador em frames completos e válidos. Como há uma fila single-flight
+  exclusiva e fence por geração da conexão, qualquer snapshot completo que passe validação de
+  balance ID, modo, moeda, valor e precisão agora satisfaz a leitura corrente sem perder isolamento.
+- `IQOptionBalanceMonitor` passou a projetar `CONFIRMED`, `RETRYING`, `STALE` e `UNAVAILABLE`, com
+  contador de falhas consecutivas. Falha transitória preserva a idade real e mantém o gate aberto
+  enquanto a última observação ainda está dentro dos 15 segundos originais; não houve ampliação
+  artificial do TTL. Sucesso zera o contador. Expiração real ou ausência de observação bloqueia.
+- O protocolo e a UI agora transportam qualidade, idade em segundos e tentativas. A tela distingue
+  saldo confirmado, última confirmação durante nova tentativa e falta de confirmação com entradas
+  bloqueadas; o tooltip preserva o horário UTC recebido, nunca remintado por leitura de cache.
+- O livro de ordens mostra um resumo dos registros financeiros históricos não confirmados e troca
+  o rótulo genérico por `RESULTADO FINANCIERO NO CONFIRMADO`, explicando que esses valores continuam
+  desconhecidos e não alimentam martingale. A progressão G1/G2 permanece exclusivamente determinada
+  pelo fechamento técnico do candle.
+- Foram adicionados testes de histerese do gate, estados da UI, resposta de saldo com `request_id`
+  reescrito e protocolo compatível. Testes IQ/protocolo focados: 65 aprovados; relógio, radar e
+  executor: 35 aprovados; 292 testes restantes da ordem de coleta aprovados. A coleção completa foi
+  coberta em segmentos após duas asserções temporais antigas serem tornadas determinísticas no
+  segundo 10 da janela M1. O grupo de crash que oscilou sob carga passou isolado 10/10. Ruff completo,
+  mypy estrito em 317 módulos, compileall e diff-check aprovados. Permanece apenas o aviso conhecido
+  `WinError 5` do pytest ao limpar seu link temporário depois de exit code zero.
+- Build canônico PyInstaller aprovado em `C:\tlb_iq_balance_resilience\TradingLab`: scanner com zero
+  segredos, 448 arquivos no manifesto, hash de manifesto
+  `a299e2c33685f4570a04cc7b2cfa7bcfd39c1ab3bd82cc3046a912a246d3e011`, integridade e health-check
+  empacotado aprovados. Portátil com 890 entradas, recurso único `TradingLab.payload.zip`,
+  ProductVersion 1.9.11, 48.473.600 bytes e SHA-256
+  `0CAAEB5543C1757693031AF771ADB24279B8C4B00A111C64905983E737003A0B`. Artefato:
+  `dist/iqresilience/TradingLab-Desktop-v1.9.11-IQ-SALDO-RESILIENTE.exe`.
+- Nenhum processo do operador foi encerrado, o EXE anterior não foi sobrescrito e nenhum login,
+  consulta financeira externa ou ordem real foi executado durante implementação e validação.
+
+## 2026-09-11 — Plano pós-auditoria da madrugada IQ Option (sem implementação)
+
+- A pedido do operador, foi elaborado o plano em
+  `docs/IQOPTION_OVERNIGHT_RELIABILITY_CORRECTION_PLAN_20260911.md`, baseado no relatório anterior
+  e em revisão somente leitura do código atual. A nova tarefa altera somente documentação.
+- O plano cobre identificação da ordem UNKNOWN, ACK tardio, distinção entre falha de consulta e
+  ausência comprovada, orçamento durável de reconciliação, relógio entre processos, saldo atômico,
+  separação de sincronização e transporte, prioridade real de G1/G2 e deadline/expiração imutáveis.
+- A revisão confirmou que o cooldown financeiro comum já é ignorado no caminho MG; os gargalos
+  incluem consultas síncronas anteriores, prioridade nominal e janela revalidada com instante
+  anterior a chamadas bloqueantes. Catálogo vazio também impede acompanhamento do ciclo atual.
+- Foram incluídos catálogo por motivos, falhas de manifesto, diferenciação entre resultados
+  técnicos/financeiros e revisão histórica por evidência, além de testes de crash/replay/soak,
+  isolamento Deriv e ativação sem contornar a ordem ambígua.
+- Contagens operacionais são identificadas como provenientes da auditoria anterior, sem declaração
+  de nova validação de saldo/extrato ou de prova externa das hipóteses. Não houve alteração de
+  código, banco vivo, configuração, processo, login, ordem ou EXE nesta tarefa.
+
+## 2026-09-11 — Correção pós-auditoria IQ: UNKNOWN, clock, saldo, filas e prazo do martingale
+
+- ACK tardio de abertura agora pode completar a identidade da ordem depois do timeout, por registro
+  local limitado e sem repetir a compra. A reconciliação diferencia ausência válida de fonte
+  indisponível/parcial, executa uma consulta por ciclo com backoff durável e encaminha para revisão
+  após oito tentativas ou 15 minutos sem liberar reserva nem converter `UNKNOWN` artificialmente.
+- Clock e saldo passaram a transportar proveniência, geração e sequência/revisão. A idade é composta
+  pelo monotônico de cada processo; regressões são rejeitadas. Push de saldo atualiza snapshot
+  atômico, acorda a leitura pendente e não pode ser sobrescrito por full snapshot antigo. Falha
+  exclusiva de saldo não reinicia uma sessão saudável.
+- O connection worker separa fila crítica de catálogo limitado. Ping, health, eventos financeiros,
+  abertura/reconciliação, candle/quote, saldo e clock preservam prioridade. Rotas sem correlação
+  continuam protegidas pelo isolamento de sessão.
+- O caminho G1/G2 antecede a descoberta global, conserva deadline e expiração desde o candle-alvo e
+  revalida a janela imediatamente antes do transporte. Uma consulta de payout iniciada no segundo
+  18 e concluída no 21 encerra `ENTRY_WINDOW_MISSED`, sem envio, novo deadline ou troca de vela.
+- A atividade mostra tentativas, próximo prazo e revisão necessária, mantendo o bloqueio financeiro.
+  Resultado técnico da vela continua sendo o único gatilho de progressão do martingale; evidência
+  financeira da IQ permanece responsável por P&L e liquidação.
+- Validação final: 1.466 passed, 4 skipped, 0 failed em 496,00 s. Ruff check/format em 536 arquivos,
+  mypy em 317 fontes, compileall, pip check e diff-check passaram. O `WinError 5` conhecido apareceu
+  somente na limpeza temporária do pytest após o resultado aprovado.
+- Build onedir PyInstaller aprovado em `C:\tlb_iq_reliability_20260911\TradingLab`: scanner zero
+  segredos, manifesto de 554 arquivos, SHA-256 de manifesto
+  `d6f3ee6c05bd7a9305e1e1f18d7b543c80ba1cba804e80bd70ab1badc47a4477`, integridade e health-check
+  aprovados. Portátil com 996 entradas, recurso único `TradingLab.payload.zip`, ProductVersion
+  1.9.11, 59.382.272 bytes, health-check exit 0 e SHA-256
+  `EE04ABF542ED25DDBCF628437155D0DCB43238F8551BB1FA8F6299E67B01C0E2`. Artefato:
+  `dist/iq-reliability-20260911/TradingLab-Desktop-v1.9.11-IQ-RELIABILITY-FIX.exe`.
+- O EXE anterior não foi sobrescrito e o novo pacote não foi ativado. Nenhum processo operacional,
+  perfil, credencial, login, consulta externa ou ordem foi tocado. Revisão da ordem histórica,
+  validação Practice opt-in e publicação das fontes remotas de manifesto permanecem pendentes.
+
+## 2026-09-11 — Resolução conservadora do gate IQ `HG_ORDER_UNKNOWN`
+
+- A inspeção somente leitura confirmou que o alerta da UI não era falha de configuração: a ordem
+  `744946ee-0667-48dc-9cc8-bdb9ec1f3143`, EURJPY-OTC PUT de USD 1,00, permanece `UNKNOWN`; sua
+  outbox está `AMBIGUOUS`, sem broker ID, a reserva continua ativa e não há evento/evidência
+  financeira associado. Foram persistidas 705 consultas até 15:51:23 UTC.
+- A causa residual era dupla: contratos binários antigos não devolvem o `client_order_id` local no
+  histórico, portanto a pesquisa nunca poderia casar essa ordem; além disso, o worker IQ não
+  serializava o `not_found_evidence` já suportado pelo protocolo e pelo writer.
+- A reconciliação passou a aceitar somente uma correspondência histórica única por ativo, direção,
+  stake e instante dentro de 20 segundos. Duplicidade, histórico truncado, campo incompleto ou
+  conflito continuam `UNKNOWN`.
+- Uma negativa somente é autoritativa quando a resposta contém portfólio aberto completo e
+  histórico fechado com menos que o limite de 100 itens, com identidade temporal verificável. Duas
+  negativas completas separadas por pelo menos 10 segundos são exigidas para marcar a ordem como
+  não executada, reconciliar a outbox e liberar a reserva idempotentemente.
+- O IPC agora preserva a prova negativa e o scheduler antecipa somente sua segunda confirmação,
+  sem reabrir polling agressivo geral. A mensagem da UI explica em linguagem operacional que o gate
+  previne duplicidade financeira, em vez de mostrar apenas `HG_ORDER_UNKNOWN` como suposto erro.
+- Regressão focada: 102 testes aprovados. Regressão integral: 1.471 passed, 4 skipped, zero falhas em
+  402,66 s. Ruff check/format em 536 arquivos, mypy em 317 fontes, compileall, pip check e diff-check
+  aprovados; permaneceu apenas o aviso conhecido do pytest na limpeza temporária após exit 0.
+- Build onedir em `C:\tlb_iq_unknown_resolution_20260911\TradingLab`: scanner zero segredos,
+  manifesto de 554 arquivos, SHA-256 de manifesto
+  `9b6239cfdacc7ee27865f37c03f44033a93cbfaac4722055d1e6d549d407f47a`, integridade e health-check
+  aprovados. Portátil com 996 entradas, recurso único `TradingLab.payload.zip`, ProductVersion
+  1.9.11, 59.398.144 bytes, health-check exit 0 e SHA-256
+  `FD617C2C58DC4E8EC41E6AB96A51E8BD97CCFB07801309647A308DE14CA978B9`. Artefato:
+  `dist/iq-unknown-resolution-20260911/TradingLab-Desktop-v1.9.11-IQ-UNKNOWN-RESOLUTION-FIX.exe`.
+- Nenhum processo foi terminado pelo trabalho. A instância operacional fechou externamente durante
+  a compilação; o perfil permaneceu somente leitura, sem login, consulta externa, ordem ou reparo
+  manual. O EXE anterior não foi sobrescrito e o novo não foi ativado automaticamente.
+
+## 2026-09-11 — IQ Option: recuperação automática de ordem ambígua sem popup
+
+- O uso do build anterior confirmou uma falha de compatibilidade no histórico binário: a IQ informa
+  direção em `dir`, mas o fingerprint antigo lia apenas `direction`/aliases. O contrato localizado
+  também era descartado na fronteira seguinte por não conter o `client_order_id` local.
+- O leitor agora reconhece `dir`, normaliza a referência local somente depois de um match único e
+  marca a identidade como `HISTORY_FINGERPRINT`. Histórico fechado passou de 100 para 500 itens e
+  uma página cheia só comprova ausência quando alcança o início completo da janela temporal.
+- Ligar o IQ durante os gates recuperáveis persiste a intenção e retorna aceito. O bot fica armado,
+  o gate continua impedindo qualquer envio, a reconciliação é acionada e a execução retoma sozinha
+  após evidência conclusiva. Desligar cancela a intenção normalmente.
+- A UI substitui códigos `HG_*` recuperáveis por “recuperação automática”, mostra
+  “BOT ARMADO · SINCRONIZANDO” e não abre modal nesse caso. Bloqueios definitivos continuam
+  visíveis e rejeitados.
+- Regressão focada de 78 testes e regressão ampliada de 112 testes aprovadas. Suíte integral:
+  1.476 passed, 4 skipped, zero falhas em 476,52 s. Ruff em 540 arquivos, mypy em 321 fontes,
+  compileall, pip check e diff-check aprovados.
+- Build onedir em `C:\tlb_iq_auto_recovery_20260911\TradingLab`: scanner limpo, manifesto de 554
+  arquivos, integridade e health-check aprovados; SHA-256 do onedir
+  `05DBBC9FD29912B6957F47D2646046DB1E45AB545B5A2FFAD86DBDD8CDD10A31`.
+- Portátil: `dist/iq-auto-recovery-20260911/TradingLab-Desktop-v1.9.11-IQ-AUTO-RECOVERY.exe`,
+  59.403.264 bytes, ProductVersion 1.9.11, recurso único `TradingLab.payload.zip`, 1.000 entradas e
+  SHA-256 `131B94417BC6326C2B4D6AADF474879572DA173C77A404B579C6403B979E9F0C`.
+- Os oito processos operacionais permaneceram ativos. Nenhum perfil, credencial, login ou ordem foi
+  modificado, e nenhum build anterior foi sobrescrito. O portátil não foi aberto sobre a instância;
+  o onedir incorporado passou o health-check canônico.

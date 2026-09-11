@@ -243,6 +243,7 @@ class OrderCoordinator:
                 duration=request.duration,
                 duration_unit=request.duration_unit,
                 prediction_digit=request.prediction_digit,
+                contract_expiry_at=request.contract_expiry_at,
             )
             try:
                 self._uow.persist(

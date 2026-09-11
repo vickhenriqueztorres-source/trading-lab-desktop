@@ -410,6 +410,101 @@ OUTCOMES_V2_EVIDENCE = Migration(
     ),
 )
 
+IQOPTION_SETTLEMENT_REPAIR_AUDIT = Migration(
+    version=11,
+    name="0011_iqoption_settlement_repair_audit",
+    statements=(
+        """
+        CREATE TABLE iqoption_settlement_repair_batches (
+            batch_id TEXT PRIMARY KEY,
+            predicate_version INTEGER NOT NULL CHECK (predicate_version = 1),
+            state TEXT NOT NULL CHECK (
+                state IN ('DISCOVERED', 'APPROVED', 'APPLIED', 'COMPLETED_NO_CHANGE', 'BLOCKED')
+            ),
+            requested_by TEXT NOT NULL CHECK (length(requested_by) BETWEEN 1 AND 128),
+            request_reason TEXT NOT NULL CHECK (length(request_reason) BETWEEN 1 AND 512),
+            discovered_at TEXT NOT NULL,
+            candidate_count INTEGER NOT NULL CHECK (candidate_count >= 0),
+            approved_by TEXT,
+            approval_reason TEXT,
+            approved_at TEXT,
+            applied_by TEXT,
+            applied_at TEXT,
+            last_reason_code TEXT
+        )
+        """,
+        """
+        CREATE TABLE iqoption_settlement_repairs (
+            repair_id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL REFERENCES iqoption_settlement_repair_batches(batch_id),
+            order_id TEXT NOT NULL UNIQUE REFERENCES orders(order_id),
+            state TEXT NOT NULL CHECK (
+                state IN (
+                    'PENDING_EVIDENCE', 'READY_FOR_APPROVAL', 'APPROVED', 'APPLIED',
+                    'CONFIRMED_NO_CHANGE', 'UNRESOLVED', 'CONFLICT'
+                )
+            ),
+            detected_reason TEXT NOT NULL,
+            original_state TEXT NOT NULL CHECK (original_state = 'SETTLED'),
+            original_pnl_minor INTEGER NOT NULL,
+            original_resolution_source TEXT NOT NULL,
+            original_resolution_evidence_id TEXT
+                REFERENCES reconciliation_evidence(evidence_id),
+            original_resolved_at TEXT,
+            original_updated_at TEXT NOT NULL,
+            original_fingerprint TEXT NOT NULL CHECK (length(original_fingerprint) = 64),
+            verification_evidence_id TEXT REFERENCES reconciliation_evidence(evidence_id),
+            proposed_pnl_minor INTEGER,
+            verified_at TEXT,
+            applied_at TEXT,
+            last_reason_code TEXT,
+            UNIQUE(batch_id, order_id)
+        )
+        """,
+        """
+        CREATE INDEX ix_iqoption_settlement_repairs_batch_state
+        ON iqoption_settlement_repairs(batch_id, state, order_id)
+        """,
+        """
+        CREATE TABLE iqoption_settlement_repair_events (
+            event_id TEXT PRIMARY KEY,
+            repair_id TEXT NOT NULL REFERENCES iqoption_settlement_repairs(repair_id),
+            sequence INTEGER NOT NULL CHECK (sequence > 0),
+            event_type TEXT NOT NULL,
+            previous_state TEXT,
+            new_state TEXT NOT NULL,
+            actor TEXT NOT NULL CHECK (length(actor) BETWEEN 1 AND 128),
+            reason_code TEXT,
+            evidence_id TEXT REFERENCES reconciliation_evidence(evidence_id),
+            previous_pnl_minor INTEGER,
+            proposed_pnl_minor INTEGER,
+            occurred_at TEXT NOT NULL,
+            previous_event_hash TEXT,
+            event_hash TEXT NOT NULL CHECK (length(event_hash) = 64),
+            UNIQUE(repair_id, sequence)
+        )
+        """,
+        """
+        CREATE INDEX ix_iqoption_settlement_repair_events_repair
+        ON iqoption_settlement_repair_events(repair_id, sequence)
+        """,
+        """
+        CREATE TRIGGER iqoption_settlement_repair_events_no_update
+        BEFORE UPDATE ON iqoption_settlement_repair_events
+        BEGIN
+            SELECT RAISE(ABORT, 'settlement repair audit is append-only');
+        END
+        """,
+        """
+        CREATE TRIGGER iqoption_settlement_repair_events_no_delete
+        BEFORE DELETE ON iqoption_settlement_repair_events
+        BEGIN
+            SELECT RAISE(ABORT, 'settlement repair audit is append-only');
+        END
+        """,
+    ),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
@@ -421,6 +516,7 @@ MIGRATIONS = (
     MANIFEST_EXECUTION,
     IQOPTION_EXECUTION_STATE,
     OUTCOMES_V2_EVIDENCE,
+    IQOPTION_SETTLEMENT_REPAIR_AUDIT,
 )
 
 

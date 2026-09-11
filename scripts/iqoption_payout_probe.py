@@ -112,7 +112,7 @@ def main() -> int:
         controller = IQOptionConnectionSafetyController(
             IQOptionConnectionSafetyStore(args.profile_dir / "core")
         )
-        admission = controller.admit_http_login()
+        admission = controller.admit_http_login(source="manual")
         if not admission.allowed:
             raise RuntimeError(admission.reason_code)
         session = ProbeSession(

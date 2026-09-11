@@ -475,7 +475,13 @@ def test_real_loopback_websocket_accepts_large_catalogue_but_enforces_bound(
             server.shutdown()
             thread.join(timeout=2)
         assert not thread.is_alive()
-    assert set(names) <= {"authenticate", "sendMessage", "timesync", "heartbeat"}
+    assert set(names) <= {
+        "authenticate",
+        "sendMessage",
+        "subscribeMessage",
+        "timesync",
+        "heartbeat",
+    }
 
 
 @pytest.mark.parametrize(
@@ -527,6 +533,7 @@ def test_order_projection_reuses_cells_and_renders_new_settlement() -> None:
     from PySide6.QtWidgets import QApplication
 
     from apps.ui.components.order_table import OrderTableView
+    from apps.ui.i18n import t
     from packages.protocol.ui_messages import OrderSummary
 
     app = QApplication.instance() or QApplication([])
@@ -548,6 +555,37 @@ def test_order_projection_reuses_cells_and_renders_new_settlement() -> None:
     assert widget._table.item(0, 0) is first
     widget.update_orders([replace(order, state="SETTLED", realized_pnl_minor_units=85)])
     assert "WON" in widget._table.item(0, 5).text()
+    widget.update_orders([replace(order, state="SETTLED", realized_pnl_minor_units=0)])
+    tie_label = widget._table.item(0, 5).text()
+    assert "TIE / REFUND" in tie_label
+    assert "WON" not in tie_label
+    widget.update_orders(
+        [
+            replace(
+                order,
+                state="SETTLED",
+                realized_pnl_minor_units=0,
+                result_review_required=True,
+            )
+        ]
+    )
+    review_label = widget._table.item(0, 5).text()
+    assert review_label == t("orders.result.unconfirmed")
+    assert "WON" not in review_label
+    widget.update_orders(
+        [
+            replace(
+                order,
+                state="UNKNOWN",
+                reconciliation_attempt_count=8,
+                reconciliation_review_required=True,
+                reconciliation_next_due_at=datetime.now(UTC),
+            )
+        ]
+    )
+    reconciliation_label = widget._table.item(0, 5).text()
+    assert reconciliation_label == t("orders.reconciliation.review")
+    assert "8" in widget._table.item(0, 5).toolTip()
     widget.update_orders([])
     assert widget.order_count == 0
     widget.close()

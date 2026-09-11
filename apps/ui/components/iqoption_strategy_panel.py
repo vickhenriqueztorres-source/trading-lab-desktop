@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from PySide6.QtCore import Signal
@@ -61,6 +62,20 @@ class IqOptionStrategyConfigWidget(QFrame):
         self._strategy.currentIndexChanged.connect(self._sync_selection)
         self._stake = self._money_spin(1.00, 100.00, 1.00)
         form.addRow(t("iq.risk.stake"), self._stake)
+        self._martingale = QComboBox()
+        self._martingale.addItem(t("iq.risk.martingale.off"), 0)
+        self._martingale.addItem(t("iq.risk.martingale.g1"), 1)
+        self._martingale.addItem(t("iq.risk.martingale.g2"), 2)
+        form.addRow(t("iq.risk.martingale"), self._martingale)
+        self._martingale_multiplier = QDoubleSpinBox()
+        self._martingale_multiplier.setDecimals(2)
+        self._martingale_multiplier.setRange(1.10, 3.00)
+        self._martingale_multiplier.setSingleStep(0.10)
+        self._martingale_multiplier.setSuffix("×")
+        self._martingale_multiplier.setValue(2.00)
+        form.addRow(t("iq.risk.martingale_multiplier"), self._martingale_multiplier)
+        self._martingale_max_stake = self._money_spin(1.00, 10_000.00, 4.00)
+        form.addRow(t("iq.risk.martingale_cap"), self._martingale_max_stake)
         self._daily_stop = self._money_spin(0.01, 10_000.00, 10.00)
         form.addRow(t("iq.risk.daily_stop"), self._daily_stop)
         self._daily_take = self._money_spin(0.01, 10_000.00, 10.00)
@@ -76,6 +91,15 @@ class IqOptionStrategyConfigWidget(QFrame):
         self._daily_trades.setRange(1, 100)
         form.addRow(t("iq.risk.daily_trades"), self._daily_trades)
         layout.addLayout(form)
+
+        self._martingale_projection = QLabel()
+        self._martingale_projection.setWordWrap(True)
+        self._martingale_projection.setObjectName("SafetyNotice")
+        layout.addWidget(self._martingale_projection)
+        self._martingale.currentIndexChanged.connect(self._update_martingale_projection)
+        self._martingale_multiplier.valueChanged.connect(self._update_martingale_projection)
+        self._martingale_max_stake.valueChanged.connect(self._update_martingale_projection)
+        self._stake.valueChanged.connect(self._update_martingale_projection)
 
         self._apply = QPushButton()
         self._apply.setObjectName("PrimaryButton")
@@ -207,9 +231,17 @@ class IqOptionStrategyConfigWidget(QFrame):
         self._losses.setValue(config.max_consecutive_losses)
         self._cooldown.setValue(config.cooldown_seconds_after_loss)
         self._daily_trades.setValue(config.max_daily_trades)
+        self._martingale.setCurrentIndex(
+            max(0, self._martingale.findData(config.martingale_max_steps))
+            if config.martingale_enabled
+            else 0
+        )
+        self._martingale_multiplier.setValue(config.martingale_multiplier_basis_points / 10_000)
+        self._martingale_max_stake.setValue(config.martingale_max_stake_minor_units / 100)
         self._mode.blockSignals(False)
         self._strategy.blockSignals(False)
         self._sync_selection()
+        self._update_martingale_projection()
         if (
             config.symbol != "AUTO"
             and config.strategy_id != "iqoption-rsi-demo"
@@ -230,6 +262,39 @@ class IqOptionStrategyConfigWidget(QFrame):
         if not self._status.text():
             self._status.setText(t("iq.risk.ready"))
 
+    def _update_martingale_projection(self) -> None:
+        steps = int(self._martingale.currentData() or 0)
+        enabled = steps > 0
+        self._martingale_multiplier.setEnabled(enabled)
+        self._martingale_max_stake.setEnabled(enabled)
+        if not enabled:
+            self._martingale_projection.setText(t("iq.risk.martingale_disabled"))
+            return
+        current = round(self._stake.value() * 100)
+        cap = round(self._martingale_max_stake.value() * 100)
+        multiplier = self._martingale_multiplier.value()
+        stakes = [current]
+        for _step in range(steps):
+            current = min(
+                int(
+                    (Decimal(current) * Decimal(str(multiplier))).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                ),
+                cap,
+            )
+            stakes.append(current)
+        sequence = " · ".join(
+            f"G{index} USD {amount / 100:.2f}" for index, amount in enumerate(stakes)
+        )
+        self._martingale_projection.setText(
+            t(
+                "iq.risk.martingale_projection",
+                sequence=sequence,
+                exposure=f"{sum(stakes) / 100:.2f}",
+            )
+        )
+
     def _emit_config(self) -> None:
         self._sync_selection()
         automatic = self._mode.currentText() == "AUTO"
@@ -240,17 +305,28 @@ class IqOptionStrategyConfigWidget(QFrame):
         ):
             return
         entry = self._entries.get(str(self._strategy.currentData()))
-        config = UiIqOptionRiskConfig(
-            strategy_id="AUTO" if automatic else str(self._strategy.currentData()),
-            symbol="AUTO" if automatic else str(self._symbol.currentData()),
-            timeframe_seconds=60
-            if entry is None or automatic
-            else {"M1": 60, "M5": 300, "M15": 900}[entry["timeframe"]],
-            stake_minor_units=round(self._stake.value() * 100),
-            daily_stop_loss_minor_units=round(self._daily_stop.value() * 100),
-            daily_take_profit_minor_units=round(self._daily_take.value() * 100),
-            max_consecutive_losses=self._losses.value(),
-            cooldown_seconds_after_loss=self._cooldown.value(),
-            max_daily_trades=self._daily_trades.value(),
-        )
+        steps = int(self._martingale.currentData() or 0)
+        try:
+            config = UiIqOptionRiskConfig(
+                strategy_id="AUTO" if automatic else str(self._strategy.currentData()),
+                symbol="AUTO" if automatic else str(self._symbol.currentData()),
+                timeframe_seconds=60
+                if entry is None or automatic
+                else {"M1": 60, "M5": 300, "M15": 900}[entry["timeframe"]],
+                stake_minor_units=round(self._stake.value() * 100),
+                daily_stop_loss_minor_units=round(self._daily_stop.value() * 100),
+                daily_take_profit_minor_units=round(self._daily_take.value() * 100),
+                max_consecutive_losses=self._losses.value(),
+                cooldown_seconds_after_loss=self._cooldown.value(),
+                max_daily_trades=self._daily_trades.value(),
+                martingale_enabled=steps > 0,
+                martingale_multiplier_basis_points=int(
+                    Decimal(str(self._martingale_multiplier.value())) * Decimal(10_000)
+                ),
+                martingale_max_steps=max(1, steps),
+                martingale_max_stake_minor_units=round(self._martingale_max_stake.value() * 100),
+            )
+        except ValueError as exc:
+            self._status.setText(t("iq.risk.rejected", reason=str(exc)))
+            return
         self.config_apply_requested.emit(config)

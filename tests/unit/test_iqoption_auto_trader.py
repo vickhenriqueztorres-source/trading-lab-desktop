@@ -176,6 +176,12 @@ def _falling_prices() -> list[str]:
     return [str(Decimal("1.1000") - Decimal(index) * Decimal("0.0010")) for index in range(20)]
 
 
+def _safe_entry_clock() -> datetime:
+    """Keep submission tests inside the M1 admission window deterministically."""
+
+    return datetime(2026, 1, 1, 12, 0, 10, tzinfo=UTC)
+
+
 def test_signal_uses_broker_candles_and_persists_through_core() -> None:
     client = FakeClient(_make_candles(_falling_prices()))
     runtime = FakeRuntime()
@@ -184,6 +190,7 @@ def test_signal_uses_broker_candles_and_persists_through_core() -> None:
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
     )
 
     trader._evaluate_cycle()
@@ -209,6 +216,7 @@ def test_incremental_rsi_engine_is_explicit_and_still_uses_core_pipeline() -> No
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
         execution_flags_provider=lambda: IqOptionExecutionFlags(
             legacy_entries_enabled=False,
             indicator_shadow_enabled=True,
@@ -235,6 +243,7 @@ def test_disabling_all_entry_engines_does_not_fetch_or_submit() -> None:
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
         execution_flags_provider=lambda: IqOptionExecutionFlags(
             legacy_entries_enabled=False,
             indicator_shadow_enabled=False,
@@ -283,6 +292,7 @@ def test_core_submission_failure_is_never_reported_as_success() -> None:
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
     )
 
     trader._evaluate_cycle()
@@ -344,6 +354,7 @@ def test_health_gate_failure_reason_remains_visible_after_scan_continues() -> No
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
     )
 
     trader._evaluate_cycle()
@@ -365,6 +376,7 @@ def test_remote_minimum_rejection_is_stable_and_blocks_more_scan_dispatches() ->
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
     )
 
     trader._evaluate_cycle()
@@ -417,6 +429,7 @@ def test_suspended_or_unavailable_auto_asset_does_not_freeze_other_assets(
         runtime_provider=lambda: runtime,  # type: ignore[arg-type]
         risk_config_provider=lambda: IqOptionRiskConfig(symbol="AUTO"),
         operator_armed=lambda: True,
+        utc_clock=_safe_entry_clock,
         catalog_provider=lambda: explicit_signal_catalog(("EURUSD-OTC", "GBPUSD-OTC")),
         monitor_provider=lambda: SimpleNamespace(ready=True),
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
 from apps.ui.components.iqoption_strategy_panel import IqOptionStrategyConfigWidget
 from apps.ui.components.iqoption_workspace import IqOptionWorkspaceWidget
 from apps.ui.components.workspaces import BrokerWorkspaceWidget
-from packages.protocol import BrokerCardStatus, UiAccountMode
+from packages.protocol import BrokerCardStatus, UiAccountMode, UiBalanceQuality
 
 
 def test_iqoption_workspace_exposes_protected_practice_access() -> None:
@@ -55,6 +56,33 @@ def test_iqoption_workspace_renders_connected_balance_projection() -> None:
 
     visible_text = {label.text() for label in workspace.findChildren(QLabel)}
     assert "USD 9,870.96" in visible_text
+    assert application is not None
+
+
+def test_iqoption_workspace_distinguishes_retrying_from_stale_balance() -> None:
+    application = QApplication.instance() or QApplication([])
+    workspace = IqOptionWorkspaceWidget()
+    observed = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+
+    workspace.update_status(
+        BrokerCardStatus(
+            broker="IQOPTION",
+            account_mode=UiAccountMode.PRACTICE,
+            is_connected=True,
+            balance_minor_units=54_975,
+            currency="USD",
+            clock_synced=True,
+            balance_observed_at_utc=observed,
+            balance_is_fresh=True,
+            balance_quality=UiBalanceQuality.RETRYING,
+            balance_age_seconds=5,
+            balance_retry_count=1,
+        )
+    )
+
+    assert workspace._balance_value.text() == "USD 549.75"
+    assert "ÚLTIMO SALDO CONFIRMADO há 5s" in workspace._balance_freshness.text()
+    assert "tentativa 1" in workspace._balance_freshness.text()
     assert application is not None
 
 

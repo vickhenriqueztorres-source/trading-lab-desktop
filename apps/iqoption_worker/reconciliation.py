@@ -4,22 +4,25 @@ import hashlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any, Protocol
 from uuid import uuid4
 
 from apps.iqoption_worker.order_session import IQOptionOrderSession
 from apps.iqoption_worker.schema import IQOptionWorkerError
 from packages.brokers.iqoption.community_read_only import IQOptionExternalError
+from packages.brokers.iqoption.result_parser import (
+    IQOptionResultError,
+    IQOptionResultSource,
+    parse_iqoption_financial_result,
+)
 from packages.domain.models import (
     Broker,
-    ExternalOrderStatus,
     OrderStatusQuery,
     ReconciliationEvidence,
     ReconciliationSource,
     StatusQueryOutcome,
 )
-from packages.protocol.messages import OrderStatusResult
+from packages.protocol.messages import NotFoundEvidence, OrderStatusResult
 
 
 class IQOptionReconciliationTransport(Protocol):
@@ -65,7 +68,11 @@ class IQOptionReconciliationHandler:
             )
 
         contract_data: dict[str, Any] | None = None
+        result_source: IQOptionResultSource | None = None
         raw_bytes: bytes = b""
+        valid_empty_response = False
+        last_unavailable_reason: str | None = None
+        not_found_evidence: NotFoundEvidence | None = None
 
         # 1. Query the exact broker id through the authoritative binary-option
         # status route. Recent option history is only a compatibility fallback.
@@ -83,15 +90,28 @@ class IQOptionReconciliationHandler:
                         and str(res.get("id", res.get("option_id"))) == query.broker_order_id
                     ):
                         contract_data = res
+                        result_source = IQOptionResultSource.BETINFO
                         raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
-            except (IQOptionWorkerError, IQOptionExternalError, OSError, TimeoutError, ValueError):
-                pass
+                else:
+                    valid_empty_response = True
+            except (
+                IQOptionWorkerError,
+                IQOptionExternalError,
+                OSError,
+                TimeoutError,
+                ValueError,
+            ) as exc:
+                last_unavailable_reason = getattr(
+                    exc,
+                    "reason_code",
+                    "IQOPTION_RECONCILIATION_UNAVAILABLE",
+                )
 
         if contract_data is None and query.broker_order_id is not None:
             try:
                 response = self._transport.request(
                     "get_options",
-                    {"id": int(query.broker_order_id)},
+                    self._history_query_payload(query, broker_order_id=query.broker_order_id),
                     timeout=self._timeout_seconds,
                 )
                 if response.get("isSuccessful"):
@@ -101,19 +121,38 @@ class IQOptionReconciliationHandler:
                         and str(res.get("id", res.get("option_id"))) == query.broker_order_id
                     ):
                         contract_data = res
+                        result_source = IQOptionResultSource.OPTIONS_HISTORY
                         raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
-            except (IQOptionWorkerError, IQOptionExternalError, OSError, TimeoutError, ValueError):
-                pass
+                else:
+                    coverage = self._negative_evidence_from_response(response)
+                    not_found_evidence = coverage or not_found_evidence
+                    reason_code = response.get("reason_code")
+                    if isinstance(reason_code, str) and reason_code:
+                        last_unavailable_reason = reason_code
+                    else:
+                        valid_empty_response = True
+            except (
+                IQOptionWorkerError,
+                IQOptionExternalError,
+                OSError,
+                TimeoutError,
+                ValueError,
+            ) as exc:
+                last_unavailable_reason = getattr(
+                    exc,
+                    "reason_code",
+                    "IQOPTION_RECONCILIATION_UNAVAILABLE",
+                )
 
         # 2. Query by the durable client reference when the submit response was
-        # ambiguous and therefore did not yield a broker id. The transport must
-        # return an exact client_order_id match; otherwise reconciliation remains
-        # fail-closed as NOT_FOUND/UNKNOWN.
+        # ambiguous and therefore did not yield a broker id. The transport may
+        # recover that reference only from one complete historical fingerprint;
+        # otherwise reconciliation remains fail-closed as NOT_FOUND/UNKNOWN.
         if contract_data is None:
             try:
                 response = self._transport.request(
                     "get_options",
-                    {"client_order_id": query.order_id},
+                    self._history_query_payload(query),
                     timeout=self._timeout_seconds,
                 )
                 if response.get("isSuccessful"):
@@ -123,11 +162,43 @@ class IQOptionReconciliationHandler:
                         and res.get("client_order_id") == query.client_order_ref
                     ):
                         contract_data = res
+                        result_source = IQOptionResultSource.OPTIONS_HISTORY
                         raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
-            except (IQOptionWorkerError, IQOptionExternalError, OSError, TimeoutError, ValueError):
-                pass
+                else:
+                    coverage = self._negative_evidence_from_response(response)
+                    not_found_evidence = coverage or not_found_evidence
+                    reason_code = response.get("reason_code")
+                    if isinstance(reason_code, str) and reason_code:
+                        last_unavailable_reason = reason_code
+                    else:
+                        valid_empty_response = True
+            except (
+                IQOptionWorkerError,
+                IQOptionExternalError,
+                OSError,
+                TimeoutError,
+                ValueError,
+            ) as exc:
+                last_unavailable_reason = getattr(
+                    exc,
+                    "reason_code",
+                    "IQOPTION_RECONCILIATION_UNAVAILABLE",
+                )
 
         if contract_data is None:
+            # Any failed route makes coverage incomplete even when another
+            # source returned a valid empty result.  "Not found" is reserved
+            # for a wholly successful search, and still carries no proof of
+            # non-execution unless the protocol supplies explicit coverage.
+            if last_unavailable_reason is not None or not valid_empty_response:
+                return OrderStatusResult(
+                    outcome=StatusQueryOutcome.UNAVAILABLE,
+                    evidence=None,
+                    response_message_id=str(uuid4()),
+                    correlation_id=query.correlation_id,
+                    causation_id=cid,
+                    reason_code=last_unavailable_reason or "IQOPTION_RECONCILIATION_UNAVAILABLE",
+                )
             return OrderStatusResult(
                 outcome=StatusQueryOutcome.NOT_FOUND,
                 evidence=None,
@@ -135,9 +206,58 @@ class IQOptionReconciliationHandler:
                 correlation_id=query.correlation_id,
                 causation_id=cid,
                 reason_code="IQOPTION_OPTION_NOT_FOUND",
+                not_found_evidence=not_found_evidence,
             )
 
-        return self._build_evidence_from_contract(query, contract_data, raw_bytes, cid)
+        if result_source is None:  # defensive: data and its source are one atomic observation
+            return OrderStatusResult(
+                outcome=StatusQueryOutcome.UNAVAILABLE,
+                evidence=None,
+                response_message_id=str(uuid4()),
+                correlation_id=query.correlation_id,
+                causation_id=cid,
+                reason_code="IQOPTION_RESULT_SOURCE_INVALID",
+            )
+
+        return self._build_evidence_from_contract(
+            query,
+            contract_data,
+            raw_bytes,
+            cid,
+            result_source,
+        )
+
+    @staticmethod
+    def _history_query_payload(
+        query: OrderStatusQuery,
+        *,
+        broker_order_id: str | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "client_order_id": query.client_order_ref,
+            "symbol": query.symbol,
+            "direction": query.direction.value,
+            "amount_minor": query.amount.minor_units,
+            "currency": query.amount.currency,
+            "submitted_at": (
+                None if query.submitted_at is None else query.submitted_at.isoformat()
+            ),
+        }
+        if broker_order_id is not None:
+            payload["id"] = int(broker_order_id)
+        return payload
+
+    @staticmethod
+    def _negative_evidence_from_response(
+        response: Mapping[str, Any],
+    ) -> NotFoundEvidence | None:
+        coverage = response.get("not_found_coverage")
+        if not isinstance(coverage, Mapping):
+            return None
+        try:
+            return NotFoundEvidence.from_payload(coverage)
+        except ValueError:
+            return None
 
     def _build_evidence_from_contract(
         self,
@@ -145,6 +265,7 @@ class IQOptionReconciliationHandler:
         contract: Mapping[str, Any],
         raw_bytes: bytes,
         causation_id: str,
+        result_source: IQOptionResultSource,
     ) -> OrderStatusResult:
         contract_symbol = str(contract.get("active", contract.get("symbol", "")))
         contract_direction = str(contract.get("direction", "")).upper()
@@ -180,27 +301,22 @@ class IQOptionReconciliationHandler:
                 reason_code="IQOPTION_CURRENCY_MISMATCH",
             )
 
-        status_str = str(contract.get("status", contract.get("result", ""))).lower()
-        win_str = str(contract.get("win", "")).lower()
-
-        if status_str == "open" or win_str == "equal":
-            external_status = ExternalOrderStatus.OPEN
-            realized_pnl_minor = None
-        elif status_str in ("win", "loose") or win_str in ("win", "loose"):
-            external_status = ExternalOrderStatus.SETTLED
-            win_amount_str = str(contract.get("profit_amount", contract.get("win_amount", "0.00")))
-            win_decimal = Decimal(win_amount_str)
-            stake_decimal = Decimal(query.amount.minor_units) / Decimal(100)
-            pnl_decimal = win_decimal - stake_decimal
-            realized_pnl_minor = int(pnl_decimal * Decimal(100))
-        else:
+        observed_at = datetime.now(UTC)
+        try:
+            financial_result = parse_iqoption_financial_result(
+                contract,
+                result_source,
+                expected_stake_minor=query.amount.minor_units,
+                observed_at=observed_at,
+            )
+        except IQOptionResultError as exc:
             return OrderStatusResult(
                 outcome=StatusQueryOutcome.UNAVAILABLE,
                 evidence=None,
                 response_message_id=str(uuid4()),
                 correlation_id=query.correlation_id,
                 causation_id=causation_id,
-                reason_code="IQOPTION_UNKNOWN_CONTRACT_STATUS",
+                reason_code=exc.reason_code,
             )
 
         contract_id_val = contract.get("id", contract.get("contract_id"))
@@ -210,18 +326,20 @@ class IQOptionReconciliationHandler:
         evidence = ReconciliationEvidence(
             evidence_id=str(uuid4()),
             source=ReconciliationSource.STATUS_QUERY,
-            observed_at=datetime.now(UTC),
+            observed_at=observed_at,
             client_order_ref=query.client_order_ref,
             broker_order_id=broker_order_id,
-            external_status=external_status,
+            external_status=financial_result.external_status,
             broker=Broker.IQ_OPTION,
             account_id=query.account_id,
             product=query.product,
             symbol=query.symbol,
             direction=query.direction,
             amount=query.amount,
-            evidence_version=1,
-            realized_pnl_minor=realized_pnl_minor,
+            # v2 identifies the source-specific parser that proves finality
+            # and money fields instead of defaulting absent values to zero.
+            evidence_version=2,
+            realized_pnl_minor=financial_result.realized_pnl_minor,
             raw_reference_hash=raw_hash,
         )
 

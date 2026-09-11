@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -583,10 +584,25 @@ class BrokerClockSnapshot:
     local_received_at: datetime
     round_trip_seconds: float
     estimated_offset_seconds: Decimal
+    # Age is measured by the worker's monotonic clock from the original
+    # broker timesync observation.  It survives IPC without comparing
+    # monotonic epochs belonging to different processes.
+    source_age_seconds: float = 0.0
+    connection_generation: int = 0
+    sample_sequence: int = 0
 
     def __post_init__(self) -> None:
         require_aware_utc(self.local_received_at, "local_received_at")
-        if self.server_epoch <= 0 or self.round_trip_seconds < 0:
+        if (
+            self.server_epoch <= 0
+            or self.round_trip_seconds < 0
+            or not math.isfinite(self.source_age_seconds)
+            or self.source_age_seconds < 0
+            or type(self.connection_generation) is not int
+            or self.connection_generation < 0
+            or type(self.sample_sequence) is not int
+            or self.sample_sequence < 0
+        ):
             raise ValueError("clock snapshot values are invalid")
         if not self.estimated_offset_seconds.is_finite():
             raise ValueError("clock offset must be finite")
@@ -601,6 +617,9 @@ class BrokerClockSnapshot:
             "round_trip_seconds": self.round_trip_seconds,
             "round_trip_milliseconds": self.round_trip_milliseconds,
             "estimated_offset_seconds": str(self.estimated_offset_seconds),
+            "source_age_seconds": self.source_age_seconds,
+            "connection_generation": self.connection_generation,
+            "sample_sequence": self.sample_sequence,
             "offset_milliseconds": self.offset_milliseconds,
             "is_synced": self.is_synced,
         }
@@ -630,6 +649,9 @@ class BrokerClockSnapshot:
         duration = payload.get("round_trip_seconds")
         if isinstance(duration, bool) or not isinstance(duration, (int, float)):
             raise ValueError("round_trip_seconds must be numeric")
+        source_age = payload.get("source_age_seconds", 0.0)
+        if isinstance(source_age, bool) or not isinstance(source_age, (int, float)):
+            raise ValueError("source_age_seconds must be numeric")
         return cls(
             server_epoch=_required_int(payload, "server_epoch"),
             local_received_at=datetime.fromisoformat(_required_str(payload, "local_received_at")),
@@ -637,6 +659,15 @@ class BrokerClockSnapshot:
             estimated_offset_seconds=_decimal(
                 payload.get("estimated_offset_seconds"), "estimated_offset_seconds"
             ),
+            source_age_seconds=float(source_age),
+            connection_generation=_optional_non_negative_int(
+                payload.get("connection_generation", 0), "connection_generation"
+            )
+            or 0,
+            sample_sequence=_optional_non_negative_int(
+                payload.get("sample_sequence", 0), "sample_sequence"
+            )
+            or 0,
         )
 
 
@@ -646,11 +677,27 @@ class BrokerAccountBalance:
     currency: str
     account_type: str
     observed_at_utc: datetime
+    source_age_seconds: float = 0.0
+    connection_generation: int = 0
+    revision: int = 0
+    source: str = "BROKER_SNAPSHOT"
 
     def __post_init__(self) -> None:
         require_aware_utc(self.observed_at_utc, "observed_at_utc")
         if type(self.balance_minor_units) is not int:
             raise TypeError("balance must use integer minor units")
+        if (
+            isinstance(self.source_age_seconds, bool)
+            or not isinstance(self.source_age_seconds, (int, float))
+            or not math.isfinite(self.source_age_seconds)
+            or self.source_age_seconds < 0
+            or type(self.connection_generation) is not int
+            or self.connection_generation < 0
+            or type(self.revision) is not int
+            or self.revision < 0
+            or not self.source.strip()
+        ):
+            raise ValueError("balance provenance is invalid")
         normalized_currency = self.currency.strip().upper()
         if len(normalized_currency) != 3 or not normalized_currency.isascii():
             raise ValueError("balance currency is invalid")
@@ -664,13 +711,30 @@ class BrokerAccountBalance:
             "balance_minor_units": self.balance_minor_units,
             "currency": self.currency,
             "observed_at_utc": self.observed_at_utc.isoformat(),
+            "source_age_seconds": self.source_age_seconds,
+            "connection_generation": self.connection_generation,
+            "revision": self.revision,
+            "source": self.source,
         }
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> BrokerAccountBalance:
+        source_age = payload.get("source_age_seconds", 0.0)
+        if isinstance(source_age, bool) or not isinstance(source_age, (int, float)):
+            raise ValueError("source_age_seconds must be numeric")
+        source = payload.get("source", "BROKER_SNAPSHOT")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("source must be a non-empty string")
         return cls(
             balance_minor_units=_required_int(payload, "balance_minor_units"),
             currency=_required_str(payload, "currency"),
             account_type=_required_str(payload, "account_type"),
             observed_at_utc=datetime.fromisoformat(_required_str(payload, "observed_at_utc")),
+            source_age_seconds=float(source_age),
+            connection_generation=_optional_non_negative_int(
+                payload.get("connection_generation", 0), "connection_generation"
+            )
+            or 0,
+            revision=_optional_non_negative_int(payload.get("revision", 0), "revision") or 0,
+            source=source,
         )

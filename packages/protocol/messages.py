@@ -180,6 +180,24 @@ class OrderStatusResult:
             raise ValueError("only NOT_FOUND status result may contain negative evidence")
 
 
+def order_status_response_payload(result: OrderStatusResult) -> dict[str, object]:
+    """Serialize one status result without allowing worker implementations to drift.
+
+    Both IQ Option entry points speak the same IPC contract.  Keeping the
+    serializer at the protocol boundary prevents one executable path from
+    silently dropping authoritative negative evidence.
+    """
+
+    return {
+        "query_outcome": result.outcome.value,
+        "evidence": None if result.evidence is None else result.evidence.to_payload(),
+        "reason_code": result.reason_code,
+        "not_found_evidence": (
+            None if result.not_found_evidence is None else result.not_found_evidence.to_payload()
+        ),
+    }
+
+
 def parse_order_submit(envelope: Envelope) -> OrderCommand:
     if envelope.message_type is not MessageType.ORDER_SUBMIT:
         raise ProtocolError(

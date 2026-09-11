@@ -66,6 +66,7 @@ class HealthGate:
         "HG_WORKER_DISCONNECTED",
         "HG_WORKER_NOT_READY",
         "HG_MARKET_DATA_DISCONNECTED",
+        "IQOPTION_BALANCE_STALE",
         "MD_CLOCK_UNTRUSTED",
     )
 

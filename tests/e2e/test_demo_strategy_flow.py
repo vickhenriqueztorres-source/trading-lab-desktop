@@ -162,6 +162,7 @@ def test_iqoption_auto_trader_persists_before_worker_submission(tmp_path: Path) 
 
     runtime = CoreRuntime(tmp_path / "auto-core")
     worker = EventCapableWorker([WorkerOutcome.ACCEPTED])
+    entry_now = datetime.now(UTC).replace(second=10, microsecond=0) + timedelta(minutes=1)
     runtime.start()
     try:
         runtime.attach_iqoption_worker(worker)
@@ -171,6 +172,7 @@ def test_iqoption_auto_trader_persists_before_worker_submission(tmp_path: Path) 
             runtime_provider=lambda: runtime,
             risk_config_provider=lambda: IqOptionRiskConfig(symbol="EURUSD-OTC"),
             operator_armed=lambda: True,
+            utc_clock=lambda: entry_now,
         )
 
         trader._evaluate_cycle()

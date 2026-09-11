@@ -99,6 +99,7 @@ class CoreRuntime:
         self._deriv_event_pump: BrokerEventPump | None = None
         self._iqoption_event_pump: BrokerEventPump | None = None
         self._deriv_reconciliation_completed: Callable[[], None] | None = None
+        self._iqoption_reconciliation_completed: Callable[[], None] | None = None
         self._submission_router: MultiBrokerSubmissionRouter | None = None
         self.iqoption_entry_validator: Callable[[OrderRequest], None] | None = None
         self.iqoption_execution_lock: AbstractContextManager[object] = nullcontext()
@@ -206,6 +207,7 @@ class CoreRuntime:
                 status_router,
                 self.health_gate,
                 self.event_sink,
+                max_query_attempts=1,
             )
             self._reconciliation_coordinator = reconciliation
             immediate_candidates = tuple(
@@ -365,6 +367,9 @@ class CoreRuntime:
         callback = getattr(self, "_deriv_reconciliation_completed", None)
         if callback is not None:
             callback()
+        callback = getattr(self, "_iqoption_reconciliation_completed", None)
+        if callback is not None:
+            callback()
 
     def submit(self, request: OrderRequest, *, dispatch: bool = True) -> PersistedOrder:
         if self.iqoption_entry_validator is not None and request.broker is Broker.IQ_OPTION:
@@ -512,6 +517,7 @@ class CoreRuntime:
         if router is None or processor is None:
             raise RuntimeError("Core runtime is not started")
         self.detach_iqoption_worker()
+        self._iqoption_reconciliation_completed = on_reconciliation_completed
         self.reconcile_iqoption_worker(worker)
         router.register(Broker.IQ_OPTION, worker)
         pump = BrokerEventPump(
@@ -537,6 +543,7 @@ class CoreRuntime:
         scheduler.trigger("iqoption_reconnected")
 
     def detach_iqoption_worker(self) -> None:
+        self._iqoption_reconciliation_completed = None
         pump = self._iqoption_event_pump
         self._iqoption_event_pump = None
         if pump is not None:

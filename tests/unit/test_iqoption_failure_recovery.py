@@ -226,7 +226,10 @@ def command():
         symbol="EURUSD-OTC",
         direction=Direction.CALL,
         amount=Money(100, "USD"),
-        deadline_at=NOW + timedelta(days=1),
+        # Submission-boundary tests need an entry window that is live on the
+        # host running them; fixed historic dates are now correctly rejected
+        # before the transport is entered.
+        deadline_at=datetime.now(UTC) + timedelta(minutes=1),
         duration=1,
         duration_unit="m",
     )

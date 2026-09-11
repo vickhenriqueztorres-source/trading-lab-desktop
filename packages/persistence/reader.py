@@ -299,9 +299,16 @@ class StateReader:
                 """
                 SELECT o.order_id, o.broker, ti.symbol, ti.direction,
                        ti.amount_minor, ti.currency, o.state, o.created_at,
-                       o.broker_order_id, o.realized_pnl_minor
+                       o.broker_order_id, o.realized_pnl_minor,
+                       o.resolution_source, re.evidence_version AS resolution_evidence_version,
+                       (SELECT COUNT(*) FROM reconciliation_attempts ra
+                        WHERE ra.order_id = o.order_id) AS reconciliation_attempt_count,
+                       (SELECT MAX(ra.started_at) FROM reconciliation_attempts ra
+                        WHERE ra.order_id = o.order_id) AS reconciliation_last_attempt_at
                 FROM orders o
                 JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                LEFT JOIN reconciliation_evidence re
+                  ON re.evidence_id = o.resolution_evidence_id
                 WHERE (? IS NULL OR o.created_at >= ?)
                 ORDER BY o.created_at DESC, o.order_id DESC
                 LIMIT ?

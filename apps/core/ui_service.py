@@ -8,7 +8,7 @@ import socket
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from uuid import uuid4
@@ -16,6 +16,7 @@ from uuid import uuid4
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
 from apps.core.digit_risk_config import DigitRiskConfig, StrategySelectionMode
 from apps.core.iqoption_auto_trader import IQOPTION_PRACTICE_ACCOUNT_ID
+from apps.core.iqoption_balance_monitor import IQOPTION_BALANCE_MAX_AGE_SECONDS
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.readiness import TradingReadinessSnapshot
 from apps.core.runtime import CoreRuntime
@@ -35,6 +36,7 @@ from packages.protocol import (
     ProtocolError,
     ProtocolErrorCode,
     UiAccountMode,
+    UiBalanceQuality,
     UiBotWaitingStatus,
     UiCommandAck,
     UiDerivAssetRank,
@@ -88,9 +90,12 @@ _UI_LOG_FIELD_ALLOWLIST = frozenset(
         "broker",
         "component",
         "count",
+        "cycle_id",
         "duration_ms",
+        "evidence",
         "generation",
         "latency_ms",
+        "amount_minor",
         "market",
         "message_type",
         "mode",
@@ -101,8 +106,10 @@ _UI_LOG_FIELD_ALLOWLIST = frozenset(
         "scope",
         "state",
         "status",
+        "step",
         "strategy_id",
         "symbol",
+        "target_close_utc",
         "worker_type",
     }
 )
@@ -134,6 +141,9 @@ _HEALTH_DESCRIPTIONS = {
         "o lucro."
     ),
     "HG_COOLDOWN_ACTIVE": "Pausa obrigatória pós-perda ativa.",
+    "IQOPTION_BALANCE_STALE": (
+        "O saldo da IQ Option está desatualizado; novas entradas aguardam uma leitura confirmada."
+    ),
 }
 
 
@@ -297,6 +307,10 @@ def _to_ui_iqoption_config(config: IqOptionRiskConfig) -> UiIqOptionRiskConfig:
         max_daily_trades=config.max_daily_trades,
         max_concurrent_positions=config.max_concurrent_positions,
         currency=config.currency,
+        martingale_enabled=config.martingale_enabled,
+        martingale_multiplier_basis_points=config.martingale_multiplier_basis_points,
+        martingale_max_steps=config.martingale_max_steps,
+        martingale_max_stake_minor_units=config.martingale_max_stake_minor_units,
     )
 
 
@@ -314,6 +328,10 @@ def _from_ui_iqoption_config(config: UiIqOptionRiskConfig) -> IqOptionRiskConfig
         max_daily_trades=config.max_daily_trades,
         max_concurrent_positions=config.max_concurrent_positions,
         currency=config.currency,
+        martingale_enabled=config.martingale_enabled,
+        martingale_multiplier_basis_points=config.martingale_multiplier_basis_points,
+        martingale_max_steps=config.martingale_max_steps,
+        martingale_max_stake_minor_units=config.martingale_max_stake_minor_units,
     )
 
 
@@ -354,7 +372,12 @@ class CoreUiProjectionBuilder:
         deriv_bot_waiting_status: Callable[[], UiBotWaitingStatus | None] = lambda: None,
         iqoption_health: Callable[[], WorkerHealthState | None] = lambda: None,
         iqoption_balance: Callable[[], BrokerAccountBalance | None] = lambda: None,
+        iqoption_balance_fresh: Callable[[], bool | None] = lambda: None,
+        iqoption_balance_age_seconds: Callable[[], float | None] = lambda: None,
+        iqoption_balance_quality: Callable[[], str | None] = lambda: None,
+        iqoption_balance_retry_count: Callable[[], int | None] = lambda: None,
         iqoption_clock: Callable[[], BrokerClockSnapshot | None] = lambda: None,
+        iqoption_clock_fresh: Callable[[], bool | None] = lambda: None,
         iqoption_risk_config: Callable[[], IqOptionRiskConfig] = IqOptionRiskConfig,
         iqoption_bot_armed: Callable[[], bool] = lambda: False,
         iqoption_bot_reason: Callable[[], str] = lambda: "IQOPTION_BOT_DISARMED",
@@ -369,7 +392,12 @@ class CoreUiProjectionBuilder:
         self._deriv_bot_waiting_status = deriv_bot_waiting_status
         self._iqoption_health = iqoption_health
         self._iqoption_balance = iqoption_balance
+        self._iqoption_balance_fresh = iqoption_balance_fresh
+        self._iqoption_balance_age_seconds = iqoption_balance_age_seconds
+        self._iqoption_balance_quality = iqoption_balance_quality
+        self._iqoption_balance_retry_count = iqoption_balance_retry_count
         self._iqoption_clock = iqoption_clock
+        self._iqoption_clock_fresh = iqoption_clock_fresh
         self._iqoption_risk_config = iqoption_risk_config
         self._iqoption_bot_armed = iqoption_bot_armed
         self._iqoption_bot_reason = iqoption_bot_reason
@@ -486,13 +514,43 @@ class CoreUiProjectionBuilder:
 
         iq_state = self._iqoption_health()
         iq_balance = self._iqoption_balance()
+        freshness_override = self._iqoption_balance_fresh()
+        age_override = self._iqoption_balance_age_seconds()
+        quality_override = self._iqoption_balance_quality()
+        retry_count = self._iqoption_balance_retry_count()
         iq_clock = self._iqoption_clock()
+        iq_clock_fresh_override = self._iqoption_clock_fresh()
         # Transport availability and account synchronization are independent facts.
         # A newly authenticated worker may be connected while its first balance
         # snapshot is still pending; presenting that state as disconnected makes
         # recovery diagnosis ambiguous and can encourage needless reconnects.
         iq_connected = iq_state is WorkerHealthState.READY
-        iq_account_synced = iq_balance is not None
+        iq_balance_age = (
+            age_override
+            if iq_balance is not None and age_override is not None
+            else None
+            if iq_balance is None
+            else (datetime.now(UTC) - iq_balance.observed_at_utc).total_seconds()
+        )
+        iq_timestamp_fresh = (
+            iq_balance_age is not None
+            and -1.0 <= iq_balance_age <= IQOPTION_BALANCE_MAX_AGE_SECONDS
+        )
+        iq_balance_fresh = (
+            freshness_override
+            if freshness_override is not None and iq_balance is not None
+            else iq_timestamp_fresh
+        )
+        iq_balance_quality = (
+            UiBalanceQuality.UNAVAILABLE
+            if iq_balance is None
+            else UiBalanceQuality.STALE
+            if not iq_balance_fresh
+            else UiBalanceQuality.RETRYING
+            if quality_override == UiBalanceQuality.RETRYING.value
+            else UiBalanceQuality.CONFIRMED
+        )
+        iq_account_synced = iq_balance is not None and iq_balance_fresh
         iq_armed = self._iqoption_bot_armed()
         iq_scope = self._runtime.health_gate.state_for(
             Broker.IQ_OPTION.value,
@@ -501,8 +559,19 @@ class CoreUiProjectionBuilder:
         # IQ execution trusts the broker timestamp by skew, not transport RTT.
         # A slow round trip remains observable in ``clock_latency_ms`` but does
         # not make an otherwise fresh broker clock unsafe.
-        iq_clock_ready = iq_clock is not None and abs(iq_clock.estimated_offset_seconds) <= Decimal(
-            "120"
+        iq_clock_timestamp_fresh = (
+            iq_clock is not None
+            and -1.0 <= (datetime.now(UTC) - iq_clock.local_received_at).total_seconds() <= 30.0
+        )
+        iq_clock_fresh = (
+            iq_clock_fresh_override
+            if iq_clock_fresh_override is not None
+            else iq_clock_timestamp_fresh
+        )
+        iq_clock_ready = (
+            iq_clock is not None
+            and iq_clock_fresh
+            and abs(iq_clock.estimated_offset_seconds) <= Decimal("120")
         )
         iq_entry_ready = (
             iq_connected and iq_account_synced and iq_clock_ready and iq_armed and iq_scope.is_open
@@ -510,6 +579,8 @@ class CoreUiProjectionBuilder:
         iq_entry_blocker = (
             "IQOPTION_CONNECTION_REQUIRED"
             if not iq_connected
+            else "IQOPTION_BALANCE_STALE"
+            if iq_balance is not None and not iq_balance_fresh
             else "IQOPTION_BALANCE_SYNC_REQUIRED"
             if not iq_account_synced
             else "MD_CLOCK_UNTRUSTED"
@@ -582,6 +653,15 @@ class CoreUiProjectionBuilder:
                     else "DESCONECTADO"
                 ),
                 clock_latency_ms=(None if iq_clock is None else iq_clock.round_trip_milliseconds),
+                balance_observed_at_utc=(
+                    None if iq_balance is None else iq_balance.observed_at_utc
+                ),
+                balance_is_fresh=iq_balance_fresh if iq_balance is not None else None,
+                balance_quality=iq_balance_quality,
+                balance_age_seconds=(
+                    None if iq_balance_age is None else max(0, int(iq_balance_age))
+                ),
+                balance_retry_count=(None if retry_count is None else max(0, retry_count)),
             ),
         ]
 
@@ -789,11 +869,29 @@ class CoreUiProjectionBuilder:
 
     def _orders(self, *, since_utc: datetime | None = None) -> list[OrderSummary]:
         result: list[OrderSummary] = []
+        now_utc = datetime.now(UTC)
         for row in self._runtime.reader.ui_order_summaries(
             limit=50,
             since_utc=since_utc,
         ):
             broker_order_id = row.get("broker_order_id")
+            created_at = datetime.fromisoformat(str(row["created_at"]))
+            attempt_count = int(row.get("reconciliation_attempt_count") or 0)
+            ambiguous = str(row["state"]) in {
+                "ACCEPTED",
+                "OPEN",
+                "UNKNOWN",
+                "SETTLEMENT_UNKNOWN",
+            }
+            review_due = ambiguous and (
+                attempt_count >= 8 or (now_utc - created_at).total_seconds() >= 900
+            )
+            last_attempt_raw = row.get("reconciliation_last_attempt_at")
+            next_due = None
+            if ambiguous and attempt_count and last_attempt_raw is not None:
+                last_attempt = datetime.fromisoformat(str(last_attempt_raw))
+                retry_delay = min(900, 5 * (2 ** min(attempt_count, 16)))
+                next_due = last_attempt + timedelta(seconds=retry_delay)
             result.append(
                 OrderSummary(
                     order_id=str(row["order_id"]),
@@ -803,13 +901,25 @@ class CoreUiProjectionBuilder:
                     amount_minor_units=int(row["amount_minor"]),
                     currency=str(row["currency"]),
                     state=str(row["state"]),
-                    created_at_utc=datetime.fromisoformat(str(row["created_at"])),
+                    created_at_utc=created_at,
                     broker_order_id=str(broker_order_id) if broker_order_id is not None else None,
                     realized_pnl_minor_units=(
                         int(row["realized_pnl_minor"])
                         if row.get("realized_pnl_minor") is not None
                         else None
                     ),
+                    # Old IQ STATUS_QUERY zeroes are the exact incident class:
+                    # they may have been persisted before M1 expiry. Preserve
+                    # the record but never present it as a confirmed tie/win.
+                    result_review_required=(
+                        str(row["broker"]) == Broker.IQ_OPTION.value
+                        and row.get("realized_pnl_minor") == 0
+                        and row.get("resolution_source") == "STATUS_QUERY"
+                        and int(row.get("resolution_evidence_version") or 0) < 2
+                    ),
+                    reconciliation_attempt_count=attempt_count,
+                    reconciliation_review_required=review_due,
+                    reconciliation_next_due_at=next_due,
                 )
             )
         return result

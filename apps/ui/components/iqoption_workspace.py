@@ -21,11 +21,12 @@ from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummary
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import t
-from apps.ui.theme import ACCENT_CYAN, ACCENT_GREEN
+from apps.ui.theme import ACCENT_AMBER, ACCENT_CYAN, ACCENT_GREEN
 from packages.protocol.ui_messages import (
     BrokerCardStatus,
     OrderSummary,
     UiAccountMode,
+    UiBalanceQuality,
     UiIqOptionAssetRank,
     UiIqOptionExecutionMetrics,
     UiIqOptionRiskConfig,
@@ -37,7 +38,7 @@ def _mode_text(mode: UiAccountMode) -> str:
     return mode.value if translated.startswith("mode.") else translated
 
 
-def _bot_reason_text(reason: str) -> str:
+def iqoption_bot_reason_text(reason: str) -> str:
     messages = {
         "MD_CLOCK_UNTRUSTED": (
             "Relógio da corretora sem confirmação recente ou com desvio acima de 120 segundos. "
@@ -47,7 +48,16 @@ def _bot_reason_text(reason: str) -> str:
         "TRANSPORT_DOWN": (
             "Transporte indisponível. O bot continua armado e retomará após reconciliar."
         ),
+        "IQOPTION_BALANCE_STALE": (
+            "Saldo desatualizado. Novas entradas aguardam uma leitura confirmada da IQ Option."
+        ),
         "IQOPTION_BOT_DISARMED": "Bot aguardando o comando ‘Ligar Bot IQ Option’.",
+        "IQOPTION_BOT_ARMED_RECONCILING": t("iq.reconciliation.automatic"),
+        "IQOPTION_BOT_ARMED_REVIEW_REQUIRED": t("iq.reconciliation.inconclusive"),
+        "HG_ORDER_UNKNOWN": t("iq.reconciliation.automatic"),
+        "HG_RECONCILIATION_REQUIRED": t("iq.reconciliation.automatic"),
+        "HG_RECONCILIATION_UNAVAILABLE": t("iq.reconciliation.automatic"),
+        "HG_SETTLEMENT_UNKNOWN": t("iq.reconciliation.automatic"),
     }
     return messages.get(reason, reason)
 
@@ -160,6 +170,9 @@ class IqOptionWorkspaceWidget(QWidget):
         self._balance_value.setObjectName("ValueMono")
         self._balance_value.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 16px;")
         balance.addWidget(self._balance_value)
+        self._balance_freshness = QLabel("Aguardando leitura confirmada")
+        self._balance_freshness.setObjectName("Subtitle")
+        balance.addWidget(self._balance_freshness)
         layout.addLayout(balance, 2)
 
         # Bot Automation Pill & Reason
@@ -281,6 +294,34 @@ class IqOptionWorkspaceWidget(QWidget):
             )
         else:
             self._balance_value.setText("—")
+        observed = status.balance_observed_at_utc
+        observed_text = "" if observed is None else f"{observed:%H:%M:%S} UTC"
+        age = status.balance_age_seconds
+        age_text = "" if age is None else f" há {age}s"
+        retries = status.balance_retry_count or 0
+        quality = status.balance_quality
+        if quality is UiBalanceQuality.CONFIRMED or (
+            quality is None and status.balance_is_fresh is True
+        ):
+            self._balance_freshness.setText(f"● CONFIRMADO{age_text}")
+            self._balance_freshness.setStyleSheet(f"color: {ACCENT_GREEN};")
+        elif quality is UiBalanceQuality.RETRYING:
+            attempt_text = "" if retries <= 0 else f" · tentativa {retries}"
+            self._balance_freshness.setText(f"↻ ÚLTIMO SALDO CONFIRMADO{age_text}{attempt_text}")
+            self._balance_freshness.setStyleSheet(f"color: {ACCENT_AMBER};")
+        elif quality is UiBalanceQuality.STALE or status.balance_is_fresh is False:
+            self._balance_freshness.setText(f"⚠ SEM CONFIRMAÇÃO{age_text} · ENTRADAS BLOQUEADAS")
+            self._balance_freshness.setStyleSheet(f"color: {ACCENT_AMBER};")
+        else:
+            self._balance_freshness.setText("Aguardando leitura confirmada")
+            self._balance_freshness.setStyleSheet("")
+        if observed_text:
+            self._balance_freshness.setToolTip(
+                f"Última leitura validada da IQ Option: {observed_text}. "
+                "A idade usa o timestamp real de recebimento; ela não é renovada pelo cache."
+            )
+        else:
+            self._balance_freshness.setToolTip("")
 
         if status.clock_synced:
             lat = f" ({status.clock_latency_ms} ms)" if status.clock_latency_ms else ""
@@ -304,7 +345,18 @@ class IqOptionWorkspaceWidget(QWidget):
             self._automation_pill.setText("● BOT ATIVO")
             self._automation_pill.setObjectName("StatusPillOnline")
         elif armed:
-            if reason in {
+            market_reason = entry_blocker or reason
+            if reason == "IQOPTION_BOT_ARMED_REVIEW_REQUIRED":
+                self._automation_pill.setText("⚠ VERIFICAÇÃO INCONCLUSIVA")
+            elif market_reason in {
+                "IQOPTION_BOT_ARMED_RECONCILING",
+                "HG_ORDER_UNKNOWN",
+                "HG_RECONCILIATION_REQUIRED",
+                "HG_RECONCILIATION_UNAVAILABLE",
+                "HG_SETTLEMENT_UNKNOWN",
+            }:
+                self._automation_pill.setText("● BOT ARMADO · VERIFICANDO ORDEM")
+            elif reason in {
                 "TRANSPORT_DOWN",
                 "IQOPTION_CONNECTION_QUARANTINED",
                 "IQOPTION_CONNECTION_IN_PROGRESS",
@@ -319,10 +371,13 @@ class IqOptionWorkspaceWidget(QWidget):
 
         self._automation_pill.style().unpolish(self._automation_pill)
         self._automation_pill.style().polish(self._automation_pill)
+        display_reason = (
+            reason if reason == "IQOPTION_BOT_ARMED_REVIEW_REQUIRED" else entry_blocker or reason
+        )
         self._automation_detail.setText(
-            f"Entradas bloqueadas: {_bot_reason_text(entry_blocker or reason)}"
+            f"Entradas bloqueadas: {iqoption_bot_reason_text(display_reason)}"
             if armed and entry_ready is False
-            else _bot_reason_text(reason)
+            else iqoption_bot_reason_text(reason)
         )
         market_reason = entry_blocker or reason
         if market_reason == "IQOPTION_ACTIVE_SUSPENDED":

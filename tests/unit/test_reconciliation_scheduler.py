@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import UTC, datetime
 
 from apps.core.health import HealthGate
 from apps.core.reconciliation import ReconciliationReport
@@ -128,3 +129,75 @@ def test_scheduler_thread_is_daemon_and_exits_cleanly_when_idle() -> None:
     scheduler.stop()
 
     assert not thread.is_alive()
+
+
+def test_scheduler_restores_backoff_from_durable_attempt_history() -> None:
+    class DurableReader(SchedulerReader):
+        def reconciliation_attempts_for_order(self, _order_id: str):
+            return [
+                {
+                    "result": "UNRESOLVED",
+                    "started_at": datetime.now(UTC).isoformat(),
+                }
+                for _ in range(8)
+            ]
+
+    reader = DurableReader(active=True)
+    gate = HealthGate()
+    gate.block("HG_ORDER_UNKNOWN")
+    coordinator = SchedulerCoordinator(reader, gate, resolve_after=99)
+    scheduler = ReconciliationScheduler(
+        coordinator,  # type: ignore[arg-type]
+        reader,  # type: ignore[arg-type]
+        gate,
+        reconcile_cycle_seconds=5.0,
+        reconcile_cycle_max_seconds=900.0,
+    )
+
+    scheduler._restore_durable_delay()
+
+    assert scheduler._delay > 899.0
+
+
+def test_scheduler_prioritizes_second_complete_negative_confirmation() -> None:
+    class NegativeProofReader(SchedulerReader):
+        def reconciliation_attempts_for_order(self, _order_id: str):
+            return [
+                {
+                    "result": "UNRESOLVED",
+                    "reason_code": "RECONCILIATION_NOT_FOUND_BOTH_SOURCES",
+                    "started_at": datetime.now(UTC).isoformat(),
+                }
+            ]
+
+    reader = NegativeProofReader(active=True)
+    gate = HealthGate()
+    gate.block("HG_ORDER_UNKNOWN")
+    coordinator = SchedulerCoordinator(reader, gate, resolve_after=99)
+    scheduler = ReconciliationScheduler(
+        coordinator,  # type: ignore[arg-type]
+        reader,  # type: ignore[arg-type]
+        gate,
+        reconcile_cycle_seconds=5.0,
+        reconcile_cycle_max_seconds=900.0,
+    )
+
+    scheduler._restore_durable_delay()
+
+    assert 9.0 < scheduler._delay <= 10.0
+
+
+def test_unrelated_clock_and_balance_gates_do_not_change_reconciliation_signature() -> None:
+    reader = SchedulerReader(active=True)
+    gate = HealthGate()
+    coordinator = SchedulerCoordinator(reader, gate)
+    scheduler = ReconciliationScheduler(
+        coordinator,  # type: ignore[arg-type]
+        reader,  # type: ignore[arg-type]
+        gate,
+    )
+    before = scheduler._state_signature()
+    gate.block("MD_CLOCK_UNTRUSTED")
+    gate.block("IQOPTION_BALANCE_STALE")
+
+    assert scheduler._state_signature() == before

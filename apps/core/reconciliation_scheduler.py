@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from contextlib import suppress
+from datetime import UTC, datetime
 
 from apps.core.health import HealthGate
 from apps.core.reconciliation import ReconciliationCoordinator, ReconciliationReport
@@ -29,7 +31,7 @@ class ReconciliationScheduler:
         event_sink: EventSink | None = None,
         *,
         reconcile_cycle_seconds: float = 5.0,
-        reconcile_cycle_max_seconds: float = 30.0,
+        reconcile_cycle_max_seconds: float = 900.0,
         on_cycle_completed: Callable[[ReconciliationReport], None] | None = None,
     ) -> None:
         if reconcile_cycle_seconds <= 0 or reconcile_cycle_max_seconds < reconcile_cycle_seconds:
@@ -56,6 +58,8 @@ class ReconciliationScheduler:
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._restore_durable_delay()
+        self._last_signature = self._state_signature()
         self._thread = threading.Thread(
             target=self._run,
             name="reconciliation-scheduler",
@@ -66,7 +70,6 @@ class ReconciliationScheduler:
     def trigger(self, reason: str = "external") -> None:
         if self._stop.is_set():
             return
-        self._delay = self._base_delay
         self._trigger.set()
         self._event_sink.emit("reconciliation_cycle_requested", reason_code=reason)
 
@@ -134,7 +137,7 @@ class ReconciliationScheduler:
                 self._event_sink.emit("reconciliation_cycle_skipped", reason_code="IDLE")
                 self._delay = self._max_delay
                 continue
-            if after != before or after != self._last_signature:
+            if after != before:
                 self._delay = self._base_delay
             else:
                 self._delay = min(self._max_delay, self._delay * 2.0)
@@ -144,10 +147,69 @@ class ReconciliationScheduler:
         signature = self._state_signature()
         return bool(signature[0]) or bool(set(signature[1]) & _RECONCILIATION_GATES)
 
-    def _state_signature(self) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    def _state_signature(self) -> tuple[tuple[tuple[str, str, str], ...], tuple[str, ...]]:
         candidates = self._reader.list_reconciliation_candidates()
+        attempts_for_order = getattr(self._reader, "reconciliation_attempts_for_order", None)
+
+        def latest_reason(order_id: str) -> str:
+            if not callable(attempts_for_order):
+                return ""
+            attempts = attempts_for_order(order_id)
+            return str(attempts[-1].get("reason_code") or "") if attempts else ""
+
         candidate_signature = tuple(
-            (str(item["order_id"]), str(item["order_state"])) for item in candidates
+            (
+                str(item["order_id"]),
+                str(item["order_state"]),
+                latest_reason(str(item["order_id"])),
+            )
+            for item in candidates
         )
-        blockers = self._health_gate.get_snapshot().active_blockers
+        blockers = tuple(
+            blocker
+            for blocker in self._health_gate.get_snapshot().active_blockers
+            if blocker in _RECONCILIATION_GATES
+        )
         return candidate_signature, blockers
+
+    def _restore_durable_delay(self) -> None:
+        """Derive restart backoff from the append-only attempt history.
+
+        The attempts already live in the financial database, so a process
+        restart cannot reset an unresolved order to a tight polling loop.
+        This method is deliberately compatible with small test readers.
+        """
+
+        attempts_for_order = getattr(self._reader, "reconciliation_attempts_for_order", None)
+        if not callable(attempts_for_order):
+            return
+        candidates = self._reader.list_reconciliation_candidates()
+        largest_delay = self._base_delay
+        latest_started: datetime | None = None
+        for candidate in candidates:
+            attempts = attempts_for_order(str(candidate["order_id"]))
+            trailing = 0
+            for attempt in reversed(attempts):
+                if str(attempt.get("result")) in {"RESOLVED", "CONFLICT", "NOT_EXECUTED"}:
+                    break
+                trailing += 1
+            latest_reason = str(attempts[-1].get("reason_code") or "") if attempts else ""
+            candidate_delay = min(
+                self._max_delay,
+                self._base_delay * (2 ** min(trailing, 16)),
+            )
+            if latest_reason == "RECONCILIATION_NOT_FOUND_BOTH_SOURCES":
+                candidate_delay = min(self._max_delay, self._base_delay * 2.0)
+            largest_delay = max(largest_delay, candidate_delay)
+            if attempts:
+                raw_started = attempts[-1].get("started_at")
+                if isinstance(raw_started, str):
+                    with suppress(ValueError):
+                        started = datetime.fromisoformat(raw_started).astimezone(UTC)
+                        if latest_started is None or started > latest_started:
+                            latest_started = started
+        if latest_started is None:
+            self._delay = largest_delay
+            return
+        elapsed = max(0.0, (datetime.now(UTC) - latest_started).total_seconds())
+        self._delay = max(0.0, largest_delay - elapsed)

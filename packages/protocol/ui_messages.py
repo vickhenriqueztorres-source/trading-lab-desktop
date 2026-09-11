@@ -53,6 +53,13 @@ class UiAccountMode(StrEnum):
     REAL = "REAL"
 
 
+class UiBalanceQuality(StrEnum):
+    CONFIRMED = "CONFIRMED"
+    RETRYING = "RETRYING"
+    STALE = "STALE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class UiDigitRiskConfigStatus(StrEnum):
     OK = "OK"
     REJECTED = "REJECTED"
@@ -159,6 +166,10 @@ class UiIqOptionRiskConfig:
     max_daily_trades: int = 10
     max_concurrent_positions: int = 1
     currency: str = "USD"
+    martingale_enabled: bool = False
+    martingale_multiplier_basis_points: int = 20_000
+    martingale_max_steps: int = 1
+    martingale_max_stake_minor_units: int = 400
 
     @property
     def active_strategy_key(self) -> str:
@@ -188,6 +199,27 @@ class UiIqOptionRiskConfig:
             raise ValueError("IQ Option daily trade limit is invalid")
         if self.max_concurrent_positions != 1 or self.currency != "USD":
             raise ValueError("IQ Option execution constraints are invalid")
+        if type(self.martingale_enabled) is not bool:
+            raise ValueError("IQ Option martingale selection is invalid")
+        if (
+            type(self.martingale_multiplier_basis_points) is not int
+            or not 11_000 <= self.martingale_multiplier_basis_points <= 30_000
+        ):
+            raise ValueError("IQ Option martingale multiplier is invalid")
+        if type(self.martingale_max_steps) is not int or self.martingale_max_steps not in {1, 2}:
+            raise ValueError("IQ Option martingale level is invalid")
+        if (
+            type(self.martingale_max_stake_minor_units) is not int
+            or self.martingale_max_stake_minor_units <= 0
+        ):
+            raise ValueError("IQ Option martingale stake cap is invalid")
+        if self.martingale_enabled and (
+            self.martingale_max_stake_minor_units < self.stake_minor_units
+            or self.martingale_max_stake_minor_units > self.daily_stop_loss_minor_units
+            or self.max_consecutive_losses < self.martingale_max_steps + 1
+            or self.max_daily_trades < self.martingale_max_steps + 1
+        ):
+            raise ValueError("IQ Option martingale limits are invalid")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -203,6 +235,10 @@ class UiIqOptionRiskConfig:
             "max_daily_trades": self.max_daily_trades,
             "max_concurrent_positions": self.max_concurrent_positions,
             "currency": self.currency,
+            "martingale_enabled": self.martingale_enabled,
+            "martingale_multiplier_basis_points": self.martingale_multiplier_basis_points,
+            "martingale_max_steps": self.martingale_max_steps,
+            "martingale_max_stake_minor_units": self.martingale_max_stake_minor_units,
         }
 
     @classmethod
@@ -213,7 +249,7 @@ class UiIqOptionRiskConfig:
             if "strategy_id" in payload and payload["strategy_id"] != key:
                 raise _invalid()
             payload["strategy_id"] = key
-        fields = {
+        required_fields = {
             "strategy_id",
             "symbol",
             "timeframe_seconds",
@@ -227,9 +263,32 @@ class UiIqOptionRiskConfig:
             "max_concurrent_positions",
             "currency",
         }
-        _exact(payload, fields)
-        integer_fields = fields - {"strategy_id", "symbol", "currency"}
+        martingale_fields = {
+            "martingale_enabled",
+            "martingale_multiplier_basis_points",
+            "martingale_max_steps",
+            "martingale_max_stake_minor_units",
+        }
+        if not required_fields.issubset(payload) or not set(payload).issubset(
+            required_fields | martingale_fields
+        ):
+            raise _invalid()
+        integer_fields = required_fields - {"strategy_id", "symbol", "currency"}
         if any(type(payload.get(field)) is not int for field in integer_fields):
+            raise _invalid()
+        martingale_enabled = payload.get("martingale_enabled", False)
+        multiplier = payload.get("martingale_multiplier_basis_points", 20_000)
+        max_steps = payload.get("martingale_max_steps", 1)
+        max_stake = payload.get(
+            "martingale_max_stake_minor_units",
+            min(400, cast(int, payload["daily_stop_loss_minor_units"])),
+        )
+        if (
+            type(martingale_enabled) is not bool
+            or type(multiplier) is not int
+            or type(max_steps) is not int
+            or type(max_stake) is not int
+        ):
             raise _invalid()
         try:
             return cls(
@@ -245,6 +304,10 @@ class UiIqOptionRiskConfig:
                 max_daily_trades=cast(int, payload["max_daily_trades"]),
                 max_concurrent_positions=cast(int, payload["max_concurrent_positions"]),
                 currency=_string(payload, "currency", 3),
+                martingale_enabled=martingale_enabled,
+                martingale_multiplier_basis_points=multiplier,
+                martingale_max_steps=max_steps,
+                martingale_max_stake_minor_units=max_stake,
             )
         except ValueError as exc:
             raise _invalid() from exc
@@ -428,6 +491,11 @@ class BrokerCardStatus:
     clock_synced: bool
     connection_label: str = "UNKNOWN"
     clock_latency_ms: int | None = None
+    balance_observed_at_utc: datetime | None = None
+    balance_is_fresh: bool | None = None
+    balance_quality: UiBalanceQuality | None = None
+    balance_age_seconds: int | None = None
+    balance_retry_count: int | None = None
 
     def __post_init__(self) -> None:
         if not self.broker or len(self.broker) > 32:
@@ -446,9 +514,33 @@ class BrokerCardStatus:
             type(self.clock_latency_ms) is not int or self.clock_latency_ms < 0
         ):
             raise ValueError("broker clock latency is invalid")
+        if self.balance_observed_at_utc is not None:
+            require_aware_utc(self.balance_observed_at_utc, "balance_observed_at_utc")
+            if self.balance_minor_units is None:
+                raise ValueError("broker balance observation requires a balance")
+        if self.balance_is_fresh is not None and type(self.balance_is_fresh) is not bool:
+            raise TypeError("broker balance freshness must be boolean")
+        if self.balance_is_fresh is True and self.balance_observed_at_utc is None:
+            raise ValueError("fresh broker balance requires an observation timestamp")
+        if self.balance_quality is not None and not isinstance(
+            self.balance_quality, UiBalanceQuality
+        ):
+            raise TypeError("broker balance quality is invalid")
+        for value, label in (
+            (self.balance_age_seconds, "age"),
+            (self.balance_retry_count, "retry count"),
+        ):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"broker balance {label} is invalid")
+        if (
+            self.balance_quality is not None
+            and self.balance_minor_units is None
+            and self.balance_quality is not UiBalanceQuality.UNAVAILABLE
+        ):
+            raise ValueError("broker balance quality requires a balance")
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "account_mode": self.account_mode.value,
             "balance_minor_units": self.balance_minor_units,
             "broker": self.broker,
@@ -458,34 +550,62 @@ class BrokerCardStatus:
             "currency": self.currency,
             "is_connected": self.is_connected,
         }
+        if self.balance_observed_at_utc is not None:
+            payload["balance_observed_at_utc"] = self.balance_observed_at_utc.isoformat()
+        if self.balance_is_fresh is not None:
+            payload["balance_is_fresh"] = self.balance_is_fresh
+        if self.balance_quality is not None:
+            payload["balance_quality"] = self.balance_quality.value
+        if self.balance_age_seconds is not None:
+            payload["balance_age_seconds"] = self.balance_age_seconds
+        if self.balance_retry_count is not None:
+            payload["balance_retry_count"] = self.balance_retry_count
+        return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> BrokerCardStatus:
-        _exact(
-            payload,
-            {
-                "account_mode",
-                "balance_minor_units",
-                "broker",
-                "clock_synced",
-                "clock_latency_ms",
-                "connection_label",
-                "currency",
-                "is_connected",
-            },
-        )
+        required = {
+            "account_mode",
+            "balance_minor_units",
+            "broker",
+            "clock_synced",
+            "clock_latency_ms",
+            "connection_label",
+            "currency",
+            "is_connected",
+        }
+        optional = {
+            "balance_observed_at_utc",
+            "balance_is_fresh",
+            "balance_quality",
+            "balance_age_seconds",
+            "balance_retry_count",
+        }
+        if not required.issubset(payload) or not set(payload).issubset(required | optional):
+            raise _invalid()
         connected = payload.get("is_connected")
         clock = payload.get("clock_synced")
         balance = payload.get("balance_minor_units")
         latency = payload.get("clock_latency_ms")
+        freshness = payload.get("balance_is_fresh")
+        quality = payload.get("balance_quality")
+        age = payload.get("balance_age_seconds")
+        retries = payload.get("balance_retry_count")
+        observed_raw = payload.get("balance_observed_at_utc")
         if (
             not isinstance(connected, bool)
             or not isinstance(clock, bool)
             or (balance is not None and type(balance) is not int)
             or (latency is not None and type(latency) is not int)
+            or (freshness is not None and type(freshness) is not bool)
+            or (quality is not None and not isinstance(quality, str))
+            or (age is not None and type(age) is not int)
+            or (retries is not None and type(retries) is not int)
+            or (observed_raw is not None and not isinstance(observed_raw, str))
         ):
             raise _invalid()
         try:
+            observed_at = None if observed_raw is None else datetime.fromisoformat(observed_raw)
             return cls(
                 _string(payload, "broker", 32),
                 UiAccountMode(_string(payload, "account_mode", 32)),
@@ -495,8 +615,13 @@ class BrokerCardStatus:
                 clock,
                 _string(payload, "connection_label", 64),
                 latency,
+                observed_at,
+                freshness,
+                None if quality is None else UiBalanceQuality(quality),
+                age,
+                retries,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise _invalid() from exc
 
 
@@ -512,6 +637,10 @@ class OrderSummary:
     created_at_utc: datetime
     broker_order_id: str | None = None
     realized_pnl_minor_units: int | None = None
+    result_review_required: bool = False
+    reconciliation_attempt_count: int = 0
+    reconciliation_review_required: bool = False
+    reconciliation_next_due_at: datetime | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.created_at_utc, "created_at_utc")
@@ -529,6 +658,20 @@ class OrderSummary:
             and type(self.realized_pnl_minor_units) is not int
         ):
             raise ValueError("realized P&L must use integer minor units")
+        if type(self.result_review_required) is not bool:
+            raise TypeError("result review flag must be boolean")
+        if (
+            type(self.reconciliation_attempt_count) is not int
+            or self.reconciliation_attempt_count < 0
+        ):
+            raise ValueError("reconciliation attempt count is invalid")
+        if type(self.reconciliation_review_required) is not bool:
+            raise TypeError("reconciliation review flag must be boolean")
+        if self.reconciliation_next_due_at is not None:
+            require_aware_utc(
+                self.reconciliation_next_due_at,
+                "reconciliation_next_due_at",
+            )
         if len(self.currency) != 3 or not self.currency.isascii() or not self.currency.isalpha():
             raise ValueError("order currency is invalid")
 
@@ -546,6 +689,14 @@ class OrderSummary:
         }
         if self.realized_pnl_minor_units is not None:
             payload["realized_pnl_minor_units"] = self.realized_pnl_minor_units
+        if self.result_review_required:
+            payload["result_review_required"] = True
+        if self.reconciliation_attempt_count:
+            payload["reconciliation_attempt_count"] = self.reconciliation_attempt_count
+        if self.reconciliation_review_required:
+            payload["reconciliation_review_required"] = True
+        if self.reconciliation_next_due_at is not None:
+            payload["reconciliation_next_due_at"] = self.reconciliation_next_due_at.isoformat()
         return payload
 
     @classmethod
@@ -561,7 +712,14 @@ class OrderSummary:
             "state",
             "symbol",
         }
-        optional = {"broker_order_id", "realized_pnl_minor_units"}
+        optional = {
+            "broker_order_id",
+            "realized_pnl_minor_units",
+            "result_review_required",
+            "reconciliation_attempt_count",
+            "reconciliation_review_required",
+            "reconciliation_next_due_at",
+        }
         if not expected.issubset(keys) or not keys.issubset(expected | optional):
             raise _invalid()
         amount = payload.get("amount_minor_units")
@@ -571,8 +729,21 @@ class OrderSummary:
         realized_pnl = payload.get("realized_pnl_minor_units")
         if realized_pnl is not None and type(realized_pnl) is not int:
             raise _invalid()
+        review_required = payload.get("result_review_required", False)
+        if type(review_required) is not bool:
+            raise _invalid()
+        attempt_count = payload.get("reconciliation_attempt_count", 0)
+        reconciliation_review = payload.get("reconciliation_review_required", False)
+        next_due_raw = payload.get("reconciliation_next_due_at")
+        if (
+            type(attempt_count) is not int
+            or type(reconciliation_review) is not bool
+            or (next_due_raw is not None and not isinstance(next_due_raw, str))
+        ):
+            raise _invalid()
         try:
             created = datetime.fromisoformat(_string(payload, "created_at_utc", 64))
+            next_due = None if next_due_raw is None else datetime.fromisoformat(next_due_raw)
             return cls(
                 _string(payload, "order_id"),
                 _string(payload, "broker", 32),
@@ -584,6 +755,10 @@ class OrderSummary:
                 created,
                 broker_order_id,
                 realized_pnl,
+                review_required,
+                attempt_count,
+                reconciliation_review,
+                next_due,
             )
         except ValueError as exc:
             raise _invalid() from exc

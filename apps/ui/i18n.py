@@ -720,6 +720,48 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "The bot remains off because a safety rule is active: {reason}",
         "es": "El bot sigue apagado porque hay una protección activa: {reason}",
     },
+    "error.iq_order_unknown_message": {
+        "en": (
+            "This is not a configuration error. An earlier IQ Option order timed out after it "
+            "might have been sent, so the bot is preventing a duplicate financial exposure. "
+            "It will check the complete open and closed option history twice. It resumes only "
+            "after finding the contract or proving that it was not executed."
+        ),
+        "es": (
+            "No es un error de configuración. Una orden anterior de IQ Option agotó el tiempo "
+            "de espera después de un posible envío, por lo que el bot está evitando una "
+            "exposición financiera duplicada. Verificará dos veces el historial completo de "
+            "opciones abiertas y cerradas. Solo se reanudará al encontrar el contrato o "
+            "demostrar que no fue ejecutado."
+        ),
+    },
+    "iq.reconciliation.automatic": {
+        "en": (
+            "A previous order is being verified against the broker's open and closed history. "
+            "The bot remains armed and new entries stay safely paused until evidence is complete."
+        ),
+        "es": (
+            "Se está verificando una orden anterior en el historial abierto y cerrado del "
+            "corredor. El bot permanece armado y las nuevas entradas siguen pausadas hasta "
+            "completar la evidencia."
+        ),
+    },
+    "iq.reconciliation.inconclusive": {
+        "en": (
+            "The broker history has not yet provided enough evidence to classify the previous "
+            "order. Exposure remains reserved and read-only checks continue with backoff; the "
+            "original order will not be sent again."
+        ),
+        "es": (
+            "El historial del corredor aún no aportó evidencia suficiente para clasificar la "
+            "orden anterior. La exposición sigue reservada y las consultas de solo lectura "
+            "continúan con espera progresiva; la orden original no se enviará de nuevo."
+        ),
+    },
+    "gates.recovering": {
+        "en": "AUTOMATIC RECOVERY",
+        "es": "RECUPERACIÓN AUTOMÁTICA",
+    },
     "demo.reset.title": {"en": "Reset bot results", "es": "Reiniciar resultados del bot"},
     "demo.reset.confirm": {
         "en": (
@@ -761,6 +803,43 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "orders.empty": {
         "en": "No persisted orders in this session.",
         "es": "No hay órdenes persistidas en esta sesión.",
+    },
+    "orders.review.summary": {
+        "en": (
+            "⚠ {count} order or financial result(s) require review. "
+            "Exposure remains blocked until broker evidence is sufficient."
+        ),
+        "es": (
+            "⚠ {count} orden(es) o resultado(s) financieros requieren revisión. "
+            "La exposición sigue bloqueada hasta que exista evidencia suficiente del broker."
+        ),
+    },
+    "orders.reconciliation.review": {
+        "en": "⚠ UNKNOWN · REVIEW REQUIRED",
+        "es": "⚠ DESCONOCIDA · REVISIÓN NECESARIA",
+    },
+    "orders.reconciliation.retry": {
+        "en": "⟳ UNKNOWN · ATTEMPT {count}",
+        "es": "⟳ DESCONOCIDA · INTENTO {count}",
+    },
+    "orders.reconciliation.help": {
+        "en": "{count} read-only reconciliation attempt(s). Next eligible query: {next_due}.",
+        "es": "{count} intento(s) de conciliación de solo lectura. Próxima consulta: {next_due}.",
+    },
+    "orders.result.unconfirmed": {
+        "en": "⚠ FINANCIAL RESULT UNCONFIRMED",
+        "es": "⚠ RESULTADO FINANCIERO NO CONFIRMADO",
+    },
+    "orders.result.unconfirmed.help": {
+        "en": (
+            "The IQ Option financial settlement was not confirmed. The stored amount is not "
+            "treated as profit or loss. Martingale is decided separately from the candle close."
+        ),
+        "es": (
+            "La liquidación financiera de IQ Option no fue confirmada. El monto guardado no se "
+            "trata como ganancia ni pérdida. Martingale se decide por separado al cierre "
+            "de la vela."
+        ),
     },
     "orders.col.id": {
         "en": "Order ID",
@@ -842,6 +921,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "iq.risk.strategy": {"en": "Strategy", "es": "Estrategia"},
     "iq.risk.asset": {"en": "Asset", "es": "Activo"},
     "iq.risk.stake": {"en": "Stake", "es": "Monto por entrada"},
+    "iq.risk.martingale": {"en": "Bounded Martingale", "es": "Martingale limitado"},
+    "iq.risk.martingale.off": {"en": "Off", "es": "Desactivado"},
+    "iq.risk.martingale.g1": {"en": "Up to G1", "es": "Hasta G1"},
+    "iq.risk.martingale.g2": {"en": "Up to G2", "es": "Hasta G2"},
+    "iq.risk.martingale_multiplier": {
+        "en": "Recovery multiplier",
+        "es": "Multiplicador de recuperación",
+    },
+    "iq.risk.martingale_cap": {
+        "en": "Maximum recovery stake",
+        "es": "Monto máximo de recuperación",
+    },
+    "iq.risk.martingale_disabled": {
+        "en": "Martingale off · the configured fixed stake is used for every new signal.",
+        "es": "Martingale desactivado · cada señal nueva usa el monto fijo configurado.",
+    },
+    "iq.risk.martingale_projection": {
+        "en": "Projected sequence: {sequence} · maximum exposure USD {exposure}.",
+        "es": "Secuencia proyectada: {sequence} · exposición máxima USD {exposure}.",
+    },
     "iq.risk.daily_stop": {"en": "Daily Stop Loss", "es": "Stop Loss diario"},
     "iq.risk.daily_take": {"en": "Daily Take Profit", "es": "Meta diaria"},
     "iq.risk.losses": {"en": "Max consecutive losses", "es": "Pérdidas consecutivas máx."},

@@ -34,6 +34,7 @@ class IQOptionSeriesReason(StrEnum):
     SERIES_QUEUE_FULL = "SERIES_QUEUE_FULL"
     WARMUP_CAPACITY_EXCEEDED = "WARMUP_CAPACITY_EXCEEDED"
     MARKET_HISTORY_UNAVAILABLE = "MARKET_HISTORY_UNAVAILABLE"
+    TARGET_CANDLE_UNAVAILABLE = "TARGET_CANDLE_UNAVAILABLE"
 
 
 class IQOptionSeriesPriority(IntEnum):
@@ -248,6 +249,7 @@ class IQOptionSeriesHub:
         close_epoch: int | None = None,
         priority: IQOptionSeriesPriority = IQOptionSeriesPriority.STEADY,
         fetcher: IQOptionSeriesFetcher | None = None,
+        required_close_time: datetime | None = None,
     ) -> IQOptionSeriesFetchOutcome:
         request = IQOptionSeriesRequest(
             key=key,
@@ -260,8 +262,17 @@ class IQOptionSeriesHub:
         self._validate_request(request)
         self._increment(requests=1)
 
+        required_close_epoch = (
+            None
+            if required_close_time is None
+            else self._datetime_epoch(required_close_time, "required_close_time")
+        )
         cached = self._snapshots.get((key, request.close_epoch))
-        if cached is not None and cached.warmup_required >= warmup_required:
+        if (
+            cached is not None
+            and cached.warmup_required >= warmup_required
+            and self._contains_close_epoch(cached.candles, required_close_epoch)
+        ):
             self._increment(dedup_hits=1)
             return IQOptionSeriesFetchOutcome(IQOptionSeriesReason.OK, cached)
 
@@ -306,6 +317,25 @@ class IQOptionSeriesHub:
             gaps_detected=batch_stats.gaps_detected,
             corrections_detected=batch_stats.corrections_detected,
         )
+        if not self._contains_close_epoch(snapshot.candles, required_close_epoch):
+            # A request at the minute boundary can legitimately receive the
+            # preceding candle. Do not cache that response as proof that the
+            # recovery candle was observed; the next bounded poll must fetch.
+            self._latest_by_key[key] = snapshot
+            self._increment(
+                fetches_sent=1,
+                partial_rejected=batch_stats.partial_rejected,
+                incompatible_rejected=batch_stats.incompatible_rejected,
+                duplicates_rejected=batch_stats.duplicates_rejected,
+                out_of_order_batches=batch_stats.out_of_order_batches,
+                gaps_detected=batch_stats.gaps_detected,
+                corrections_detected=batch_stats.corrections_detected,
+            )
+            return IQOptionSeriesFetchOutcome(
+                IQOptionSeriesReason.TARGET_CANDLE_UNAVAILABLE,
+                None,
+                budget,
+            )
         self._snapshots[(key, request.close_epoch)] = snapshot
         self._latest_by_key[key] = snapshot
         self._increment(
@@ -390,6 +420,25 @@ class IQOptionSeriesHub:
         if not math.isfinite(value) or value < 0:
             raise ValueError("IQ Option candle close_time is invalid")
         return int(value)
+
+    @staticmethod
+    def _datetime_epoch(value: datetime, field: str) -> int:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"IQ Option {field} must be timezone aware")
+        epoch = value.astimezone(UTC).timestamp()
+        if not math.isfinite(epoch) or epoch < 0:
+            raise ValueError(f"IQ Option {field} is invalid")
+        return int(epoch)
+
+    @classmethod
+    def _contains_close_epoch(
+        cls,
+        candles: Sequence[MarketCandle],
+        required_close_epoch: int | None,
+    ) -> bool:
+        return required_close_epoch is None or any(
+            cls._candle_close_epoch(candle) == required_close_epoch for candle in candles
+        )
 
     @staticmethod
     def _same_candle(left: MarketCandle, right: MarketCandle) -> bool:

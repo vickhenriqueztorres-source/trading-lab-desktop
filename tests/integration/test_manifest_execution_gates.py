@@ -30,6 +30,7 @@ from packages.domain.models import (
     BrokerEvent,
     Direction,
     ExternalOrderStatus,
+    Money,
     OrderState,
     ReconciliationEvidence,
     ReconciliationSource,
@@ -144,7 +145,7 @@ def test_rechecks_at_core_boundary(change, reason):
 def test_runtime_ticket_is_single_use(order_request):
     _, trader, client, _, _ = execution_setup()
     context = trader._prepare_execution("EURUSD-OTC", "f5:a", client)
-    request = replace(
+    mismatched_request = replace(
         order_request,
         broker=Broker.IQ_OPTION,
         account_id="IQOPTION_PRACTICE",
@@ -153,6 +154,9 @@ def test_runtime_ticket_is_single_use(order_request):
         strategy_id="f5:a",
         manifest_context=context,
     )
+    with pytest.raises(RuntimeError, match="IQOPTION_EXECUTION_STAKE_MISMATCH"):
+        trader.validate_runtime_entry(mismatched_request)
+    request = replace(mismatched_request, amount=Money(100, "USD"))
     trader.validate_runtime_entry(request)
     with pytest.raises(RuntimeError, match="IQOPTION_PAYOUT_STALE"):
         trader.validate_runtime_entry(request)

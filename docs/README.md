@@ -39,6 +39,9 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 17. [CAT-15 — outcomes, privacidade e budgets](CAT15_OUTCOMES_PRIVACY_AND_BUDGETS.md)
 18. [CAT-16 — UI verdadeira e telemetria local](CAT16_TRUE_UI_AND_LOCAL_TELEMETRY.md)
 19. [CAT-17 — arquivo frio verificável e restaurável](CAT17_VERIFIED_COLD_ARCHIVE.md)
+20. [Martingale delimitado G1/G2 da IQ Option](IQOPTION_BOUNDED_MARTINGALE_20260910.md)
+21. [Correção de resultado, saldo e martingale por candle da IQ Option](IQOPTION_RESULT_BALANCE_CANDLE_MARTINGALE_CORRECTION_PLAN_20260910.md)
+22. [Plano pós-auditoria da madrugada: UNKNOWN, relógio, backoff e prioridade G1/G2](IQOPTION_OVERNIGHT_RELIABILITY_CORRECTION_PLAN_20260911.md)
 
 ### Para produto e governança
 

@@ -18,7 +18,7 @@ from packages.domain.models import Broker, Direction, OrderState
 from packages.protocol.ui_messages import (
     UiIqOptionAssetRank,
 )
-from tests.unit.test_iqoption_auto_trader import explicit_signal_catalog
+from tests.unit.test_iqoption_auto_trader import _safe_entry_clock, explicit_signal_catalog
 
 
 def _make_candles_for_symbol(
@@ -89,6 +89,7 @@ def test_iqoption_radar_scans_all_assets_and_selects_triggered():
         runtime_provider=lambda: runtime,
         risk_config_provider=lambda: risk_config,
         operator_armed=lambda: armed,
+        utc_clock=_safe_entry_clock,
         evaluation_interval_seconds=0.01,
         catalog_provider=lambda: explicit_signal_catalog(("GBPUSD-OTC",)),
         monitor_provider=lambda: SimpleNamespace(ready=True),

@@ -160,6 +160,76 @@ def test_iqoption_bot_arms_successfully_in_practice_when_capabilities_ready() ->
     scoped_resume.assert_called_once_with(Broker.IQ_OPTION, "IQOPTION_PRACTICE")
 
 
+def test_iqoption_bot_arms_pending_intent_while_unknown_order_reconciles(tmp_path) -> None:
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._iqoption_session_invalidated = False
+    service._iqoption_switch_lock = threading.RLock()
+    service._iqoption_bot_armed = False
+    service._iqoption_bot_reason = "IQOPTION_BOT_DISARMED"
+    service._transport_supervisor = TransportSupervisor(intent_store=OperatorIntentStore(tmp_path))
+    service._iqoption_auto_trader = MagicMock()
+    service._schedule_iqoption_reconciliation = MagicMock()
+    capabilities = SimpleNamespace(
+        can_submit_orders=True,
+        supports_market_data=True,
+        supports_reconciliation=True,
+        supports_order_events=True,
+    )
+    service._iqoption = SimpleNamespace(
+        health_state=WorkerHealthState.READY,
+        client=SimpleNamespace(capabilities=capabilities),
+    )
+    service._iqoption_balance = BrokerAccountBalance(
+        10_000,
+        "USD",
+        "DEMO",
+        datetime.now(UTC),
+    )
+    events = InMemoryEventSink()
+    service._runtime = SimpleNamespace(
+        resume_new_entries_for=MagicMock(return_value=False),
+        health_gate=SimpleNamespace(
+            state_for=lambda *_args: HealthState(False, "HG_ORDER_UNKNOWN")
+        ),
+        event_sink=events,
+    )
+
+    accepted, reason = service.control_iqoption_bot(True)
+
+    assert accepted is True
+    assert reason == "IQOPTION_BOT_ARMED_RECONCILING"
+    assert service._iqoption_bot_armed is True
+    assert service._transport_supervisor.armed_intent is True
+    assert OperatorIntentStore(tmp_path).load_armed() is True
+    service._iqoption_auto_trader.begin_new_run.assert_called_once_with()
+    service._iqoption_auto_trader.start.assert_called_once_with()
+    service._schedule_iqoption_reconciliation.assert_called_once_with()
+    assert any(
+        event.event_name == "iqoption_operator_intent_armed"
+        and event.reason_code == "HG_ORDER_UNKNOWN"
+        for event in events.events
+    )
+
+
+def test_iqoption_reconciliation_completion_resumes_armed_projection() -> None:
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._iqoption_switch_lock = threading.RLock()
+    service._iqoption_bot_armed = True
+    service._iqoption_bot_reason = "IQOPTION_BOT_ARMED_RECONCILING"
+    events = InMemoryEventSink()
+    service._runtime = SimpleNamespace(
+        health_gate=SimpleNamespace(state_for=lambda *_args: HealthState(True, None)),
+        event_sink=events,
+    )
+
+    service._on_iqoption_reconciliation_completed()
+
+    assert service._iqoption_bot_reason == "IQOPTION_BOT_ARMED"
+    assert any(
+        event.event_name == "iqoption_automatic_recovery_completed" for event in events.events
+    )
+
+
 def test_iqoption_bot_accepts_armed_degraded_intent_while_transport_is_down(
     tmp_path, monkeypatch
 ) -> None:

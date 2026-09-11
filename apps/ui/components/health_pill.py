@@ -39,7 +39,16 @@ class HealthGatePillWidget(QFrame):
                     widget.deleteLater()
 
         for gate in gates:
-            pill = QLabel(f"{gate.gate_name}: {gate.reason_code or t('gates.open')}")
+            automatic_recovery = gate.reason_code in {
+                "HG_ORDER_UNKNOWN",
+                "HG_RECONCILIATION_REQUIRED",
+                "HG_RECONCILIATION_UNAVAILABLE",
+                "HG_SETTLEMENT_UNKNOWN",
+            }
+            status_text = (
+                t("gates.recovering") if automatic_recovery else gate.reason_code or t("gates.open")
+            )
+            pill = QLabel(f"{gate.gate_name}: {status_text}")
             pill.setToolTip(f"{gate.gate_name}\n{gate.description}")
             if gate.is_open:
                 pill.setStyleSheet(

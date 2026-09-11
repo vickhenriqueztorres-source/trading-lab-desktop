@@ -2185,7 +2185,8 @@ class SingleDatabaseWriter:
             pending = payload.get("pending")
             if pending is not None:
                 rows = self._connection.execute(
-                    """SELECT o.state, b.state_reason
+                    """SELECT o.order_id, o.state, o.realized_pnl_minor,
+                              o.last_broker_event_id, o.updated_at, b.state_reason
                        FROM orders o JOIN outbox_messages b USING(intent_id)
                        WHERE o.correlation_id=? AND o.broker=? AND o.account_id=?""",
                     (pending["correlation_id"], "IQ_OPTION", "IQOPTION_PRACTICE"),

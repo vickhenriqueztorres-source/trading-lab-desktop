@@ -148,11 +148,15 @@ class OrderRequest:
     duration: int = 1
     duration_unit: str = "m"
     prediction_digit: int | None = None
+    # IQ binary expiry selected by the Core.  Other brokers leave it unset.
+    contract_expiry_at: datetime | None = None
     # Core-private validated manifest snapshot; never sent to a broker.
     manifest_context: str | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.deadline_at, "deadline_at")
+        if self.contract_expiry_at is not None:
+            require_aware_utc(self.contract_expiry_at, "contract_expiry_at")
         for field_name in (
             "correlation_id",
             "account_id",
@@ -199,9 +203,12 @@ class OrderCommand:
     duration: int = 1
     duration_unit: str = "m"
     prediction_digit: int | None = None
+    contract_expiry_at: datetime | None = None
 
     def __post_init__(self) -> None:
         require_aware_utc(self.deadline_at, "deadline_at")
+        if self.contract_expiry_at is not None:
+            require_aware_utc(self.contract_expiry_at, "contract_expiry_at")
         for field_name in (
             "message_id",
             "correlation_id",
@@ -252,6 +259,8 @@ class OrderCommand:
         }
         if self.prediction_digit is not None:
             payload["prediction_digit"] = self.prediction_digit
+        if self.contract_expiry_at is not None:
+            payload["contract_expiry_at"] = self.contract_expiry_at.isoformat()
         return payload
 
     @classmethod
@@ -285,6 +294,14 @@ class OrderCommand:
             type(prediction_digit) is not int or not 0 <= prediction_digit <= 9
         ):
             raise ValueError("invalid external payload field: prediction_digit")
+        raw_contract_expiry = payload.get("contract_expiry_at")
+        if raw_contract_expiry is not None and not isinstance(raw_contract_expiry, str):
+            raise ValueError("invalid external payload field: contract_expiry_at")
+        contract_expiry_at = (
+            None if raw_contract_expiry is None else datetime.fromisoformat(raw_contract_expiry)
+        )
+        if contract_expiry_at is not None:
+            require_aware_utc(contract_expiry_at, "contract_expiry_at")
         deadline_at = datetime.fromisoformat(payload["deadline_at"])
         require_aware_utc(deadline_at, "deadline_at")
         return cls(
@@ -302,6 +319,7 @@ class OrderCommand:
             duration=duration,
             duration_unit=duration_unit,
             prediction_digit=prediction_digit,
+            contract_expiry_at=contract_expiry_at,
         )
 
 

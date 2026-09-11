@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
@@ -50,6 +50,9 @@ _TRANSIENT_STATUS_QUERY_ERRORS = frozenset(
     }
 )
 _DEFINITIVE_STATUS_QUERY_ERRORS = frozenset(ProtocolErrorCode) - _TRANSIENT_STATUS_QUERY_ERRORS
+_RECONCILIATION_REVIEW_ATTEMPTS = 8
+_RECONCILIATION_REVIEW_AGE_SECONDS = 15 * 60
+_RECONCILIATION_REVIEW_REASON = "RECONCILIATION_EVIDENCE_INSUFFICIENT"
 
 
 class ReconciliationOutcome(StrEnum):
@@ -265,7 +268,7 @@ class ReconciliationCoordinator:
                     )
                     self._sleep_before_retry(query_number)
                     continue
-                return self._failed(order_id, current_state, code.value)
+                return self._failed(candidate, current_state, code.value)
             except StatusQueryError as exc:
                 if self._is_retryable(exc.code) and query_number < self._max_query_attempts:
                     self._writer.complete_reconciliation_attempt(
@@ -293,7 +296,7 @@ class ReconciliationCoordinator:
                     "FAILED",
                     exc.code.value,
                 )
-                return self._failed(order_id, current_state, exc.code.value)
+                return self._failed(candidate, current_state, exc.code.value)
 
             if status.outcome is StatusQueryOutcome.FOUND:
                 if status.evidence is None:
@@ -322,11 +325,11 @@ class ReconciliationCoordinator:
                         order_id=order_id,
                         reason_code=applied.reason_code,
                     )
-                    return ReconciliationItemResult(
-                        order_id,
-                        ReconciliationOutcome.UNRESOLVED,
+                    return self._pending_or_review(
+                        candidate,
                         applied.order_state,
-                        applied.reason_code,
+                        applied.reason_code
+                        or ProtocolErrorCode.RECONCILIATION_INVALID_RESPONSE.value,
                     )
                 outcome = (
                     ReconciliationOutcome.IDEMPOTENT
@@ -383,9 +386,8 @@ class ReconciliationCoordinator:
                         ProtocolErrorCode.RECONCILIATION_NOT_FOUND.value,
                     )
                     self._health_gate.block("HG_ORDER_UNKNOWN")
-                    return ReconciliationItemResult(
-                        order_id,
-                        ReconciliationOutcome.UNRESOLVED,
+                    return self._pending_or_review(
+                        candidate,
                         current_state,
                         ProtocolErrorCode.RECONCILIATION_NOT_FOUND.value,
                     )
@@ -409,11 +411,10 @@ class ReconciliationCoordinator:
                         "RECONCILIATION_NOT_FOUND",
                     )
                 self._health_gate.block("HG_ORDER_UNKNOWN")
-                return ReconciliationItemResult(
-                    order_id,
-                    ReconciliationOutcome.UNRESOLVED,
+                return self._pending_or_review(
+                    candidate,
                     current_state,
-                    applied.reason_code,
+                    applied.reason_code or ProtocolErrorCode.RECONCILIATION_NOT_FOUND.value,
                 )
             if status.outcome is StatusQueryOutcome.INVALID_RESPONSE:
                 self._writer.complete_reconciliation_attempt(
@@ -423,7 +424,7 @@ class ReconciliationCoordinator:
                 )
                 return self._manual_review(order_id, current_state, reason)
             self._writer.complete_reconciliation_attempt(attempt_id, "FAILED", reason)
-            return self._failed(order_id, current_state, reason)
+            return self._failed(candidate, current_state, reason)
         raise AssertionError("bounded reconciliation loop did not return")
 
     def _invalid_result(
@@ -438,19 +439,58 @@ class ReconciliationCoordinator:
 
     def _failed(
         self,
-        order_id: str,
+        candidate: dict[str, object],
         current_state: OrderState,
         reason: str,
     ) -> ReconciliationItemResult:
+        order_id = str(candidate["order_id"])
         self._health_gate.block("HG_RECONCILIATION_UNAVAILABLE")
         self._event_sink.emit(
             "reconciliation_failed",
             order_id=order_id,
             reason_code=reason,
         )
+        return self._pending_or_review(
+            candidate,
+            current_state,
+            reason,
+            default_outcome=ReconciliationOutcome.FAILED,
+        )
+
+    def _pending_or_review(
+        self,
+        candidate: dict[str, object],
+        current_state: OrderState,
+        reason: str,
+        *,
+        default_outcome: ReconciliationOutcome = ReconciliationOutcome.UNRESOLVED,
+    ) -> ReconciliationItemResult:
+        order_id = str(candidate["order_id"])
+        attempts = self._reader.reconciliation_attempts_for_order(order_id)
+        created_at = datetime.fromisoformat(str(candidate["order_created_at"])).astimezone(UTC)
+        age_seconds = max(0.0, (datetime.now(UTC) - created_at).total_seconds())
+        if (
+            len(attempts) >= _RECONCILIATION_REVIEW_ATTEMPTS
+            or age_seconds >= _RECONCILIATION_REVIEW_AGE_SECONDS
+        ):
+            self._health_gate.block("HG_ORDER_UNKNOWN")
+            self._event_sink.emit(
+                "reconciliation_review_required",
+                order_id=order_id,
+                reason_code=_RECONCILIATION_REVIEW_REASON,
+                last_reason_code=reason,
+                attempt_count=len(attempts),
+                age_seconds=int(age_seconds),
+            )
+            return ReconciliationItemResult(
+                order_id,
+                ReconciliationOutcome.MANUAL_REVIEW_REQUIRED,
+                current_state,
+                _RECONCILIATION_REVIEW_REASON,
+            )
         return ReconciliationItemResult(
             order_id,
-            ReconciliationOutcome.FAILED,
+            default_outcome,
             current_state,
             reason,
         )

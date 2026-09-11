@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from apps.core.worker_client import SocketWorkerClient
+from apps.iqoption_connection_worker.server import IQOptionReadOnlyWorkerServer
 from apps.iqoption_worker.order_session import IQOptionOrderSession
 from apps.iqoption_worker.reconciliation import IQOptionReconciliationHandler
 from apps.iqoption_worker.server import IQOptionWorkerServer
@@ -25,7 +26,8 @@ from packages.domain.models import (
     StatusQueryOutcome,
     WorkerOutcome,
 )
-from packages.protocol.envelope import EndpointRole
+from packages.protocol.envelope import EndpointRole, Envelope, MessageType
+from packages.protocol.messages import NotFoundEvidence, OrderStatusResult
 from packages.protocol.transport import FramedSocket
 
 
@@ -79,6 +81,11 @@ def test_iqoption_worker_handshake_and_capabilities() -> None:
     assert client.capabilities.connection_mode == "PRACTICE"
     assert client.capabilities.supports_reconciliation is True
     assert client.capabilities.supports_order_events is True
+
+    health = client.request_health_snapshot()
+    assert health["status"] == "READY"
+    assert health["contract_events_overflow_total"] == 0
+    assert health["reconciliation_required"] is False
 
     # Query Clock
     clock = client.broker_clock()
@@ -248,3 +255,101 @@ def test_iqoption_worker_reconciliation_query() -> None:
     assert res.evidence.realized_pnl_minor == 950  # 1000 * 1.95 - 1000 = 950
 
     client.close()
+
+
+def test_iqoption_worker_preserves_complete_negative_history_evidence() -> None:
+    _, _, port = _start_test_server(FakeIQOptionScenario.NORMAL)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect(("127.0.0.1", port))
+    framed = FramedSocket(sock)
+    client = SocketWorkerClient.handshake(
+        framed,
+        timeout_seconds=2.0,
+        expected_worker_role=EndpointRole.IQOPTION_WORKER,
+        expected_broker="IQOPTION",
+    )
+    query = OrderStatusQuery(
+        correlation_id="correlation-missing-iq",
+        intent_id="intent-missing-iq",
+        order_id="order-missing-iq",
+        client_order_ref="order-missing-iq",
+        broker=Broker.IQ_OPTION,
+        account_id="PRACTICE_ACCOUNT",
+        product="BINARY_OPTION",
+        symbol="EURJPY-OTC",
+        direction=Direction.PUT,
+        amount=Money(100, "USD"),
+        submitted_at=datetime.now(UTC) - timedelta(minutes=2),
+    )
+
+    result = client.query_order_status(query, timeout=1.0)
+
+    assert result.outcome is StatusQueryOutcome.NOT_FOUND
+    assert result.not_found_evidence is not None
+    assert result.not_found_evidence.confirms_both_sources is True
+    client.close()
+
+
+def test_production_iqoption_worker_serializes_negative_evidence() -> None:
+    """Exercise the server selected by Core, not only the simulated server."""
+
+    class ConnectedSession:
+        is_connected = True
+
+    class NegativeReconciliation:
+        def query_order_status(self, query: OrderStatusQuery, *, causation_id: str):
+            return OrderStatusResult(
+                outcome=StatusQueryOutcome.NOT_FOUND,
+                evidence=None,
+                response_message_id="worker-result",
+                correlation_id=query.correlation_id,
+                causation_id=causation_id,
+                reason_code="IQOPTION_OPTION_NOT_FOUND",
+                not_found_evidence=NotFoundEvidence(
+                    observed_at=datetime.now(UTC),
+                    statement_checked=True,
+                    portfolio_checked=True,
+                ),
+            )
+
+    query = OrderStatusQuery(
+        correlation_id="production-correlation",
+        intent_id="production-intent",
+        order_id="production-order",
+        client_order_ref="production-order",
+        broker=Broker.IQ_OPTION,
+        account_id="IQOPTION_PRACTICE",
+        product="BINARY_OPTION",
+        symbol="EURJPY-OTC",
+        direction=Direction.PUT,
+        amount=Money(100, "USD"),
+        submitted_at=datetime.now(UTC) - timedelta(minutes=2),
+    )
+    server = IQOptionReadOnlyWorkerServer(
+        "127.0.0.1",
+        1,
+        1,
+        ConnectedSession(),  # type: ignore[arg-type]
+        connection_mode="DEMO_AUTH_FINANCIAL",
+    )
+    server._reconciliation = NegativeReconciliation()  # type: ignore[assignment]
+    request = Envelope(
+        protocol_version=1,
+        message_id="production-request",
+        correlation_id=query.correlation_id,
+        causation_id=None,
+        source=EndpointRole.CORE,
+        target=EndpointRole.IQOPTION_WORKER,
+        message_type=MessageType.ORDER_STATUS_REQUEST,
+        created_at_utc=datetime.now(UTC),
+        deadline_at=None,
+        payload=query.to_payload(),
+    )
+
+    message_type, payload = server._dispatch(request)
+
+    assert message_type is MessageType.ORDER_STATUS_RESPONSE
+    assert payload["query_outcome"] == "NOT_FOUND"
+    assert payload["not_found_evidence"] is not None
+    assert payload["not_found_evidence"]["statement_checked"] is True
+    assert payload["not_found_evidence"]["portfolio_checked"] is True

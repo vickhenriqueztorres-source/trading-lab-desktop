@@ -106,6 +106,38 @@ def test_same_series_same_close_deduplicates_fetch_for_many_recipes() -> None:
     assert hub.stats.dedup_hits == 2
 
 
+def test_required_recovery_candle_is_not_hidden_by_boundary_cache() -> None:
+    key = _key()
+    target = _candle(10).close_time
+    stale_client = FakeClient([_candle(index) for index in range(10)])
+    fresh_client = FakeClient([_candle(index) for index in range(11)])
+    hub = _hub(now=target + timedelta(seconds=1))
+
+    missing = hub.snapshot(
+        client=stale_client,
+        key=key,
+        warmup_required=2,
+        close_epoch=100,
+        priority=IQOptionSeriesPriority.RECOVERY,
+        required_close_time=target,
+    )
+    found = hub.snapshot(
+        client=fresh_client,
+        key=key,
+        warmup_required=2,
+        close_epoch=100,
+        priority=IQOptionSeriesPriority.RECOVERY,
+        required_close_time=target,
+    )
+
+    assert missing.reason is IQOptionSeriesReason.TARGET_CANDLE_UNAVAILABLE
+    assert found.ok
+    assert found.snapshot is not None
+    assert found.snapshot.candles[-1].close_time == target
+    assert len(stale_client.requests) == 1
+    assert len(fresh_client.requests) == 1
+
+
 def test_exact_asset_key_keeps_otc_and_spot_distinct() -> None:
     otc_client = FakeClient([_candle(index, asset="EURUSD-OTC") for index in range(5)])
     spot_client = FakeClient([_candle(index, asset="EURUSD") for index in range(5)])

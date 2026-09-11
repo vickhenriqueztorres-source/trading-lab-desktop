@@ -1,10 +1,14 @@
+from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from apps.core.execution_state import TransportSupervisor
+from apps.core.health import HealthGate
 from apps.core.lifecycle_service import CoreLifecycleService, CoreServiceState
 from apps.core.worker_client import DeliveryCertainty, WorkerDispatchError
+from packages.domain.market import BrokerClockSnapshot
 from packages.observability import InMemoryEventSink
 from packages.protocol import ProtocolErrorCode
 
@@ -69,6 +73,66 @@ def test_ipc_loss_respawns_cached_session_without_http_login() -> None:
 
     assert connected
     assert calls == [True]
+
+
+def test_balance_timeout_after_reconnect_does_not_reconnect_healthy_transport() -> None:
+    service = _recovery_service()
+    service._runtime.health_gate = HealthGate()
+    reconnects: list[str] = []
+    transport_up: list[bool] = []
+    monitor_starts: list[object] = []
+    now = datetime.now(UTC)
+
+    class Client:
+        is_ready = True
+
+        @staticmethod
+        def iqoption_reconnect_session() -> None:
+            reconnects.append("reconnect")
+
+        @staticmethod
+        def broker_balance() -> None:
+            raise WorkerDispatchError(
+                ProtocolErrorCode.IQOPTION_REQUEST_TIMEOUT,
+                DeliveryCertainty.NOT_SENT,
+                "balance timeout",
+            )
+
+        @staticmethod
+        def broker_clock() -> BrokerClockSnapshot:
+            return BrokerClockSnapshot(
+                int(now.timestamp()),
+                now,
+                0.1,
+                Decimal(0),
+                source_age_seconds=0.1,
+                connection_generation=2,
+                sample_sequence=3,
+            )
+
+    service._iqoption = SimpleNamespace(client=Client())
+    service._iqoption_auto_trader = SimpleNamespace(
+        on_transport_up=lambda: transport_up.append(True)
+    )
+    service._start_iqoption_balance_monitor = lambda _runtime, _supervisor, balance: (
+        monitor_starts.append(balance)
+    )
+    service._respawn_iqoption_from_cached_session = lambda: pytest.fail(
+        "balance-only timeout must not respawn the worker"
+    )
+
+    connected, reason, retry_same, retry_after = service._try_reconnect_iqoption_websocket()
+
+    assert connected is True
+    assert reason == "IQOPTION_WEBSOCKET_SESSION_REUSED"
+    assert retry_same is False
+    assert retry_after == 0.0
+    assert reconnects == ["reconnect"]
+    assert monitor_starts == [None]
+    assert transport_up == [True]
+    assert service._iqoption_clock is not None
+    gate = service._runtime.health_gate.state_for("IQ_OPTION", "IQOPTION_PRACTICE")
+    assert gate.reason_code == "IQOPTION_BALANCE_STALE"
 
 
 @pytest.mark.parametrize("cached_reason", ["IQOPTION_AUTH_FAILED", "IQOPTION_SSID_UNAVAILABLE"])

@@ -28,8 +28,10 @@ from apps.core.execution_state import (
 from apps.core.iqoption_auto_trader import (
     IQOPTION_CLOCK_FAILURE_REASONS,
     IQOPTION_PRACTICE_ACCOUNT_ID,
+    IQOPTION_TRANSPORT_FAILURE_REASONS,
     IqOptionAutoTrader,
 )
+from apps.core.iqoption_balance_monitor import IQOptionBalanceMonitor
 from apps.core.iqoption_candidates import TIMEFRAMES
 from apps.core.iqoption_connection_safety import (
     IQOptionConnectionSafetyController,
@@ -92,6 +94,15 @@ _DEMO_TEST_SESSION_BLOCKERS = frozenset(
     }
 )
 
+_IQOPTION_AUTOMATIC_RECONCILIATION_BLOCKERS = frozenset(
+    {
+        "HG_ORDER_UNKNOWN",
+        "HG_RECONCILIATION_REQUIRED",
+        "HG_RECONCILIATION_UNAVAILABLE",
+        "HG_SETTLEMENT_UNKNOWN",
+    }
+)
+
 # PyInstaller cold starts on Windows can take materially longer than the source
 # runtime, especially when launched from the portable wrapper. Keep the IQ
 # worker handshake bounded but generous enough to avoid a false timeout before
@@ -144,6 +155,8 @@ class CoreLifecycleService:
         self._iqoption: ReadOnlyWorkerSupervisor | None = None
         self._iqoption_connecting: ReadOnlyWorkerSupervisor | None = None
         self._iqoption_balance: BrokerAccountBalance | None = None
+        self._iqoption_balance_monitor: IQOptionBalanceMonitor | None = None
+        self._iqoption_balance_generation = 0
         self._iqoption_clock: BrokerClockSnapshot | None = None
         self._iqoption_session_invalidated = False
         try:
@@ -406,10 +419,35 @@ class CoreLifecycleService:
                     iqoption_balance=lambda: (
                         None
                         if self._iqoption_session_invalidated
-                        else self._iqoption_auto_trader.latest_balance
-                        if self._iqoption_auto_trader is not None
-                        and self._iqoption_auto_trader.latest_balance is not None
+                        else self._iqoption_balance_monitor.snapshot.balance
+                        if self._iqoption_balance_monitor is not None
                         else self._iqoption_balance
+                    ),
+                    iqoption_balance_fresh=lambda: (
+                        False
+                        if self._iqoption_session_invalidated
+                        else self._iqoption_balance_monitor.snapshot.is_fresh
+                        if self._iqoption_balance_monitor is not None
+                        else None
+                    ),
+                    iqoption_balance_age_seconds=lambda: (
+                        None
+                        if self._iqoption_session_invalidated
+                        or self._iqoption_balance_monitor is None
+                        else self._iqoption_balance_monitor.age_seconds
+                    ),
+                    iqoption_balance_quality=lambda: (
+                        "UNAVAILABLE"
+                        if self._iqoption_session_invalidated
+                        else self._iqoption_balance_monitor.snapshot.quality.value
+                        if self._iqoption_balance_monitor is not None
+                        else None
+                    ),
+                    iqoption_balance_retry_count=lambda: (
+                        None
+                        if self._iqoption_session_invalidated
+                        or self._iqoption_balance_monitor is None
+                        else self._iqoption_balance_monitor.snapshot.consecutive_failures
                     ),
                     iqoption_clock=lambda: (
                         None
@@ -417,6 +455,13 @@ class CoreLifecycleService:
                         else self._iqoption_auto_trader.latest_clock
                         if self._iqoption_auto_trader is not None
                         else self._iqoption_clock
+                    ),
+                    iqoption_clock_fresh=lambda: (
+                        False
+                        if self._iqoption_session_invalidated
+                        else self._iqoption_auto_trader.latest_clock_is_fresh
+                        if self._iqoption_auto_trader is not None
+                        else None
                     ),
                     iqoption_risk_config=lambda: self._iqoption_risk_config,
                     iqoption_bot_armed=lambda: self._iqoption_bot_armed,
@@ -598,6 +643,7 @@ class CoreLifecycleService:
             # IPC PONG proves only process liveness. A broker failure invalidates
             # cached evidence even when the supervisor still reports READY.
             self._iqoption_session_invalidated = True
+            self._stop_iqoption_balance_monitor()
             self._iqoption_balance = None
             self._iqoption_clock = None
             if current is not None and current.is_alive():
@@ -748,7 +794,22 @@ class CoreLifecycleService:
             return self._respawn_iqoption_from_cached_session()
         try:
             reconnect()
-            balance = client.broker_balance()
+            balance: BrokerAccountBalance | None = None
+            try:
+                balance = client.broker_balance()
+            except WorkerDispatchError as exc:
+                if exc.code.value in IQOPTION_TRANSPORT_FAILURE_REASONS:
+                    raise
+                runtime.health_gate.block_scope(
+                    Broker.IQ_OPTION.value,
+                    IQOPTION_PRACTICE_ACCOUNT_ID,
+                    "IQOPTION_BALANCE_STALE",
+                )
+                runtime.event_sink.emit(
+                    "iqoption_balance_sync_pending",
+                    broker=Broker.IQ_OPTION.value,
+                    reason_code=exc.code.value,
+                )
             clock: BrokerClockSnapshot | None = None
             try:
                 clock = client.broker_clock()
@@ -786,6 +847,7 @@ class CoreLifecycleService:
         self._iqoption_balance = balance
         self._iqoption_clock = clock
         self._iqoption_session_invalidated = False
+        self._start_iqoption_balance_monitor(runtime, supervisor, balance)
         self._iqoption_auto_trader.on_transport_up()
         if self._transport_supervisor.armed_intent:
             self._iqoption_bot_armed = True
@@ -1007,6 +1069,7 @@ class CoreLifecycleService:
                         raise RuntimeError("IQOPTION_ACCOUNT_MODE_MISMATCH")
                 except (WorkerDispatchError, ProtocolError, RuntimeError, OSError, ValueError):
                     self._iqoption_session_invalidated = True
+                    self._stop_iqoption_balance_monitor()
                     self._iqoption_balance = None
                     self._iqoption_clock = None
                     self._iqoption_auto_trader.on_transport_down(
@@ -1016,6 +1079,11 @@ class CoreLifecycleService:
                         self._iqoption_bot_reason = "TRANSPORT_DOWN"
                 else:
                     self._iqoption_balance = verified_balance
+                    self._start_iqoption_balance_monitor(
+                        self._require_runtime(),
+                        self._iqoption,
+                        verified_balance,
+                    )
                     return (
                         True,
                         True,
@@ -1053,6 +1121,7 @@ class CoreLifecycleService:
             self._iqoption_auto_trader.on_transport_down("IQOPTION_CONNECTION_CHANGE")
             runtime.detach_iqoption_worker()
             previous = self._iqoption
+            self._stop_iqoption_balance_monitor()
             self._iqoption = None
             self._iqoption_balance = None
             self._iqoption_clock = None
@@ -1106,6 +1175,7 @@ class CoreLifecycleService:
                     runtime.attach_iqoption_worker(
                         supervisor.client,
                         on_order_event=self._iqoption_auto_trader.notify_order_event,
+                        on_reconciliation_completed=(self._on_iqoption_reconciliation_completed),
                     )
             except WorkerDispatchError as exc:
                 runtime.detach_iqoption_worker()
@@ -1154,6 +1224,7 @@ class CoreLifecycleService:
             self._iqoption_balance = balance
             self._iqoption_clock = clock
             self._iqoption_session_invalidated = False
+            self._start_iqoption_balance_monitor(runtime, supervisor, balance)
             self._iqoption_auto_trader.on_transport_up()
             if self._transport_supervisor.armed_intent:
                 self._iqoption_bot_armed = True
@@ -1163,12 +1234,14 @@ class CoreLifecycleService:
                 ):
                     self._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
                 else:
+                    blocker = runtime.health_gate.state_for(
+                        Broker.IQ_OPTION.value,
+                        IQOPTION_PRACTICE_ACCOUNT_ID,
+                    ).reason_code
                     self._iqoption_bot_reason = (
-                        runtime.health_gate.state_for(
-                            Broker.IQ_OPTION.value,
-                            IQOPTION_PRACTICE_ACCOUNT_ID,
-                        ).reason_code
-                        or "IQOPTION_HEALTH_GATE_BLOCKED"
+                        "IQOPTION_BOT_ARMED_RECONCILING"
+                        if blocker in _IQOPTION_AUTOMATIC_RECONCILIATION_BLOCKERS
+                        else blocker or "IQOPTION_HEALTH_GATE_BLOCKED"
                     )
             else:
                 self._iqoption_bot_reason = "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK"
@@ -1280,7 +1353,10 @@ class CoreLifecycleService:
                     self._iqoption_bot_reason = "IQOPTION_CORE_NOT_READY"
                     return False, self._iqoption_bot_reason
                 global_state = iq_runtime.health_gate.global_state
-                if not global_state.is_open:
+                if (
+                    not global_state.is_open
+                    and global_state.reason_code not in _IQOPTION_AUTOMATIC_RECONCILIATION_BLOCKERS
+                ):
                     self._iqoption_bot_reason = (
                         global_state.reason_code or "IQOPTION_HEALTH_GATE_BLOCKED"
                     )
@@ -1300,6 +1376,7 @@ class CoreLifecycleService:
                     "HG_WORKER_NOT_READY",
                     "HG_MARKET_DATA_DISCONNECTED",
                     "MD_CLOCK_UNTRUSTED",
+                    *_IQOPTION_AUTOMATIC_RECONCILIATION_BLOCKERS,
                 }
                 if not resumed and blocker not in transport_blockers:
                     iq_runtime.stop_new_entries_for(
@@ -1348,13 +1425,36 @@ class CoreLifecycleService:
                 Broker.IQ_OPTION,
                 IQOPTION_PRACTICE_ACCOUNT_ID,
             ):
-                self._iqoption_bot_reason = (
-                    iq_runtime.health_gate.state_for(
-                        Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
-                    ).reason_code
-                    or "IQOPTION_HEALTH_GATE_BLOCKED"
+                blocker = iq_runtime.health_gate.state_for(
+                    Broker.IQ_OPTION.value, IQOPTION_PRACTICE_ACCOUNT_ID
+                ).reason_code
+                if blocker not in _IQOPTION_AUTOMATIC_RECONCILIATION_BLOCKERS:
+                    self._iqoption_bot_reason = blocker or "IQOPTION_HEALTH_GATE_BLOCKED"
+                    return False, self._iqoption_bot_reason
+                # Persist the customer's intent, but keep the financial gate
+                # closed until reconciliation supplies authoritative evidence.
+                # This removes the modal/retry loop without ever allowing a
+                # duplicate order through the unknown-exposure boundary.
+                try:
+                    self._iqoption_execution_transport().arm()
+                except (OSError, ValueError):
+                    self._iqoption_bot_reason = "IQOPTION_OPERATOR_INTENT_PERSIST_FAILED"
+                    return False, self._iqoption_bot_reason
+                self._iqoption_bot_armed = True
+                if (
+                    hasattr(self, "_iqoption_auto_trader")
+                    and self._iqoption_auto_trader is not None
+                ):
+                    self._iqoption_auto_trader.begin_new_run()
+                    self._iqoption_auto_trader.start()
+                self._iqoption_bot_reason = "IQOPTION_BOT_ARMED_RECONCILING"
+                iq_runtime.event_sink.emit(
+                    "iqoption_operator_intent_armed",
+                    reason_code=blocker,
+                    execution_state=ExecutionState.ARMED.value,
                 )
-                return False, self._iqoption_bot_reason
+                self._schedule_iqoption_reconciliation()
+                return True, self._iqoption_bot_reason
             self._iqoption_bot_armed = True
             self._iqoption_execution_transport().arm()
             if hasattr(self, "_iqoption_auto_trader") and self._iqoption_auto_trader is not None:
@@ -1362,6 +1462,42 @@ class CoreLifecycleService:
                 self._iqoption_auto_trader.start()
             self._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
             return True, self._iqoption_bot_reason
+
+    def _on_iqoption_reconciliation_completed(self) -> None:
+        """Project automatic recovery without requiring another customer click."""
+
+        with self._iqoption_switch_lock:
+            if not self._iqoption_bot_armed:
+                return
+            runtime = self._runtime
+            if runtime is None:
+                return
+            state = runtime.health_gate.state_for(
+                Broker.IQ_OPTION.value,
+                IQOPTION_PRACTICE_ACCOUNT_ID,
+            )
+            if state.is_open:
+                recovered = self._iqoption_bot_reason == "IQOPTION_BOT_ARMED_RECONCILING"
+                self._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
+                if recovered:
+                    runtime.event_sink.emit(
+                        "iqoption_automatic_recovery_completed",
+                        broker=Broker.IQ_OPTION.value,
+                    )
+            elif state.reason_code in _IQOPTION_AUTOMATIC_RECONCILIATION_BLOCKERS:
+                candidates = runtime.reader.list_reconciliation_candidates()
+                review_required = any(
+                    len(
+                        runtime.reader.reconciliation_attempts_for_order(str(candidate["order_id"]))
+                    )
+                    >= 8
+                    for candidate in candidates
+                )
+                self._iqoption_bot_reason = (
+                    "IQOPTION_BOT_ARMED_REVIEW_REQUIRED"
+                    if review_required
+                    else "IQOPTION_BOT_ARMED_RECONCILING"
+                )
 
     def _stop_iqoption_execution(
         self,
@@ -1675,6 +1811,7 @@ class CoreLifecycleService:
         if connecting_iqoption is not None:
             connecting_iqoption.shutdown(min(0.5, grace_seconds))
         self._stop_deriv_telemetry()
+        self._stop_iqoption_balance_monitor()
         runtime = self._require_runtime()
         self._stop_deriv_financial_runtime(runtime)
         if self._deriv is not None:
@@ -1893,6 +2030,44 @@ class CoreLifecycleService:
             allow_demo_financial_submission=account_mode == "practice",
             allow_real_financial_submission=False,
         )
+
+    def _start_iqoption_balance_monitor(
+        self,
+        runtime: CoreRuntime,
+        supervisor: ReadOnlyWorkerSupervisor,
+        initial_balance: BrokerAccountBalance | None,
+    ) -> None:
+        """Observe balance independently from strategy and broker-clock probes."""
+
+        self._stop_iqoption_balance_monitor()
+        self._iqoption_balance_generation += 1
+        generation = self._iqoption_balance_generation
+
+        def publish(balance: BrokerAccountBalance) -> None:
+            if generation == self._iqoption_balance_generation:
+                self._iqoption_balance = balance
+
+        monitor = IQOptionBalanceMonitor(
+            supervisor,
+            runtime.health_gate,
+            self._iqoption_message_budget,
+            initial_balance=initial_balance,
+            account_id=IQOPTION_PRACTICE_ACCOUNT_ID,
+            generation_is_current=lambda: (
+                generation == self._iqoption_balance_generation and supervisor is self._iqoption
+            ),
+            balance_notifier=publish,
+            disconnect_notifier=self._request_iqoption_recovery,
+        )
+        self._iqoption_balance_monitor = monitor
+        monitor.start()
+
+    def _stop_iqoption_balance_monitor(self) -> None:
+        self._iqoption_balance_generation = getattr(self, "_iqoption_balance_generation", 0) + 1
+        monitor = getattr(self, "_iqoption_balance_monitor", None)
+        self._iqoption_balance_monitor = None
+        if monitor is not None:
+            monitor.stop()
 
     def _start_deriv_telemetry(
         self,
