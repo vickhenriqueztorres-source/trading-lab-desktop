@@ -375,6 +375,180 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Configuration",
         "es": "Configuración",
     },
+    # Overview Redesign (Prompt 4)
+    "overview.active_strategy": {
+        "en": "ACTIVE STRATEGY",
+        "es": "ESTRATEGIA ACTIVA",
+    },
+    "overview.configure": {
+        "en": "Configure",
+        "es": "Configurar",
+    },
+    "overview.state": {
+        "en": "STATUS",
+        "es": "ESTADO",
+    },
+    "overview.core_operational": {
+        "en": "Trading Core Operational",
+        "es": "Trading Core Operativo",
+    },
+    "overview.core_disconnected": {
+        "en": "Trading Core Disconnected",
+        "es": "Trading Core Desconectado",
+    },
+    "overview.balance": {
+        "en": "BALANCE",
+        "es": "SALDO",
+    },
+    "overview.updated_at": {
+        "en": "Updated at {time}",
+        "es": "Actualizado a las {time}",
+    },
+    "overview.bot_state": {
+        "en": "BOT STATUS",
+        "es": "ESTADO DEL BOT",
+    },
+    "bot.idle": {
+        "en": "Idle",
+        "es": "En espera",
+    },
+    "bot.running": {
+        "en": "Running",
+        "es": "En ejecución",
+    },
+    "bot.stopped": {
+        "en": "Stopped",
+        "es": "Detenido",
+    },
+    "bot.error": {
+        "en": "Blocked",
+        "es": "Bloqueado",
+    },
+    "bot.idle_hint": {
+        "en": "Waiting for entry conditions",
+        "es": "Esperando condiciones de entrada",
+    },
+    "bot.running_hint": {
+        "en": "Active and monitoring market",
+        "es": "Activo y monitoreando el mercado",
+    },
+    "bot.stopped_hint": {
+        "en": "Bot execution halted",
+        "es": "Ejecución del bot detenida",
+    },
+    "bot.error_hint": {
+        "en": "Execution blocked by risk or connection",
+        "es": "Ejecución bloqueada por riesgo o conexión",
+    },
+    "bot.state_tip": {
+        "en": "Current automation status of the trading core engine.",
+        "es": "Estado actual de la automatización del motor de trading core.",
+    },
+    "mode.practice": {
+        "en": "PRACTICE",
+        "es": "PRÁCTICA",
+    },
+    "mode.practice_tip": {
+        "en": "Operating with demonstration balance. No real risk.",
+        "es": "Operas con saldo de demostración. Sin riesgo real.",
+    },
+    "mode.real_tip": {
+        "en": "REAL MONEY MODE ACTIVE. Real capital at risk.",
+        "es": "MODO DINERO REAL ACTIVO. Capital real en riesgo.",
+    },
+    "kpi.total_trades": {
+        "en": "TOTAL TRADES",
+        "es": "TOTAL OPERACIONES",
+    },
+    "kpi.wins": {
+        "en": "WINS",
+        "es": "GANADAS",
+    },
+    "kpi.losses": {
+        "en": "LOSSES",
+        "es": "PERDIDAS",
+    },
+    "kpi.net_profit": {
+        "en": "NET PROFIT",
+        "es": "LUCRO NETO",
+    },
+    "kpi.today_delta": {
+        "en": "{value} today",
+        "es": "{value} hoy",
+    },
+    "kpi.total_trades_tip": {
+        "en": "Total confirmed settled operations in current session.",
+        "es": "Total de operaciones liquidadas confirmadas en la sesión actual.",
+    },
+    "kpi.wins_tip": {
+        "en": "Successful settled trades with positive payoff.",
+        "es": "Operaciones liquidadas exitosas con retorno positivo.",
+    },
+    "kpi.losses_tip": {
+        "en": "Unsuccessful trades with negative outcome.",
+        "es": "Operaciones liquidadas con resultado negativo.",
+    },
+    "kpi.net_profit_tip": {
+        "en": "Total accumulated realized P&L for today's session.",
+        "es": "P&L neto acumulado realizado en la sesión de hoy.",
+    },
+    "radar.title": {
+        "en": "Market Radar",
+        "es": "Radar de Mercado",
+    },
+    "radar.subtitle": {
+        "en": "Real-time monitored assets and algorithmic signal ranking",
+        "es": "Activos monitoreados en tiempo real y clasificación algorítmica de señales",
+    },
+    "radar.search_placeholder": {
+        "en": "Search asset...",
+        "es": "Buscar activo...",
+    },
+    "radar.filter_all": {
+        "en": "All assets",
+        "es": "Todos los activos",
+    },
+    "radar.filter_forex": {
+        "en": "Forex",
+        "es": "Forex",
+    },
+    "radar.filter_otc": {
+        "en": "OTC",
+        "es": "OTC",
+    },
+    "radar.empty": {
+        "en": "Connect a broker to view real-time assets.",
+        "es": "Conecta un broker para ver los activos en tiempo real.",
+    },
+    "radar.rsi_tip": {
+        "en": (
+            "Relative Strength Index (14 periods). Oversold < 30 (CALL signal); "
+            "Overbought > 70 (PUT signal)."
+        ),
+        "es": (
+            "Índice de Fuerza Relativa (14 períodos). Sobreventa < 30 (señal CALL); "
+            "Sobrecompra > 70 (señal PUT)."
+        ),
+    },
+    "radar.col_rank": {"en": "#", "es": "#"},
+    "radar.col_asset": {"en": "Asset", "es": "Activo"},
+    "radar.col_price": {"en": "Price", "es": "Precio"},
+    "radar.col_rsi": {"en": "RSI (14)", "es": "RSI (14)"},
+    "radar.col_signal": {"en": "Signal", "es": "Señal"},
+    "radar.col_status": {"en": "Status", "es": "Estado"},
+    "radar.col_updated": {"en": "Last update", "es": "Última act."},
+    "radar.monitoring": {"en": "MONITORING", "es": "MONITOREANDO"},
+    "signal.none": {"en": "NEUTRAL", "es": "NEUTRAL"},
+    "signal.call": {"en": "BUY (CALL)", "es": "COMPRA (CALL)"},
+    "signal.put": {"en": "SELL (PUT)", "es": "VENTA (PUT)"},
+    "action.start_bot": {
+        "en": "START {broker} BOT",
+        "es": "ENCENDER BOT {broker}",
+    },
+    "action.stop_bot": {
+        "en": "STOP {broker} BOT",
+        "es": "DETENER BOT {broker}",
+    },
     "overview.intro": {
         "en": (
             "Consolidated projection. Open each broker tab to see its status and activity "

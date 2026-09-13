@@ -9,6 +9,7 @@ from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
 from apps.ui.components.iqoption_strategy_panel import IqOptionStrategyConfigWidget
 from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummaryWidget
 from apps.ui.components.iqoption_workspace import IqOptionWorkspaceWidget
+from apps.ui.components.kpi_card import KpiCard, RingGauge
 from apps.ui.components.log_terminal import OperationalLogTerminal
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.components.results_dashboard import ResultsDashboardWidget
@@ -33,6 +34,8 @@ __all__ = [
     "IqOptionStrategyConfigWidget",
     "IqOptionStrategySummaryWidget",
     "IqOptionWorkspaceWidget",
+    "KpiCard",
+    "RingGauge",
     "OperationalLogTerminal",
     "OrderTableView",
     "ResultsDashboardWidget",

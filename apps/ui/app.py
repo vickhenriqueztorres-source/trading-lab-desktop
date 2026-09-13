@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QStackedWidget,
     QTabWidget,
     QVBoxLayout,
@@ -44,13 +43,12 @@ from apps.ui.design import asset_path
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import I18nManager, t
 from apps.ui.ipc_client import UiIpcError
+from apps.ui.pages.overview_page import OverviewPage
 from apps.ui.shell import BottomBar, Sidebar, TopBar
 from apps.ui.theme import (
     ACCENT_AMBER,
     ACCENT_GREEN,
     ACCENT_RED,
-    TEXT_MUTED,
-    TEXT_SECONDARY,
     get_application_stylesheet,
 )
 from packages.protocol.ui_messages import (
@@ -241,7 +239,12 @@ class TradingLabMainWindow(QMainWindow):
         self._pages.setObjectName("MainPages")
 
         # Page 0: Overview
-        self._pages.addWidget(self._create_overview_page())
+        self._overview_page = OverviewPage()
+        self._overview_page.configure_clicked.connect(
+            lambda: self._on_page_selected(self._PAGE_SETTINGS)
+        )
+        self._overview_page.bot_toggle_clicked.connect(self._on_overview_bot_toggle)
+        self._pages.addWidget(self._overview_page)
 
         # Page 1: Deriv Workspace
         self._deriv_workspace = DerivWorkspaceWidget()
@@ -316,34 +319,30 @@ class TradingLabMainWindow(QMainWindow):
         self._lbl_badge = QLabel(t("app.practice_badge"))
         self._lbl_subtitle = QLabel(t("app.practice_subtitle"))
         self._main_tabs = _MainTabsCompat(self)
+        self._lbl_pnl_val = self._overview_page._lbl_net_profit_val
+        self._card_deriv = BrokerCardWidget("Deriv")
+        self._card_iqoption = BrokerCardWidget("IQ Option")
+        self._health_pill_widget = HealthGatePillWidget()
+        self._results_dashboard = ResultsDashboardWidget()
+        self._risk_gauge = GlobalRiskGaugeWidget()
+        self._lbl_pnl_title = QLabel()
+        self._lbl_pnl_detail = QLabel()
+        self._lbl_state_title = QLabel()
+        self._lbl_state_val = QLabel()
+        self._lbl_consec_losses = QLabel()
+        self._overview_intro = QLabel()
 
         self._on_page_selected(0)
         self._retranslate_navigation()
 
-    def _create_overview_page(self) -> QScrollArea:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+    def _on_overview_bot_toggle(self) -> None:
+        if self._overview_page._active_broker == "IQ Option":
+            self._on_toggle_iqoption_bot()
+        else:
+            self._on_toggle_bot()
 
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 16, 20, 16)
-        content_layout.setSpacing(14)
-
-        self._overview_intro = QLabel()
-        self._overview_intro.setWordWrap(True)
-        self._overview_intro.setObjectName("GuidanceText")
-        content_layout.addWidget(self._overview_intro)
-
-        content_layout.addLayout(self._create_kpis_row())
-        content_layout.addLayout(self._create_broker_hub())
-        self._results_dashboard = ResultsDashboardWidget()
-        content_layout.addWidget(self._results_dashboard)
-        self._health_pill_widget = HealthGatePillWidget()
-        content_layout.addWidget(self._health_pill_widget)
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        return scroll
+    def _create_overview_page(self) -> QWidget:
+        return self._overview_page
 
     def _create_activity_page(self) -> QWidget:
         content = QWidget()
@@ -426,76 +425,14 @@ class TradingLabMainWindow(QMainWindow):
             self._topbar.set_title(t("nav.settings"), "nav.settings")
 
     def _update_bottombar_primary_action(self, index: int) -> None:
-        if index == self._PAGE_DERIV:
+        if index == self._PAGE_OVERVIEW:
+            self._bottombar.set_primary_action(self._overview_page.primary_action_btn)
+        elif index == self._PAGE_DERIV:
             self._bottombar.set_primary_action(self._btn_deriv_bot)
         elif index == self._PAGE_IQ_OPTION:
             self._bottombar.set_primary_action(self._btn_iqoption_bot)
         else:
             self._bottombar.set_primary_action(None)
-
-    def _create_kpis_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(14)
-
-        # KPI 1: Risk Exposure Gauge
-        self._risk_gauge = GlobalRiskGaugeWidget()
-        row.addWidget(self._risk_gauge, 2)
-
-        # KPI 2: Daily P&L Card
-        self._card_pnl = QFrame()
-        self._card_pnl.setObjectName("Card")
-        pnl_layout = QVBoxLayout(self._card_pnl)
-        pnl_layout.setContentsMargins(16, 14, 16, 14)
-        pnl_layout.setSpacing(8)
-
-        self._lbl_pnl_title = QLabel(t("kpi.daily_pnl"))
-        self._lbl_pnl_title.setObjectName("Subtitle")
-        pnl_layout.addWidget(self._lbl_pnl_title)
-
-        self._lbl_pnl_val = QLabel("$ 0.00 USD")
-        self._lbl_pnl_val.setObjectName("ValueMono")
-        self._lbl_pnl_val.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 20px;")
-        pnl_layout.addWidget(self._lbl_pnl_val)
-
-        self._lbl_pnl_detail = QLabel(t("kpi.pnl_detail"))
-        self._lbl_pnl_detail.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
-        pnl_layout.addWidget(self._lbl_pnl_detail)
-        row.addWidget(self._card_pnl, 2)
-
-        # KPI 3: System State Card
-        self._card_state = QFrame()
-        self._card_state.setObjectName("Card")
-        state_layout = QVBoxLayout(self._card_state)
-        state_layout.setContentsMargins(16, 14, 16, 14)
-        state_layout.setSpacing(8)
-
-        self._lbl_state_title = QLabel(t("kpi.global_state"))
-        self._lbl_state_title.setObjectName("Subtitle")
-        state_layout.addWidget(self._lbl_state_title)
-
-        self._lbl_state_val = QLabel(t("state.READY"))
-        self._lbl_state_val.setObjectName("ValueMono")
-        self._lbl_state_val.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 16px;")
-        state_layout.addWidget(self._lbl_state_val)
-
-        self._lbl_consec_losses = QLabel(f"{t('kpi.consecutive_losses')}: 0")
-        self._lbl_consec_losses.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
-        state_layout.addWidget(self._lbl_consec_losses)
-        row.addWidget(self._card_state, 2)
-
-        return row
-
-    def _create_broker_hub(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(14)
-
-        self._card_deriv = BrokerCardWidget("Deriv")
-        row.addWidget(self._card_deriv)
-
-        self._card_iqoption = BrokerCardWidget("IQ Option")
-        row.addWidget(self._card_iqoption)
-
-        return row
 
     def _set_language(self, lang: str) -> None:
         I18nManager.set_language(lang)
@@ -526,6 +463,7 @@ class TradingLabMainWindow(QMainWindow):
         self._iqoption_workspace.retranslate()
         self._iqoption_config_panel.retranslate()
         self._settings_workspace.retranslate()
+        self._overview_page.retranslate()
         self._retranslate_navigation()
         self._refresh_projection()
 
@@ -560,6 +498,7 @@ class TradingLabMainWindow(QMainWindow):
             )
 
         snapshot = self._controller.snapshot
+        self._overview_page.update_projection(snapshot, self._controller)
         if snapshot is None:
             self._bottombar.set_system_ready(False)
             return

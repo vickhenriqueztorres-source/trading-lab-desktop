@@ -6293,7 +6293,7 @@ Validação:
   - Atualizado `apps/ui/app.py` para definir o ícone da janela principal via `self.setWindowIcon(QIcon(str(asset_path("app.ico"))))`.
   - Atualizado `pyproject.toml` (package-data `apps.ui.assets`) e `build_scripts/TradingLab.spec` (datas, hiddenimports e icon).
   - Criada suíte de testes `tests/unit/test_ui_icons.py` validando integridade de assets, resolução de caminhos, formato ICO e comportamento do cache.
-  - Validação: 1217 testes unitários e contratuais aprovados, ruff e mypy limpos.
+    - Validação: 1217 testes unitários e contratuais aprovados, ruff e mypy limpos.
 
 ## 2026-09-13 — UI Redesign v2 (Prompt 3: Shell com Sidebar e Remoção do Catálogo)
 
@@ -6321,4 +6321,46 @@ Validação:
     - `mypy apps packages`: Sucesso absoluto (337 arquivos fonte validados).
     - `pytest -q tests/unit tests/contract`: 1206 passed, 2 skipped em 101s.
     - `compileall apps packages`: 100% dos bytecodes compilados com sucesso.
+
+## 2026-09-13 — UI Redesign v2 (Prompt 4: Redesign da Página Resumen / Overview)
+
+- Redesenho completo da página "Resumen" (Overview) alinhada à identidade institucional v2:
+  - Criado `apps/ui/components/kpi_card.py`:
+    - `RingGauge(QWidget)`: medidor circular de taxa de vitória/derrota (60x60px) desenhado com `QPainter` (anti-aliasing, sem timers nem animações decorativas), anel de fundo em `BORDER_COLOR`, arco em `ACCENT_GREEN` ou `ACCENT_RED` e percentual centralizado em `FONT_MONO` (`Consolas`, 10px bold).
+    - `KpiCard(QFrame)`: card reutilizável estilizado em `QFrame#card` com label em caixa alta (`#kpiLabel`), valor institucional em `FONT_MONO` 26px bold (`#kpiValue`), delta diário (`#hint`), suporte a medidor `RingGauge` à direita e tooltips com tradução contextual.
+  - Criado `apps/ui/pages/__init__.py` e `apps/ui/pages/overview_page.py`:
+    - `OverviewPage(QWidget)` dentro de `QScrollArea` com gap de 16px e padding de 24px:
+      - **HeroCard (`QFrame#card`, altura ~130px)** com 4 colunas divididas por separadores verticais de 1px `BORDER_COLOR`:
+        - Coluna 1 (Estratégia & Broker): label `overview.active_strategy`, nome da estratégia ativa em 18px 700, chip de corretora ativa, chip de modo (`mode.practice` com borda âmbar / `mode.real` com borda vermelha) com tooltip de risco, e botão secundário `overview.configure` navegando diretamente para a aba de configurações.
+        - Coluna 2 (Estado do Core): label `overview.state`, status "CONECTADO" em verde (`ACCENT_GREEN`) ou "DESCONECTADO" em vermelho (`ACCENT_RED`), e subtítulo `overview.core_operational` / `overview.core_disconnected`.
+        - Coluna 3 (Saldo): label `overview.balance` com sufixo do modo, saldo em `FONT_MONO` 20px bold e horário da última atualização formatado.
+        - Coluna 4 (Estado do Bot): label `overview.bot_state`, box com ícone de relógio SVG e texto de estado (`bot.idle`, `bot.running`, `bot.stopped`, `bot.error`), tooltip `bot.state_tip` e hint explicativo.
+      - **Linha de 4 KpiCards**:
+        - Total Trades (`kpi.total_trades`): total de operações liquidadas com delta diário.
+        - Wins (`kpi.wins`): contagem de vitórias com `RingGauge` de win rate em verde.
+        - Losses (`kpi.losses`): contagem de derrotas com `RingGauge` de loss rate em vermelho.
+        - Net Profit (`kpi.net_profit`): lucro líquido da sessão em `FONT_MONO` colorido (verde se >= 0, vermelho se < 0) e delta correspondente.
+      - **RadarCard (`QFrame#card`, expande)**:
+        - Cabeçalho com ícone, título `radar.title`, subtítulo `radar.subtitle`, campo de busca (`QLineEdit`) e filtro de categoria (`QComboBox`: Todos os ativos, Forex, OTC).
+        - Tabela de 7 colunas: `#`, `Activo`, `Precio`, `RSI(14)` (colorido com tooltip explicativo), `Señal` (badge com ponto verde para CALL, vermelho para PUT, neutro para neutral), `Estado` (chip de monitoramento/foco) e `Última act.`.
+        - Estado vazio estilizado quando não houver broker conectado ou nenhum ativo corresponder aos filtros.
+      - **Ação Primária**: botão `primary_action_btn` (`QPushButton#primary` com texto `action.start_bot` e ícone play / `#danger` com texto `action.stop_bot` e ícone stop), conectado ao slot de ação primária da `BottomBar` quando a página Resumen estiver ativa.
+  - Integrado em `apps/ui/app.py`:
+    - `OverviewPage` alocado na página 0 do `_pages` stack.
+    - Sinais de navegação para configurações e toggle de bot conectados aos handlers do `TradingLabMainWindow`.
+    - `_lbl_pnl_val` apontando para o label de lucro líquido do `OverviewPage`, mantendo 100% de compatibilidade dos testes contratuais headless.
+    - `BottomBar.set_primary_action` atualizado para apontar para `self._overview_page.primary_action_btn` quando a página Overview for selecionada.
+    - Suporte dinâmico e reativo a retranslação (`retranslate()`) e atualização de projeções (`update_projection()`).
+  - Atualizado `apps/ui/i18n.py` com todas as chaves em Espanhol (padrão) e Inglês sem nenhum termo em português.
+  - Criada suíte de testes unitários `tests/unit/test_ui_overview_redesign.py` validando `RingGauge`, `KpiCard`, `OverviewPage`, filtros do radar e retranslação ES/EN.
+  - Validação completa:
+    - `ruff check .`: 0 erros.
+    - `ruff format --check .`: 100% formatado (581 arquivos).
+    - `mypy apps packages`: 0 erros em 340 arquivos fonte.
+    - `pytest tests/unit/test_ui_overview_redesign.py`: 3 passed.
+    - `pytest tests/contract/test_pyside6_headless.py`: 7 passed.
+    - `pytest -q tests/unit`: 1023 passed, 1 skipped.
+    - `pytest -q tests/contract`: 186 passed, 1 skipped.
+    - `compileall apps packages`: 100% dos bytecodes compilados com sucesso.
+
 
