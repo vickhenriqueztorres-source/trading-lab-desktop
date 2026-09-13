@@ -29,12 +29,18 @@ class FakeIdentityServiceErrorCode(StrEnum):
     DEVICE_INVALID = "AUTH_DEVICE_INVALID"
     DEVICE_REVOKED = "AUTH_DEVICE_REVOKED"
     DEVICE_PROOF_INVALID = "AUTH_DEVICE_PROOF_INVALID"
+    LICENSE_EXPIRED = "AUTH_LICENSE_EXPIRED"
+    DEVICE_LIMIT = "AUTH_DEVICE_LIMIT"
 
 
 class FakeIdentityServiceError(RuntimeError):
     def __init__(self, code: FakeIdentityServiceErrorCode) -> None:
         super().__init__(code.value)
         self.code = code
+
+
+IdentityServiceError = FakeIdentityServiceError
+IdentityServiceErrorCode = FakeIdentityServiceErrorCode
 
 
 @dataclass(slots=True)

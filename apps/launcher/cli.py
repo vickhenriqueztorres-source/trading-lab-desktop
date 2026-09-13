@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run post-update dry-run health check and exit with code 0 (success) or 1 (failure)",
     )
+    parser.add_argument(
+        "--auth-base-url",
+        type=str,
+        default=os.environ.get("TRADING_LAB_AUTH_BASE_URL", ""),
+        help="base URL for identity/license server HTTP service",
+    )
     return parser
 
 
@@ -204,6 +210,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.auth_base_url:
+        os.environ["TRADING_LAB_AUTH_BASE_URL"] = arguments.auth_base_url
     distribution_root, manifest = _distribution_integrity_paths(
         arguments.verify_manifest,
         arguments.distribution_root,

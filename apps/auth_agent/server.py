@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import socket
 import threading
@@ -12,12 +13,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from apps.auth_agent.agent import AuthAgent
+from apps.auth_agent.agent import AuthAgent, IdentityServicePort
 from apps.auth_agent.fake_service import (
     FakeIdentityService,
     FakeIdentityServiceError,
     FakeIdentityServiceErrorCode,
 )
+from apps.auth_agent.http_service import HttpIdentityService
 from apps.auth_agent.vault_factory import create_user_scoped_vault
 from packages.identity import OtpCode
 from packages.licensing import AuthorizationReason, LeaseVerifier, SignedLease
@@ -173,12 +175,17 @@ class AuthAgentServer:
             Path(profile_dir) / "vault",
             force_simulation=force_simulation,
         )
-        service = FakeIdentityService(
-            lease_ttl=lease_ttl,
-            signing_key_id=f"fake-{uuid4()}",
-            otp_factory=None if test_otp is None else lambda: test_otp,
-            real_mode_allowed=allow_real_mode,
-        )
+        auth_base_url = os.environ.get("TRADING_LAB_AUTH_BASE_URL", "").strip()
+        service: IdentityServicePort
+        if force_simulation or not auth_base_url:
+            service = FakeIdentityService(
+                lease_ttl=lease_ttl,
+                signing_key_id=f"fake-{uuid4()}",
+                otp_factory=None if test_otp is None else lambda: test_otp,
+                real_mode_allowed=allow_real_mode,
+            )
+        else:
+            service = HttpIdentityService(base_url=auth_base_url, timeout=request_timeout)
         verification_keys = _decode_key_registry(self._vault.get_secret(_FAKE_KEY_REGISTRY))
         # A single signed lease is persisted. Retaining every ephemeral fake-service
         # key makes normal application restarts eventually exhaust the bounded

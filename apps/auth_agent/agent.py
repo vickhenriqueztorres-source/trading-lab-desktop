@@ -56,6 +56,9 @@ class IdentityServicePort(Protocol):
 
     def is_lease_revoked(self, lease_id: str) -> bool: ...
 
+    @property
+    def lease_verification_keys(self) -> dict[str, bytes]: ...
+
 
 class AuthAgentState(StrEnum):
     SIGNED_OUT = "SIGNED_OUT"
