@@ -1,4 +1,4 @@
-﻿# AGENTS — Instruções para Agentes do Repositório
+# AGENTS — Instruções para Agentes do Repositório
 
 **Baseline obrigatória:** v1.9.11
 **Atualizado em:** 2026-09-01
@@ -17,15 +17,16 @@ Para qualquer tarefa relevante, leia:
 
 1. `AIGUARD.md`;
 2. `RULES.md`;
-3. `PRD_Trading_Desktop_Deriv_IQOption.md`;
-4. `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`;
-5. `AUTHENTICATION_AND_LICENSING.md` quando a tarefa tocar usuário, licença ou broker login;
-6. `STRATEGY_PLATFORM.md` quando tocar estratégias, catálogo ou sinais;
-7. `SECURITY.md` e `TEST_PLAN.md` quando aplicáveis;
-8. `WORKLOG.md`;
-9. `docs/README.md` para localizar a documentação operacional atual;
-10. arquivos diretamente relacionados à tarefa;
-11. `AGENTS.md` mais específico existente no subdiretório afetado.
+3. `INTERFACE_CONTRACTS.md`;
+4. `PRD_Trading_Desktop_Deriv_IQOption.md`;
+5. `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`;
+6. `AUTHENTICATION_AND_LICENSING.md` quando a tarefa tocar usuário, licença ou broker login;
+7. `STRATEGY_PLATFORM.md` quando tocar estratégias, catálogo ou sinais;
+8. `SECURITY.md` e `TEST_PLAN.md` quando aplicáveis;
+9. `WORKLOG.md`;
+10. `docs/README.md` para localizar a documentação operacional atual;
+11. arquivos diretamente relacionados à tarefa;
+12. `AGENTS.md` mais específico existente no subdiretório afetado.
 
 Não comece codificação financeira apenas pelo título da tarefa.
 

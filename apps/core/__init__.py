@@ -35,6 +35,13 @@ from apps.core.broker_shadow_soak import (
     PopenChildProcessProbe,
 )
 from apps.core.candle_pipeline import CoreCandlePipeline, CoreCandleResult
+from apps.core.config_validator import (
+    ConfigErrorItem,
+    ConfigValidationError,
+    ConfigValidator,
+    ValidatedConfig,
+    validate_config,
+)
 from apps.core.coordinator import EntryAuthorizationPort, OrderCoordinator, PersistedOrder
 from apps.core.digit_risk_config import (
     DERIV_SYNTHETIC_INDEX_ALLOWLIST,
@@ -110,6 +117,9 @@ __all__ = [
     "BrokerShadowTemporalSoakScenarioResult",
     "BrokerShadowTemporalSoakSample",
     "ChildProcessResourceSample",
+    "ConfigErrorItem",
+    "ConfigValidationError",
+    "ConfigValidator",
     "CoreInstanceGuard",
     "CoreInstanceGuardError",
     "CoreRuntime",
@@ -148,6 +158,8 @@ __all__ = [
     "WorkerSupervisor",
     "soak_cli_main",
     "fault_schedule_for",
+    "validate_config",
     "validate_digit_risk_config",
+    "ValidatedConfig",
     "profile_settings",
 ]

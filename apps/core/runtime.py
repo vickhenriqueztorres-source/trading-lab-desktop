@@ -596,8 +596,8 @@ class CoreRuntime:
         # UI projection or entry check happens to clear it.
         self.risk_ledger.refresh_digit_health_gate(self.health_gate)
         self.health_gate.clear_if("HG_SAFE_STOP")
-        self.dispatcher_started = self.health_gate.state.is_open
-        blocker = self.health_gate.state.reason_code
+        self.dispatcher_started = self.health_gate.global_state.is_open
+        blocker = self.health_gate.global_state.reason_code
         if not self.dispatcher_started:
             # A rejected ARM attempt must remain visibly DISARMED. Otherwise the UI
             # projects the bot as enabled while a different risk gate blocks every order.

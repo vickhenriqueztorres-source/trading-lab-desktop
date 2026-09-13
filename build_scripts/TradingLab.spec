@@ -27,6 +27,7 @@ a = Analysis(
         "apps.auth_agent.runner",
         "apps.core",
         "apps.core.runner",
+        "apps.core.broker_resilience",
         "apps.deriv_worker",
         "apps.deriv_worker.server",
         "apps.deriv_login_helper",

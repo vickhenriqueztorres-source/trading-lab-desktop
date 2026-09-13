@@ -58,6 +58,17 @@ def iqoption_bot_reason_text(reason: str) -> str:
         "HG_RECONCILIATION_REQUIRED": t("iq.reconciliation.automatic"),
         "HG_RECONCILIATION_UNAVAILABLE": t("iq.reconciliation.automatic"),
         "HG_SETTLEMENT_UNKNOWN": t("iq.reconciliation.automatic"),
+        "IQOPTION_ALL_MARKETS_CLOSED": (
+            "Mercados Turbo fechados no momento pela corretora. O radar retomará automaticamente "
+            "a análise assim que os pares OTC ou Forex abrirem."
+        ),
+        "IQOPTION_MARKET_CLOSED": (
+            "Mercado para o ativo selecionado fechado no momento pela corretora. "
+            "Aguardando reabertura."
+        ),
+        "IQOPTION_SYMBOL_UNSUPPORTED": (
+            "Ativo selecionado não encontrado no catálogo de negociação da corretora."
+        ),
     }
     return messages.get(reason, reason)
 

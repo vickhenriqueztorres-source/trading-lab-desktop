@@ -300,11 +300,16 @@ class DerivDigitAutoTrader:
         if callable(refresh_digit_gate):
             refresh_digit_gate(self._runtime.health_gate)
         gate = getattr(self._runtime, "health_gate", None)
-        gate_state = getattr(gate, "state", None)
-        if gate_state is not None and not bool(getattr(gate_state, "is_open", False)):
-            if getattr(gate_state, "reason_code", None) == "HG_COOLDOWN_ACTIVE":
-                return self._skip("BOT_RISK_COOLDOWN_ACTIVE")
-            return self._skip("BOT_DISABLED_OR_HEALTH_BLOCKED")
+        if gate is not None:
+            broker_state = (
+                gate.state_for(Broker.DERIV.value, self._account_id)
+                if hasattr(gate, "state_for")
+                else getattr(gate, "state", None)
+            )
+            if broker_state is not None and not bool(getattr(broker_state, "is_open", False)):
+                if getattr(broker_state, "reason_code", None) == "HG_COOLDOWN_ACTIVE":
+                    return self._skip("BOT_RISK_COOLDOWN_ACTIVE")
+                return self._skip("BOT_DISABLED_OR_HEALTH_BLOCKED")
         snapshot = self._telemetry()
         config = self._runtime.risk_ledger.digit_config
         if (

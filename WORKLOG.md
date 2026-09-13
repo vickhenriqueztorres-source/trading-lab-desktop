@@ -6178,3 +6178,96 @@ Validação:
 - Os oito processos operacionais permaneceram ativos. Nenhum perfil, credencial, login ou ordem foi
   modificado, e nenhum build anterior foi sobrescrito. O portátil não foi aberto sobre a instância;
   o onedir incorporado passou o health-check canônico.
+
+## 2026-09-11 — Formalização Canônica dos Contratos de Interface Públicos
+
+- Criado o documento canônico `INTERFACE_CONTRACTS.md` na raiz do repositório e seu espelho em `docs/INTERFACE_CONTRACTS.md`.
+- Mapeados integralmente todos os contratos de interface das aplicações (`apps/core`, `apps/auth_agent`, `apps/deriv_worker`, `apps/iqoption_worker`, `apps/launcher`, `apps/ui`) e de todos os pacotes reutilizáveis (`packages/domain`, `packages/protocol`, `packages/persistence`, `packages/risk`, `packages/portfolio_allocation`, `packages/signal_arbitration`, `packages/strategies`, `packages/strategy_catalog`, `packages/security`, `packages/observability`, `packages/brokers`, `packages/market_data`, `packages/market_pipeline`, `packages/audit`, `packages/replay`).
+- Formalizados os contratos IPC v1: envelopes (`Envelope`), papéis de endpoint (`EndpointRole`), tipos de mensagens (`MessageType`), limits de framing (`MAX_FRAME_SIZE = 1MB`) e formatos de dados.
+- Definida matriz estrita de permissões de importação entre camadas para prevenção de dependências circulares e violação de isolamento (ex: UI e Workers nunca tocam no banco nem em regras financeiras diretamente; Core é o único escritor financeiro).
+- Atualizada a ordem de leitura obrigatória em `AGENTS.md` e `AIGUARD.md`, bem como o sumário de documentação em `docs/README.md`.
+- Validação executada: `python -m compileall apps packages` exit 0, suíte de testes unitários `python -m pytest tests/unit -q` (954 passed, 1 skipped) exit 0.
+
+## 2026-09-11 — Isolamento estrito entre corretoras (Deriv / IQ Option) e novo executável
+
+- Identificada e corrigida a causa raiz de bloqueio cruzado entre corretoras: `DerivDigitAutoTrader.evaluate_once` consultava o Health Gate agregado de todo o sistema (`gate.state`), herdando bloqueadores de escopo da IQ Option (como `HG_SAFE_STOP` em `("IQ_OPTION", "IQOPTION_PRACTICE")`).
+- `DerivDigitAutoTrader` agora consulta exclusivamente o escopo restrito da Deriv via `gate.state_for(Broker.DERIV.value, self._account_id)`, mantendo independência total e fail-closed isolado.
+- Adicionado o método `HealthGate.active_blockers_for(broker, account_id)` em `apps/core/health.py`, filtrando bloqueadores globais mais bloqueadores estritamente pertencentes à corretora solicitada.
+- Em `apps/core/ui_service.py` (`trading_readiness`), a prontidão da Deriv agora consulta `active_blockers_for("DERIV")`, impedindo que safe-stops, dados de mercado ou desvios de relógio da IQ Option contaminem a telemetria e o painel de status da Deriv.
+- Em `apps/core/runtime.py` (`resume_new_entries`), o arme global agora valida `global_state.is_open`, impedindo que safe-stops restritos à IQ Option transformem o armamento global da Deriv em desarme forçado.
+- Em `apps/core/iqoption_auto_trader.py`, o diagnóstico de ausência de símbolos Turbo agora distingue claramente mercados fechados/suspensos (`IQOPTION_ALL_MARKETS_CLOSED` no modo AUTO e `IQOPTION_MARKET_CLOSED` no par específico) de ausência no catálogo (`IQOPTION_SYMBOL_UNSUPPORTED`), e `apps/ui/components/iqoption_workspace.py` recebeu mensagens claras e amigáveis em português.
+- Adicionada suíte de testes dedicados em `tests/unit/test_broker_isolation.py` comprovando que:
+  1. `HealthGate.active_blockers_for` isola perfeitamente Deriv e IQ Option.
+  2. Deriv executa e dispara ordens normalmente enquanto a IQ Option está em safe-stop ou sem dados de mercado.
+  3. `trading_readiness` da Deriv permanece verde e desimpedido sob safe-stop da IQ Option.
+  4. IQ Option opera normalmente sob safe-stop da Deriv.
+  5. Bloqueador financeiro global (ex: `DB_SCHEMA_CORRUPT`) preserva proteção fail-closed para ambas as corretoras.
+  6. Classificação correta de mercados fechados vs. símbolo não suportado.
+- Validação: `tests/unit/test_broker_isolation.py` (6/6 passed), `ruff check` (exit 0), `compileall` (exit 0).
+- Build PyInstaller canônico concluído com zero segredos, manifesto de 514 arquivos e integridade aprovada.
+- Executável portátil compilado via `csc.exe`:
+  - Arquivo: `dist/isolated-brokers-v1.9.11/TradingLab-Desktop-v1.9.11-ISOLATED.exe`
+  - Tamanho: 56.520.192 bytes (53,90 MB)
+  - SHA-256: `627A478214528667634A7F4398966807BE6CFCCAEB7618F29FC374FFC96087BA`
+  - Payload: `dist/isolated-brokers-v1.9.11/TradingLab.payload.zip` (56.511.649 bytes)
+
+## 2026-09-11 — Camada Aditiva e Opt-in de Broker Resilience (Deriv & IQ Option)
+
+- Concluídas as Fases 0 a 5 da camada de tratamento de erros, rate limiting e circuit breaker:
+  - Criado o pacote isolado `apps/core/broker_resilience/` contendo:
+    - `models.py`: Enums `BrokerName`, `ErrorCategory`, `Action`, `CircuitState` e dataclasses imutáveis `BrokerErrorContext`, `ErrorDecision`, além de exceções tipadas `BrokerCircuitOpenError`, `BrokerResponseSchemaError`, `BrokerRateLimitExceededError`.
+    - `policies.py`: Matriz conservadora determinística de decisões garantindo que mutações financeiras (`buy`, `place_order`, `submit_order`) **nunca sofram retry automático** após timeout ou desconexão (forçando `ORDER_UNKNOWN` + `RECONCILE`).
+    - `classifier.py`: `BrokerErrorClassifier` com extração por códigos estruturados oficiais de broker, status HTTP, tipos de exceção e sanitização estrita de credenciais/tokens/senhas em logs.
+    - `rate_limiter.py`: `BrokerRateLimiter` thread-safe com algoritmo Token Bucket por par `(broker, operation)` com suporte a burst, timeout de aquisição e cálculo de `retry_after_seconds`.
+    - `circuit_breaker.py`: `BrokerCircuitBreakerRegistry` thread-safe com estados `CLOSED`, `OPEN`, `HALF_OPEN`, cooldown configurável e proteção rigorosa contra erros de usuário (não abre circuito para `INVALID_SYMBOL`, `INSUFFICIENT_FUNDS`, etc.).
+    - `response_validator.py`: `BrokerResponseValidator` com validação estrutural de contratos sem vazamento de `KeyError` não tratado e sanitização de dados.
+    - `idempotency.py`: `IdempotencyTracker` thread-safe com bloqueio preventivo de reentrância em ordens ambíguas.
+    - `service.py`: `BrokerResilienceService`, fachada unificada opt-in controlada por feature flag (`BROKER_RESILIENCE_ENABLED=false`).
+  - Desenvolvida suíte completa de testes unitários isolados:
+    - `tests/unit/test_broker_resilience_policies.py`
+    - `tests/unit/test_broker_resilience_classifier.py`
+    - `tests/unit/test_broker_resilience_rate_limiter.py`
+    - `tests/unit/test_broker_resilience_circuit.py`
+    - `tests/unit/test_broker_resilience_validation.py`
+    - `tests/unit/test_broker_resilience_idempotency.py`
+    - `tests/unit/test_broker_resilience_service.py`
+  - Validação executada:
+    - `pytest -k broker_resilience`: 34 passed (100% de sucesso).
+    - `ruff check apps/core/broker_resilience tests/unit/test_broker_resilience*`: exit 0 (0 erros).
+    - `ruff format --check apps/core/broker_resilience tests/unit/test_broker_resilience*`: exit 0 (16 files formatted).
+    - `mypy apps/core/broker_resilience`: exit 0 (Success: no issues found in 9 source files).
+- Preservação total de compatibilidade: zero alterações em arquivos de produção existentes, feature flag desabilitada por padrão (`BROKER_RESILIENCE_ENABLED=false`) e proposta mínima de integração preparada para aprovação (Fase 6).
+
+## 2026-09-11 — Integração Cirúrgica de BrokerResilienceService no OrderCoordinator (Fase 6)
+
+- Integrado `BrokerResilienceService` no fluxo de submissão do Core (`apps/core/coordinator.py`):
+  - Injeção opcional `resilience_service: BrokerResilienceService | None = None` em `OrderCoordinator.__init__` e `OutboxDispatcher.__init__`.
+  - Feature flag `BROKER_RESILIENCE_ENABLED=false` mantida como padrão (bypass transparente em chamadas normais).
+  - Ordem de execução estritamente preservada: `HealthGate` atua como autoridade máxima primeiro; em seguida, `before_call` valida Circuit Breaker e Rate Limiter; `submit_order(command)` é executado; `on_success` ou `on_error` atualiza métricas e integridade sem repetir ordens mutantes.
+  - Se o circuito estiver `OPEN`, o comando é gravado como `BLOCKED_NOT_SENT` com razão `BROKER_CIRCUIT_OPEN` e retornado sem alcançar a rede do worker.
+  - Adicionada suíte de testes de integração `tests/unit/test_order_coordinator_resilience.py` (6 testes cobrindo bypass, circuito aberto, sucesso, erro de worker e compatibilidade de argumentos).
+- Validação completa:
+  - `pytest -q tests/unit/test_order_coordinator_resilience.py`: 6 passed.
+  - `pytest -q -k "broker_resilience" tests/`: 39 passed.
+  - Regressão completa (`test_broker_isolation`, `test_deriv_auto_trader`, `test_iqoption_auto_trader`, `test_deriv_order_contract`, `test_iqoption_worker_contract`, `test_persistence_and_dispatch`): 86 passed.
+  - `ruff check`: 0 erros.
+  - `ruff format --check`: 100% formatado.
+  - `mypy apps/core/coordinator.py apps/core/broker_resilience/`: 0 erros (11 arquivos validados).
+
+## 2026-09-11 — Auditoria Independente de Código e Executável Portátil v1.9.11-RESILIENCE
+
+- Conduzida auditoria independente em 7 pontos críticos antes da ativação de `BROKER_RESILIENCE_ENABLED=true`:
+  1. Feature flag desligada por padrão (`BrokerResilienceService().enabled == False`).
+  2. Zero retry cego de ordens mutantes (`worker.submit_order` chamado 1x por intenção em bloco try, 0x em except).
+  3. `POSSIBLY_SENT` mapeado para `TIMEOUT_AFTER_POSSIBLE_SEND` e bloqueio de escopo no HealthGate (`HG_ORDER_UNKNOWN`).
+  4. `BLOCKED_NOT_SENT` auditado no outbox SQLite: estado terminal `SEND_BLOCKED` na tabela `orders`, proveniência mantida sem retry cego ou vazamento silencioso.
+  5. Enriquecimento de contexto com `broker_code=exc.code.value`, `exception_type` e `raw_message`, com suporte a `ProtocolErrorCode` e `DeliveryCertainty` no `BrokerErrorClassifier`.
+  6. Garantia de chamada única comprovada via teste `test_timeout_after_possible_send_never_dispatches_twice` (`call_count == 1`).
+  7. Autoridade máxima do `HealthGate` comprovada antes do despacho e da resiliência (`test_health_gate_remains_authoritative`).
+- Bateria de testes expandida em `tests/unit/test_order_coordinator_resilience.py` para 12 testes (100% passed).
+- Suíte completa de resiliência: 51 passed. Regressão estendida: 92 passed.
+- Compilação do executável com PyInstaller e empacotamento via `csc.exe`:
+  - Diretório de build onedir: `C:\tlb_resilience_build\TradingLab` (523 arquivos, SecretScanner limpo, integridade validada, health-check `--post-update-health-check` aprovado).
+  - Executável portátil standalone: `dist/resilience-v1.9.11/TradingLab-Desktop-v1.9.11-RESILIENCE.exe`.
+  - Tamanho: 56.629.760 bytes (54,01 MB).
+  - SHA-256: `72ACF4F2D367C3490BAD6CE2E9B5CDC7A892DDBB39A996CEE28C9AF896D19AE3`.

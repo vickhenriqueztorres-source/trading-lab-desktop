@@ -724,11 +724,18 @@ class IqOptionAutoTrader:
 
         symbols = self._symbols_for_cycle(selected_symbol)
         if not symbols:
-            self._set_status(
-                "IQOPTION_INSTRUMENT_CATALOG_UNAVAILABLE"
-                if self._catalog_discovery_supported and self._instrument_catalog is None
-                else "IQOPTION_SYMBOL_UNSUPPORTED"
-            )
+            if self._catalog_discovery_supported and self._instrument_catalog is None:
+                status = "IQOPTION_INSTRUMENT_CATALOG_UNAVAILABLE"
+            elif selected_symbol == "AUTO":
+                status = "IQOPTION_ALL_MARKETS_CLOSED"
+            elif self._instrument_catalog is not None and any(
+                item.broker_symbol == selected_symbol
+                for item in self._instrument_catalog.instruments
+            ):
+                status = "IQOPTION_MARKET_CLOSED"
+            else:
+                status = "IQOPTION_SYMBOL_UNSUPPORTED"
+            self._set_status(status)
             return
 
         catalog = self._catalog_provider() if self._catalog_provider is not None else None

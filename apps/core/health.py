@@ -117,6 +117,24 @@ class HealthGate:
             return False, s_state.reason_code
         return True, None
 
+    def active_blockers_for(self, broker: str, account_id: str | None = None) -> tuple[str, ...]:
+        """Return global blockers plus scoped blockers strictly isolated to the specified broker."""
+        with self._lock:
+            reasons = set(self._blockers)
+            db_state = self._database_state()
+            if db_state is not None and not db_state.is_open and db_state.reason_code:
+                reasons.add(db_state.reason_code)
+            normalized_broker = self.normalize_broker(broker)
+            for (b, acc), scoped in self._scoped_blockers.items():
+                if self.normalize_broker(b) != normalized_broker:
+                    continue
+                if account_id is not None:
+                    if acc in {str(account_id), "market-data"}:
+                        reasons.update(scoped)
+                else:
+                    reasons.update(scoped)
+            return tuple(sorted(reasons))
+
     def contains_global(self, reason_code: str) -> bool:
         """Return whether a blocker belongs to the global authority scope."""
 

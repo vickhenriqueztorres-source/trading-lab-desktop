@@ -428,24 +428,30 @@ class CoreUiProjectionBuilder:
             "HG_ORDER_UNKNOWN",
             "HG_RECONCILIATION_CONFLICT",
         }
-        risk_ready = not any(item in risk_blockers for item in gate.active_blockers)
+        active_gate = getattr(self._runtime, "health_gate", None)
+        deriv_blockers = set(
+            active_gate.active_blockers_for("DERIV")
+            if active_gate is not None and hasattr(active_gate, "active_blockers_for")
+            else gate.active_blockers
+        )
+        risk_ready = not any(item in risk_blockers for item in deriv_blockers)
         clock_trusted = bool(
             deriv is not None and deriv.clock is not None and deriv.clock.is_synced
         )
         market_healthy = bool(
             deriv is not None
             and deriv.connected
-            and "HG_MARKET_DATA_DISCONNECTED" not in gate.active_blockers
-            and "MD_CLOCK_UNTRUSTED" not in gate.active_blockers
+            and "HG_MARKET_DATA_DISCONNECTED" not in deriv_blockers
+            and "MD_CLOCK_UNTRUSTED" not in deriv_blockers
         )
         warmup_complete = bool(frequency is not None and frequency.total_ticks >= 500)
-        safe_stop = self._runtime.safe_stop_active
+        safe_stop = "HG_SAFE_STOP" in deriv_blockers or self._runtime.safe_stop_active
         armed = not safe_stop and self._runtime.dispatcher_started
         order_in_flight = any(
             str(item.get("broker")) == "DERIV"
             for item in self._runtime.reader.list_nonterminal_orders()
         )
-        semantic_blockers: list[str] = list(gate.active_blockers)
+        semantic_blockers: list[str] = sorted(deriv_blockers)
         prerequisites = (
             (broker_process_ready, "BROKER_PROCESS_NOT_READY"),
             (broker_authenticated, "BROKER_NOT_AUTHENTICATED"),

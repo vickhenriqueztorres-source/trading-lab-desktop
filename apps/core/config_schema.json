@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TradingLabConfigSchema",
+  "description": "Schema de validação para variáveis de ambiente e configurações do Trading Lab Desktop",
+  "type": "object",
+  "required": [
+    "DERIV_API_TOKEN",
+    "IQOPTION_EMAIL",
+    "IQOPTION_PASSWORD"
+  ],
+  "properties": {
+    "DERIV_API_TOKEN": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Token de autenticação API da Deriv"
+    },
+    "IQOPTION_EMAIL": {
+      "type": "string",
+      "format": "email",
+      "pattern": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$",
+      "description": "E-mail cadastrado na corretora IQ Option"
+    },
+    "IQOPTION_PASSWORD": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Senha da conta IQ Option"
+    },
+    "TRADING_MODE": {
+      "type": "string",
+      "enum": ["live", "demo", "simulated"],
+      "default": "demo",
+      "description": "Modo de trading da sessão (live, demo, simulated)"
+    },
+    "ENVIRONMENT": {
+      "type": "string",
+      "enum": ["dev", "staging", "production"],
+      "default": "dev",
+      "description": "Ambiente de execução (dev, staging, production)"
+    },
+    "LOG_LEVEL": {
+      "type": "string",
+      "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
+      "default": "INFO",
+      "description": "Nível de severidade para emissão de logs"
+    },
+    "MAX_DAILY_LOSS": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "description": "Limite máximo de prejuízo diário consolidado em moeda base (deve ser > 0)"
+    },
+    "ENABLE_TELEMETRY": {
+      "type": "boolean",
+      "default": true,
+      "description": "Habilita coleta e persistência local de telemetria operacional"
+    },
+    "BACKUP_ENABLED": {
+      "type": "boolean",
+      "default": true,
+      "description": "Habilita criação automática de backups de segurança dos perfis e dados"
+    },
+    "IPC_TIMEOUT_SECONDS": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Tempo limite em segundos para aguardar resposta em canal IPC (deve ser > 0)"
+    },
+    "IPC_MAX_RETRIES": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 3,
+      "description": "Número máximo de retentativas automáticas para mensagens IPC transitórias (deve ser >= 0)"
+    }
+  },
+  "additionalProperties": true
+}

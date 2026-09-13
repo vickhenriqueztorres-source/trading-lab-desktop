@@ -1,4 +1,4 @@
-﻿# AIGUARD — Guardrails para Desenvolvimento Assistido por IA
+# AIGUARD — Guardrails para Desenvolvimento Assistido por IA
 
 **Projeto:** DualTrade Desktop — Deriv + IQ Option  
 **Status:** obrigatório  
@@ -23,10 +23,11 @@ Antes de alterar o projeto, leia nesta ordem:
 1. `AIGUARD.md`;
 2. `RULES.md`;
 3. `AGENTS.md`;
-4. `PRD_Trading_Desktop_Deriv_IQOption.md`;
-5. `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`;
-6. `WORKLOG.md`;
-7. instruções locais mais específicas, se existirem em subdiretórios.
+4. `INTERFACE_CONTRACTS.md`;
+5. `PRD_Trading_Desktop_Deriv_IQOption.md`;
+6. `Arquitetura_Resiliente_Trading_Desktop_Deriv_IQOption.md`;
+7. `WORKLOG.md`;
+8. instruções locais mais específicas, se existirem em subdiretórios.
 
 Se houver conflito, preserve primeiro as restrições de segurança deste arquivo e registre a divergência. Uma mudança explícita de produto deve atualizar os documentos afetados no mesmo trabalho.
 
