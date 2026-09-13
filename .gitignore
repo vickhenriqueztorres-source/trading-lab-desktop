@@ -95,6 +95,7 @@ $RECYCLE.BIN/
 *.exe
 *.zip
 *.png
+!docs/reference/*.png
 data/manifest.json
 !data/
 cache/
