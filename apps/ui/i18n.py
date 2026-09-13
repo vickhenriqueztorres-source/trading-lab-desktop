@@ -278,7 +278,75 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "REAL MONEY",
         "es": "DINERO REAL",
     },
-    # Main navigation and broker isolation
+    # Main navigation and shell
+    "nav.overview": {
+        "en": "Overview",
+        "es": "Visión General",
+    },
+    "nav.deriv": {
+        "en": "Deriv",
+        "es": "Deriv",
+    },
+    "nav.iqoption": {
+        "en": "IQ Option",
+        "es": "IQ Option",
+    },
+    "nav.activity": {
+        "en": "Activity",
+        "es": "Actividad",
+    },
+    "nav.account": {
+        "en": "Account",
+        "es": "Cuenta",
+    },
+    "nav.settings": {
+        "en": "Settings",
+        "es": "Configuración",
+    },
+    "brand.tagline": {
+        "en": "Discipline is also a strategy",
+        "es": "La disciplina también es una estrategia",
+    },
+    "status.core_connected": {
+        "en": "Core Connected",
+        "es": "Core Conectado",
+    },
+    "status.core_disconnected": {
+        "en": "Core Disconnected",
+        "es": "Core Desconectado",
+    },
+    "account.not_signed_in": {
+        "en": "Not signed in",
+        "es": "No conectado",
+    },
+    "account.plan_pro": {
+        "en": "PRO",
+        "es": "PRO",
+    },
+    "account.plan_none": {
+        "en": "FREE",
+        "es": "FREE",
+    },
+    "account.placeholder_subtitle": {
+        "en": "Manage your license, broker accounts and subscription",
+        "es": "Gestiona tu licencia, cuentas de broker y suscripción",
+    },
+    "account.local_trial": {
+        "en": "Local Trial",
+        "es": "Prueba Local",
+    },
+    "status.system_ready": {
+        "en": "System Ready",
+        "es": "Sistema Listo",
+    },
+    "status.system_blocked": {
+        "en": "System Blocked",
+        "es": "Sistema Bloqueado",
+    },
+    "status.latency": {
+        "en": "Latency",
+        "es": "Latencia",
+    },
     "tabs.overview": {
         "en": "Overview",
         "es": "Vista general",

@@ -1,75 +1,10 @@
-"""Integration test for strategy selection in UI and dynamic execution in AutoTrader."""
+"""Integration test for strategy selection and execution in AutoTrader."""
 
 from __future__ import annotations
-
-import os
-from pathlib import Path
-from unittest.mock import MagicMock
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-
-from PySide6.QtWidgets import QApplication
 
 from apps.core.iqoption_auto_trader import IqOptionAutoTrader
 from apps.core.iqoption_risk_config import IqOptionRiskConfig
 from apps.core.manifest_catalog import DynamicManifestCatalog
-from apps.ui.app import TradingLabMainWindow
-from apps.ui.controller import UiController
-
-
-@pytest.fixture(scope="session")
-def qapp() -> QApplication:
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
-def test_ui_card_toggle_updates_controller_for_iqoption_and_deriv(
-    qapp: QApplication, tmp_path: Path
-) -> None:
-    mock_ctrl = MagicMock(spec=UiController)
-    mock_ctrl.connected = True
-    mock_ctrl.snapshot = None
-
-    win = TradingLabMainWindow(mock_ctrl, profile_dir=tmp_path)
-    try:
-        cards = win._manifest_strategy_panel._cards
-        assert len(cards) >= 10, "Expected full catalog with all strategies loaded"
-
-        # 1. Toggle an IQ Option card (F1)
-        f1_key = "f1:EURUSD-OTC:M1:00-24:rsi_bollinger"
-        assert f1_key in cards
-        win._on_manifest_strategy_toggled(f1_key, True)
-
-        # Verify controller received update_iqoption_risk_config
-        mock_ctrl.update_iqoption_risk_config.assert_called()
-        call_arg = mock_ctrl.update_iqoption_risk_config.call_args[0][0]
-        assert call_arg.strategy_id == f1_key
-        assert call_arg.symbol == "EURUSD-OTC"
-
-        # 2. Toggle a Deriv card (D1)
-        d1_key = "tail-probability-edge"
-        assert d1_key in cards
-        win._on_manifest_strategy_toggled(d1_key, True)
-
-        # Verify controller received update_digit_risk_config
-        mock_ctrl.update_digit_risk_config.assert_called()
-        call_arg_deriv = mock_ctrl.update_digit_risk_config.call_args[0][0]
-        assert call_arg_deriv.active_strategy_id == d1_key
-        assert call_arg_deriv.selected_symbol == "1HZ100V"
-
-        # 3. Click Turn On All
-        win._manifest_strategy_panel._btn_turn_on_all.click()
-        assert win._manifest_strategy_panel._selection_mode == "MULTI"
-        call_arg_multi = mock_ctrl.update_iqoption_risk_config.call_args[0][0]
-        assert call_arg_multi.strategy_id == "AUTO"
-        assert call_arg_multi.symbol == "AUTO"
-    finally:
-        win.close()
 
 
 def test_iqoption_auto_trader_executes_catalog_family_strategy() -> None:

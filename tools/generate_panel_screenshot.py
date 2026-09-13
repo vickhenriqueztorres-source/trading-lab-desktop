@@ -13,7 +13,7 @@ if "QT_QPA_PLATFORM" in os.environ and os.environ["QT_QPA_PLATFORM"] == "offscre
 
 from PySide6.QtWidgets import QApplication
 
-from apps.ui.components.manifest_strategy_panel import ManifestStrategyPanelWidget
+from apps.ui.components._legacy.manifest_strategy_panel import ManifestStrategyPanelWidget
 from apps.ui.theme import get_application_stylesheet
 
 

@@ -22,7 +22,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --ignore=tests/unit/_legacy"
 markers = [
     "external_deriv_public: opt-in smoke tests against Deriv public read-only API",
     "external_deriv_demo: opt-in smoke tests against a Deriv demo read-only session",
@@ -32,7 +32,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["docs", "strategy-lab"]
+extend-exclude = ["docs", "strategy-lab", "apps/ui/components/_legacy", "tests/unit/_legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

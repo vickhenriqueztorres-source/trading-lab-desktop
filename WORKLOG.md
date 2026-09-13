@@ -6295,3 +6295,30 @@ Validação:
   - Criada suíte de testes `tests/unit/test_ui_icons.py` validando integridade de assets, resolução de caminhos, formato ICO e comportamento do cache.
   - Validação: 1217 testes unitários e contratuais aprovados, ruff e mypy limpos.
 
+## 2026-09-13 — UI Redesign v2 (Prompt 3: Shell com Sidebar e Remoção do Catálogo)
+
+- Substituição da casca de abas horizontais legadas (`QTabWidget self._main_tabs`) por um shell moderno com navegação lateral vertical:
+  - Arquitetura de casca modular criada em `apps/ui/shell/`:
+    - `Sidebar(QFrame)`: 220px de largura fixa, `logo-wordmark.svg` em SVG de alta fidelidade com suporte a High-DPI/DPR, 6 botões `QToolButton#navItem` exclusivos com indicador lateral esquerdo ativo (`border-left: 3px solid #3AA7B8`), rodapé com a frase institucional de disciplina (`brand.tagline`), sinal `page_selected = Signal(int)` e sincronização programática bidirecional.
+    - `TopBar(QFrame)`: 56px de altura fixa, cabeçalho da seção atual (`#sectionTitle`), pill dinâmico com indicador de status de conexão IPC com o Core (verde/vermelho), chip de conta do usuário com badge de plano (`PRO`/`FREE`) e container de troca de idioma (ES/EN).
+    - `BottomBar(QFrame)`: 72px de altura fixa, relógio digital em tempo real (HH:MM:SS) em `FONT_MONO` e data localizada atualizada via `QTimer` de 1000ms, slot para ação primária contextual (`set_primary_action(QWidget | None)`), ações permanentes (`Safe Close / Safe Stop` e `Export Diagnostics`), e indicadores de prontidão operacional do sistema (`status.system_ready`) e latência (`status.latency`).
+  - Páginas integradas em `QStackedWidget self._pages` (com padding limpo de 24px):
+    - Índice 0: `OverviewPage` (Visión General / Overview)
+    - Índice 1: `DerivPage` (`DerivWorkspaceWidget`)
+    - Índice 2: `IqOptionPage` (`IqOptionWorkspaceWidget`)
+    - Índice 3: `ActivityPage` (Ordens operacionais e logs em tempo real)
+    - Índice 4: `AccountPage` (Placeholder de conta e licenciamento para Prompt 7)
+    - Índice 5: `SettingsPage` (`SettingsWorkspaceWidget`)
+  - Remoção do catálogo de estratégias e isolamento:
+    - Removida a aba de catálogo (`ManifestStrategyPanelWidget`), o carregador de manifesto de disco e handlers de toggle da interface principal em `apps/ui/app.py`.
+    - Movido `apps/ui/components/manifest_strategy_panel.py` para `apps/ui/components/_legacy/manifest_strategy_panel.py`.
+    - Movidos testes legados de UI do catálogo para `tests/unit/_legacy/` e configurado `pyproject.toml` para ignorar esses legados no `pytest` e `ruff`.
+    - Implementada classe compatível `_MainTabsCompat` para preservar 100% de compatibilidade dos testes contratuais headless (`count()`, `tabText(idx)`, `currentIndex()`, etc.) sem quebrar as suítes existentes.
+  - Adicionadas todas as chaves de internacionalização correspondentes em `apps/ui/i18n.py` em Espanhol (padrão) e Inglês com zero português.
+  - Validação rigorosa:
+    - `ruff check .`: 0 erros (All checks passed).
+    - `ruff format --check .`: 100% formatado (577 arquivos).
+    - `mypy apps packages`: Sucesso absoluto (337 arquivos fonte validados).
+    - `pytest -q tests/unit tests/contract`: 1206 passed, 2 skipped em 101s.
+    - `compileall apps packages`: 100% dos bytecodes compilados com sucesso.
+
