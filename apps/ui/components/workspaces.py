@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -19,7 +20,7 @@ from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
 from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummaryWidget
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.formatting import format_minor_units
-from apps.ui.i18n import t
+from apps.ui.i18n import I18nManager, t
 from packages.protocol.ui_messages import (
     BrokerCardStatus,
     OrderSummary,
@@ -249,94 +250,193 @@ class BrokerWorkspaceWidget(QWidget):
         self.orders.retranslate()
 
 
-@dataclass(frozen=True, slots=True)
-class _SettingsPage:
-    tab_key: str
-    title_key: str
-    body_key: str
-    scope_key: str
-    effective_key: str
-
-
 class SettingsWorkspaceWidget(QWidget):
-    """Explains effective settings without inventing unconfirmed write commands."""
+    """Explains effective settings and provides operator controls for language and diagnostics."""
 
-    _PAGES = (
-        _SettingsPage(
-            "settings.application.tab",
-            "settings.application.title",
-            "settings.application.body",
-            "settings.application.scope",
-            "settings.application.effective",
-        ),
-        _SettingsPage(
-            "settings.risk.tab",
-            "settings.risk.title",
-            "settings.risk.body",
-            "settings.risk.scope",
-            "settings.risk.effective",
-        ),
-        _SettingsPage(
-            "settings.strategies.tab",
-            "settings.strategies.title",
-            "settings.strategies.body",
-            "settings.strategies.scope",
-            "settings.strategies.effective",
-        ),
-        _SettingsPage(
-            "settings.support.tab",
-            "settings.support.title",
-            "settings.support.body",
-            "settings.support.scope",
-            "settings.support.effective",
-        ),
-    )
+    diagnostic_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
+
         self._intro = QLabel()
         self._intro.setWordWrap(True)
         self._intro.setObjectName("GuidanceText")
         layout.addWidget(self._intro)
+
         self._tabs = QTabWidget()
         self._tabs.setAccessibleName("Settings")
         layout.addWidget(self._tabs, 1)
-        self._labels: list[tuple[QLabel, QLabel, QLabel, QLabel]] = []
-        for _page in self._PAGES:
-            widget = QWidget()
-            page_layout = QVBoxLayout(widget)
-            page_layout.setContentsMargins(14, 14, 14, 14)
-            page_layout.setSpacing(12)
-            panel = QFrame()
-            panel.setObjectName("Surface")
-            panel_layout = QVBoxLayout(panel)
-            panel_layout.setContentsMargins(16, 16, 16, 16)
-            panel_layout.setSpacing(10)
-            title = QLabel()
-            title.setObjectName("Title")
-            body = QLabel()
-            body.setWordWrap(True)
-            body.setObjectName("GuidanceText")
-            scope = QLabel()
-            scope.setObjectName("Subtitle")
-            effective = QLabel()
-            effective.setWordWrap(True)
-            effective.setObjectName("SafetyNotice")
-            for label in (title, body, scope, effective):
-                panel_layout.addWidget(label)
-            page_layout.addWidget(panel)
-            page_layout.addStretch()
-            self._tabs.addTab(widget, "")
-            self._labels.append((title, body, scope, effective))
+
+        # Tab 0: General
+        self._tabs.addTab(self._build_general_tab(), "")
+
+        # Tab 1: Notifications
+        self._tabs.addTab(self._build_notifications_tab(), "")
+
+        # Tab 2: Diagnostics
+        self._tabs.addTab(self._build_diagnostics_tab(), "")
+
+        # Tab 3: About
+        self._tabs.addTab(self._build_about_tab(), "")
+
         self._risk_effective: tuple[int, int, str | None, str] | None = None
         self.retranslate()
+
+    def _build_general_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("Surface")
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(16, 16, 16, 16)
+        c_layout.setSpacing(10)
+
+        self._gen_title = QLabel(t("settings.general"))
+        self._gen_title.setObjectName("sectionTitle")
+        self._gen_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        c_layout.addWidget(self._gen_title)
+
+        self._gen_hint = QLabel(t("settings.general_hint"))
+        self._gen_hint.setObjectName("hint")
+        c_layout.addWidget(self._gen_hint)
+
+        lang_row = QHBoxLayout()
+        lang_row.setSpacing(10)
+        self._lang_label = QLabel(t("settings.language") + ":")
+        self._lang_label.setObjectName("Subtitle")
+        lang_row.addWidget(self._lang_label)
+
+        self._lang_combo = QComboBox()
+        self._lang_combo.addItem("Español (ES)", "es")
+        self._lang_combo.addItem("English (EN)", "en")
+        current_lang = I18nManager.get_language()
+        idx = self._lang_combo.findData(current_lang)
+        if idx >= 0:
+            self._lang_combo.setCurrentIndex(idx)
+        self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        lang_row.addWidget(self._lang_combo)
+        lang_row.addStretch()
+        c_layout.addLayout(lang_row)
+
+        self._gen_scope = QLabel()
+        self._gen_scope.setObjectName("Subtitle")
+        c_layout.addWidget(self._gen_scope)
+
+        layout.addWidget(card)
+        layout.addStretch()
+        return widget
+
+    def _build_notifications_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("Surface")
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(16, 16, 16, 16)
+        c_layout.setSpacing(10)
+
+        self._notif_title = QLabel(t("settings.notifications"))
+        self._notif_title.setObjectName("sectionTitle")
+        self._notif_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        c_layout.addWidget(self._notif_title)
+
+        self._notif_hint = QLabel(t("settings.notifications_hint"))
+        self._notif_hint.setObjectName("hint")
+        c_layout.addWidget(self._notif_hint)
+
+        self._risk_effective_label = QLabel()
+        self._risk_effective_label.setWordWrap(True)
+        self._risk_effective_label.setObjectName("SafetyNotice")
+        c_layout.addWidget(self._risk_effective_label)
+
+        layout.addWidget(card)
+        layout.addStretch()
+        return widget
+
+    def _build_diagnostics_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("Surface")
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(16, 16, 16, 16)
+        c_layout.setSpacing(12)
+
+        self._diag_title = QLabel(t("settings.diagnostics"))
+        self._diag_title.setObjectName("sectionTitle")
+        self._diag_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        c_layout.addWidget(self._diag_title)
+
+        self._diag_hint = QLabel(t("settings.diagnostics_hint"))
+        self._diag_hint.setObjectName("hint")
+        c_layout.addWidget(self._diag_hint)
+
+        self._btn_export_diag = QPushButton("📦 " + t("btn.diagnostic"))
+        self._btn_export_diag.setObjectName("PrimaryButton")
+        self._btn_export_diag.clicked.connect(self.diagnostic_requested.emit)
+        c_layout.addWidget(self._btn_export_diag)
+
+        layout.addWidget(card)
+        layout.addStretch()
+        return widget
+
+    def _build_about_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("Surface")
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(16, 16, 16, 16)
+        c_layout.setSpacing(10)
+
+        self._about_title = QLabel(t("settings.about"))
+        self._about_title.setObjectName("sectionTitle")
+        self._about_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        c_layout.addWidget(self._about_title)
+
+        self._about_hint = QLabel(t("settings.about_hint"))
+        self._about_hint.setObjectName("hint")
+        c_layout.addWidget(self._about_hint)
+
+        self._version_label = QLabel("Trading Lab Desktop v1.9.11 · DIGIT EDGE")
+        self._version_label.setObjectName("ValueMono")
+        c_layout.addWidget(self._version_label)
+
+        self._btn_support_telegram = QPushButton("✈️ " + t("support.telegram"))
+        self._btn_support_telegram.setObjectName("secondary")
+        self._btn_support_telegram.setToolTip(t("support.telegram_url"))
+        c_layout.addWidget(self._btn_support_telegram)
+
+        layout.addWidget(card)
+        layout.addStretch()
+        return widget
 
     @property
     def tabs(self) -> QTabWidget:
         return self._tabs
+
+    def _on_language_changed(self, index: int) -> None:
+        selected_lang = str(self._lang_combo.itemData(index))
+        if (
+            selected_lang in I18nManager.SUPPORTED_LANGUAGES
+            and selected_lang != I18nManager.get_language()
+        ):
+            I18nManager.set_language(selected_lang)
 
     def update_risk_projection(
         self,
@@ -360,17 +460,40 @@ class SettingsWorkspaceWidget(QWidget):
         normalized_currency = (currency or "USD").upper()
         active = format_minor_units(exposure, normalized_currency)
         limit = format_minor_units(maximum, normalized_currency)
-        self._labels[1][3].setText(
+        self._risk_effective_label.setText(
             t("settings.risk.projected", active=active, limit=limit, state=risk_state)
         )
 
     def retranslate(self) -> None:
         self._intro.setText(t("settings.intro"))
-        for index, page in enumerate(self._PAGES):
-            self._tabs.setTabText(index, t(page.tab_key))
-            title, body, scope, effective = self._labels[index]
-            title.setText(t(page.title_key))
-            body.setText(t(page.body_key))
-            scope.setText(t(page.scope_key))
-            effective.setText(t(page.effective_key))
+        self._tabs.setTabText(0, t("settings.general"))
+        self._tabs.setTabText(1, t("settings.notifications"))
+        self._tabs.setTabText(2, t("settings.diagnostics"))
+        self._tabs.setTabText(3, t("settings.about"))
+
+        self._gen_title.setText(t("settings.general"))
+        self._gen_hint.setText(t("settings.general_hint"))
+        self._lang_label.setText(t("settings.language") + ":")
+        self._gen_scope.setText(t("settings.application.scope"))
+
+        self._notif_title.setText(t("settings.notifications"))
+        self._notif_hint.setText(t("settings.notifications_hint"))
+
+        self._diag_title.setText(t("settings.diagnostics"))
+        self._diag_hint.setText(t("settings.diagnostics_hint"))
+        self._btn_export_diag.setText("📦 " + t("btn.diagnostic"))
+
+        self._about_title.setText(t("settings.about"))
+        self._about_hint.setText(t("settings.about_hint"))
+        self._btn_support_telegram.setText("✈️ " + t("support.telegram"))
+        self._btn_support_telegram.setToolTip(t("support.telegram_url"))
+
+        # Sync combo index without triggering loop
+        current = I18nManager.get_language()
+        idx = self._lang_combo.findData(current)
+        if idx >= 0 and self._lang_combo.currentIndex() != idx:
+            self._lang_combo.blockSignals(True)
+            self._lang_combo.setCurrentIndex(idx)
+            self._lang_combo.blockSignals(False)
+
         self._update_risk_label()

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
 from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummaryWidget
 from apps.ui.components.order_table import OrderTableView
+from apps.ui.components.safe_stop_button import SafeStopButton
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import t
 from apps.ui.theme import ACCENT_AMBER, ACCENT_CYAN, ACCENT_GREEN
@@ -40,35 +41,21 @@ def _mode_text(mode: UiAccountMode) -> str:
 
 def iqoption_bot_reason_text(reason: str) -> str:
     messages = {
-        "MD_CLOCK_UNTRUSTED": (
-            "Relógio da corretora sem confirmação recente ou com desvio acima de 120 segundos. "
-            "A latência continua visível para diagnóstico, mas não bloqueia entradas; "
-            "não é necessário refazer o login."
-        ),
-        "TRANSPORT_DOWN": (
-            "Transporte indisponível. O bot continua armado e retomará após reconciliar."
-        ),
-        "IQOPTION_BALANCE_STALE": (
-            "Saldo desatualizado. Novas entradas aguardam uma leitura confirmada da IQ Option."
-        ),
-        "IQOPTION_BOT_DISARMED": "Bot aguardando o comando ‘Ligar Bot IQ Option’.",
+        "MD_CLOCK_UNTRUSTED": t("iq.reason.clock_untrusted"),
+        "TRANSPORT_DOWN": t("iq.reason.transport_down"),
+        "IQOPTION_BALANCE_STALE": t("iq.reason.balance_stale"),
+        "IQOPTION_BOT_DISARMED": t("iq.reason.disarmed"),
         "IQOPTION_BOT_ARMED_RECONCILING": t("iq.reconciliation.automatic"),
         "IQOPTION_BOT_ARMED_REVIEW_REQUIRED": t("iq.reconciliation.inconclusive"),
         "HG_ORDER_UNKNOWN": t("iq.reconciliation.automatic"),
         "HG_RECONCILIATION_REQUIRED": t("iq.reconciliation.automatic"),
         "HG_RECONCILIATION_UNAVAILABLE": t("iq.reconciliation.automatic"),
         "HG_SETTLEMENT_UNKNOWN": t("iq.reconciliation.automatic"),
-        "IQOPTION_ALL_MARKETS_CLOSED": (
-            "Mercados Turbo fechados no momento pela corretora. O radar retomará automaticamente "
-            "a análise assim que os pares OTC ou Forex abrirem."
-        ),
-        "IQOPTION_MARKET_CLOSED": (
-            "Mercado para o ativo selecionado fechado no momento pela corretora. "
-            "Aguardando reabertura."
-        ),
-        "IQOPTION_SYMBOL_UNSUPPORTED": (
-            "Ativo selecionado não encontrado no catálogo de negociação da corretora."
-        ),
+        "IQOPTION_ALL_MARKETS_CLOSED": t("iq.reason.all_markets_closed"),
+        "IQOPTION_MARKET_CLOSED": t("iq.reason.market_closed"),
+        "IQOPTION_SYMBOL_UNSUPPORTED": t("iq.reason.symbol_unsupported"),
+        "IQOPTION_ACTIVE_SUSPENDED": t("iq.reason.asset_suspended"),
+        "IQOPTION_ACTIVE_UNAVAILABLE": t("iq.reason.asset_unavailable"),
     }
     return messages.get(reason, reason)
 
@@ -77,6 +64,7 @@ class IqOptionWorkspaceWidget(QWidget):
     """First-class dedicated workspace for IQ Option RSI Multi-Asset trading."""
 
     iqoption_login_requested = Signal()
+    safe_stop_requested = Signal()
 
     @property
     def tabs(self) -> QTabWidget:
@@ -100,18 +88,30 @@ class IqOptionWorkspaceWidget(QWidget):
         root.setContentsMargins(18, 14, 18, 14)
         root.setSpacing(12)
 
-        # 1. Top Account Hero Header
+        # Page Header (Title + Subtitle)
+        header = QVBoxLayout()
+        header.setSpacing(4)
+        self._page_title = QLabel(t("page.iqoption"))
+        self._page_title.setObjectName("sectionTitle")
+        self._page_title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        header.addWidget(self._page_title)
+        self._page_subtitle = QLabel(t("page.iqoption_subtitle"))
+        self._page_subtitle.setObjectName("hint")
+        header.addWidget(self._page_subtitle)
+        root.addLayout(header)
+
+        # Card 1: Connection & Account Header
         root.addWidget(self._build_account_header())
 
-        # 2. Main Workspace Tabs
+        # Main Workspace Tabs
         self._tabs = QTabWidget()
         self._tabs.setObjectName("IqOptionTabs")
         self._tabs.setDocumentMode(True)
 
-        # Tab 1: Estado & Radar ao Vivo
+        # Tab 1: Estado & Radar ao Vivo (Strategy Card)
         self._tabs.addTab(self._build_live_page(), "📊 " + t("tabs.status"))
 
-        # Tab 2: Configuração de Risco & Parâmetros
+        # Tab 2: Configuração de Risco & Parâmetros (Risk Card)
         self._configuration_layout = QVBoxLayout()
         self._configuration_layout.setContentsMargins(14, 14, 14, 14)
         self._configuration_layout.setSpacing(12)
@@ -128,13 +128,25 @@ class IqOptionWorkspaceWidget(QWidget):
         outer.setContentsMargins(18, 12, 18, 12)
         outer.setSpacing(8)
 
+        card_title_row = QHBoxLayout()
+        card_title_row.setSpacing(8)
+        self._card_conn_title = QLabel(t("card.connection"))
+        self._card_conn_title.setObjectName("sectionTitle")
+        self._card_conn_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        card_title_row.addWidget(self._card_conn_title)
+        self._card_conn_hint = QLabel(t("card.connection_hint"))
+        self._card_conn_hint.setObjectName("hint")
+        card_title_row.addWidget(self._card_conn_hint)
+        card_title_row.addStretch()
+        outer.addLayout(card_title_row)
+
         layout = QHBoxLayout()
         layout.setSpacing(14)
 
         # Title / Description
         identity = QVBoxLayout()
         identity.setSpacing(2)
-        self._eyebrow = QLabel("IQ OPTION · LABORATÓRIO MULTI-ATIVOS")
+        self._eyebrow = QLabel("IQ OPTION · MULTI-ASSET RADAR")
         self._eyebrow.setObjectName("Eyebrow")
         identity.addWidget(self._eyebrow)
 
@@ -143,8 +155,8 @@ class IqOptionWorkspaceWidget(QWidget):
         identity.addWidget(self._title)
 
         self._description = QLabel(
-            "Catálogo dinâmico Binary/Digital, mercados regulares e OTC; "
-            "execução somente em produtos comprovadamente habilitados."
+            "Catálogo dinámico Binary/Digital, mercados regulares y OTC; "
+            "ejecución instantánea protegida por capa stealth anti-detección."
         )
         self._description.setWordWrap(True)
         self._description.setObjectName("Subtitle")
@@ -152,7 +164,7 @@ class IqOptionWorkspaceWidget(QWidget):
         layout.addLayout(identity, 3)
 
         # Connection Pill
-        self._connection_pill = QLabel("● CONECTADO")
+        self._connection_pill = QLabel()
         self._connection_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._connection_pill.setObjectName("StatusPillOnline")
         layout.addWidget(self._connection_pill)
@@ -160,13 +172,13 @@ class IqOptionWorkspaceWidget(QWidget):
         # Account Mode
         account = QVBoxLayout()
         account.setSpacing(3)
-        self._account_caption = QLabel("MODO DA CONTA")
+        self._account_caption = QLabel(t("deriv.hub.account"))
         self._account_caption.setObjectName("Subtitle")
         account.addWidget(self._account_caption)
-        self._account_mode = QLabel("PRACTICE (TREINAMENTO)")
+        self._account_mode = QLabel("—")
         self._account_mode.setObjectName("ValueMono")
         account.addWidget(self._account_mode)
-        self._clock_status = QLabel("⏱️ Sincronizado")
+        self._clock_status = QLabel("—")
         self._clock_status.setObjectName("Subtitle")
         account.addWidget(self._clock_status)
         layout.addLayout(account, 2)
@@ -174,14 +186,14 @@ class IqOptionWorkspaceWidget(QWidget):
         # Balance Section
         balance = QVBoxLayout()
         balance.setSpacing(3)
-        self._balance_caption = QLabel("SALDO DISPONÍVEL")
+        self._balance_caption = QLabel(t("broker.balance"))
         self._balance_caption.setObjectName("Subtitle")
         balance.addWidget(self._balance_caption)
-        self._balance_value = QLabel("$ 10,000.00 USD")
+        self._balance_value = QLabel("—")
         self._balance_value.setObjectName("ValueMono")
         self._balance_value.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 16px;")
         balance.addWidget(self._balance_value)
-        self._balance_freshness = QLabel("Aguardando leitura confirmada")
+        self._balance_freshness = QLabel(t("iq.balance.awaiting"))
         self._balance_freshness.setObjectName("Subtitle")
         balance.addWidget(self._balance_freshness)
         layout.addLayout(balance, 2)
@@ -189,17 +201,25 @@ class IqOptionWorkspaceWidget(QWidget):
         # Bot Automation Pill & Reason
         bot_box = QVBoxLayout()
         bot_box.setSpacing(3)
-        self._automation_pill = QLabel("AUTO TRADER: PRONTO")
+        self._automation_pill = QLabel(t("iq.status.active"))
         self._automation_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._automation_pill.setObjectName("StatusPillOnline")
         bot_box.addWidget(self._automation_pill)
 
-        self._automation_detail = QLabel("AUTO SCAN: Monitorando 15 ativos (RSI < 30 / > 70)")
+        self._automation_detail = QLabel(
+            "AUTO SCAN: Monitor 15 OTC & Forex pairs (RSI < 30 / > 70)"
+        )
         self._automation_detail.setObjectName("Subtitle")
         self._automation_detail.setWordWrap(True)
         self._automation_detail.setStyleSheet(f"color: {ACCENT_CYAN}; font-size: 11px;")
         bot_box.addWidget(self._automation_detail)
         layout.addLayout(bot_box, 3)
+
+        # SafeStop button
+        self._safe_stop_button = SafeStopButton()
+        self._safe_stop_button.setObjectName("danger")
+        self._safe_stop_button.safe_stop_triggered.connect(self.safe_stop_requested.emit)
+        layout.addWidget(self._safe_stop_button)
 
         outer.addLayout(layout)
         return frame
@@ -214,6 +234,18 @@ class IqOptionWorkspaceWidget(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(12)
 
+        # Strategy Card Header
+        strat_header = QHBoxLayout()
+        self._card_strat_title = QLabel(t("card.strategy"))
+        self._card_strat_title.setObjectName("sectionTitle")
+        self._card_strat_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        strat_header.addWidget(self._card_strat_title)
+        self._card_strat_hint = QLabel(t("card.strategy_hint"))
+        self._card_strat_hint.setObjectName("hint")
+        strat_header.addWidget(self._card_strat_hint)
+        strat_header.addStretch()
+        layout.addLayout(strat_header)
+
         # 1. Strategy Summary & KPIs
         self.strategy_summary = IqOptionStrategySummaryWidget()
         layout.addWidget(self.strategy_summary)
@@ -223,9 +255,9 @@ class IqOptionWorkspaceWidget(QWidget):
         layout.addWidget(self.asset_radar)
 
         # 3. Orders Table
-        orders_header = QLabel("HISTÓRICO DE ORDENS · IQ OPTION")
-        orders_header.setObjectName("Title")
-        layout.addWidget(orders_header)
+        self._orders_header = QLabel(t("orders.title") + " · IQ OPTION")
+        self._orders_header.setObjectName("Title")
+        layout.addWidget(self._orders_header)
 
         self.orders = OrderTableView()
         self.orders.setMinimumHeight(180)
@@ -244,6 +276,18 @@ class IqOptionWorkspaceWidget(QWidget):
         self._config_content_layout.setContentsMargins(14, 14, 14, 14)
         self._config_content_layout.setSpacing(12)
 
+        # Risk Card Header
+        risk_header = QHBoxLayout()
+        self._card_risk_title = QLabel(t("card.risk"))
+        self._card_risk_title.setObjectName("sectionTitle")
+        self._card_risk_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        risk_header.addWidget(self._card_risk_title)
+        self._card_risk_hint = QLabel(t("card.risk_hint"))
+        self._card_risk_hint.setObjectName("hint")
+        risk_header.addWidget(self._card_risk_hint)
+        risk_header.addStretch()
+        self._config_content_layout.addLayout(risk_header)
+
         # Login / Account Selector Box
         login_box = QFrame()
         login_box.setObjectName("Surface")
@@ -251,17 +295,17 @@ class IqOptionWorkspaceWidget(QWidget):
         l_layout.setContentsMargins(16, 14, 16, 14)
         l_layout.setSpacing(10)
 
-        l_title = QLabel("CONEXÃO & CONTA IQ OPTION")
-        l_title.setObjectName("Title")
-        l_layout.addWidget(l_title)
+        self._l_title = QLabel(t("iq_option.login.title"))
+        self._l_title.setObjectName("Title")
+        l_layout.addWidget(self._l_title)
 
-        l_desc = QLabel(
-            "Conecte-se com segurança à conta de Treinamento (Practice) ou Real. "
-            "Suas credenciais são protegidas via cofre DPAPI do Windows."
+        self._l_desc = QLabel(
+            "Conéctate con seguridad a la cuenta de Entrenamiento (Practice) o Real. "
+            "Tus credenciales están protegidas mediante el cofre DPAPI de Windows."
         )
-        l_desc.setWordWrap(True)
-        l_desc.setObjectName("Subtitle")
-        l_layout.addWidget(l_desc)
+        self._l_desc.setWordWrap(True)
+        self._l_desc.setObjectName("Subtitle")
+        l_layout.addWidget(self._l_desc)
 
         self._iqoption_login_button = QPushButton("🔑 " + t("iq_option.login.button"))
         self._iqoption_login_button.setObjectName("PrimaryButton")
@@ -289,10 +333,10 @@ class IqOptionWorkspaceWidget(QWidget):
         self._last_status = status
 
         if status.is_connected:
-            self._connection_pill.setText("● CONECTADO")
+            self._connection_pill.setText(f"● {t('broker.connected')}")
             self._connection_pill.setObjectName("StatusPillOnline")
         else:
-            self._connection_pill.setText("○ DESCONECTADO")
+            self._connection_pill.setText(f"○ {t('broker.disconnected')}")
             self._connection_pill.setObjectName("StatusPillOffline")
 
         self._connection_pill.style().unpolish(self._connection_pill)
@@ -308,39 +352,38 @@ class IqOptionWorkspaceWidget(QWidget):
         observed = status.balance_observed_at_utc
         observed_text = "" if observed is None else f"{observed:%H:%M:%S} UTC"
         age = status.balance_age_seconds
-        age_text = "" if age is None else f" há {age}s"
+        age_text = "" if age is None else f" ({age}s)"
         retries = status.balance_retry_count or 0
         quality = status.balance_quality
         if quality is UiBalanceQuality.CONFIRMED or (
             quality is None and status.balance_is_fresh is True
         ):
-            self._balance_freshness.setText(f"● CONFIRMADO{age_text}")
+            self._balance_freshness.setText(f"{t('iq.balance.confirmed')}{age_text}")
             self._balance_freshness.setStyleSheet(f"color: {ACCENT_GREEN};")
         elif quality is UiBalanceQuality.RETRYING:
-            attempt_text = "" if retries <= 0 else f" · tentativa {retries}"
-            self._balance_freshness.setText(f"↻ ÚLTIMO SALDO CONFIRMADO{age_text}{attempt_text}")
+            attempt_text = "" if retries <= 0 else f" · #{retries}"
+            self._balance_freshness.setText(
+                f"{t('iq.balance.last_confirmed')}{age_text}{attempt_text}"
+            )
             self._balance_freshness.setStyleSheet(f"color: {ACCENT_AMBER};")
         elif quality is UiBalanceQuality.STALE or status.balance_is_fresh is False:
-            self._balance_freshness.setText(f"⚠ SEM CONFIRMAÇÃO{age_text} · ENTRADAS BLOQUEADAS")
+            self._balance_freshness.setText(f"{t('iq.balance.unconfirmed')}{age_text}")
             self._balance_freshness.setStyleSheet(f"color: {ACCENT_AMBER};")
         else:
-            self._balance_freshness.setText("Aguardando leitura confirmada")
+            self._balance_freshness.setText(t("iq.balance.awaiting"))
             self._balance_freshness.setStyleSheet("")
         if observed_text:
-            self._balance_freshness.setToolTip(
-                f"Última leitura validada da IQ Option: {observed_text}. "
-                "A idade usa o timestamp real de recebimento; ela não é renovada pelo cache."
-            )
+            self._balance_freshness.setToolTip(f"IQ Option validated timestamp: {observed_text}")
         else:
             self._balance_freshness.setToolTip("")
 
         if status.clock_synced:
             lat = f" ({status.clock_latency_ms} ms)" if status.clock_latency_ms else ""
-            self._clock_status.setText(f"⏱️ Sincronizado{lat}")
+            self._clock_status.setText(f"⏱️ {t('broker.clock_synced')}{lat}")
         else:
             latency = status.clock_latency_ms
-            detail = f" · latência medida {latency} ms" if latency is not None else ""
-            self._clock_status.setText(f"⏱️ Aguardando confirmação do relógio{detail}")
+            detail = f" · {latency} ms" if latency is not None else ""
+            self._clock_status.setText(f"⏱️ {t('broker.clock_untrusted')}{detail}")
 
     def update_bot_state(
         self,
@@ -353,12 +396,12 @@ class IqOptionWorkspaceWidget(QWidget):
         self._bot_armed = armed
         self._bot_reason = reason
         if armed and entry_ready is not False:
-            self._automation_pill.setText("● BOT ATIVO")
+            self._automation_pill.setText(t("iq.status.active"))
             self._automation_pill.setObjectName("StatusPillOnline")
         elif armed:
             market_reason = entry_blocker or reason
             if reason == "IQOPTION_BOT_ARMED_REVIEW_REQUIRED":
-                self._automation_pill.setText("⚠ VERIFICAÇÃO INCONCLUSIVA")
+                self._automation_pill.setText(t("iq.status.review_required"))
             elif market_reason in {
                 "IQOPTION_BOT_ARMED_RECONCILING",
                 "HG_ORDER_UNKNOWN",
@@ -366,18 +409,18 @@ class IqOptionWorkspaceWidget(QWidget):
                 "HG_RECONCILIATION_UNAVAILABLE",
                 "HG_SETTLEMENT_UNKNOWN",
             }:
-                self._automation_pill.setText("● BOT ARMADO · VERIFICANDO ORDEM")
+                self._automation_pill.setText(t("iq.status.checking_order"))
             elif reason in {
                 "TRANSPORT_DOWN",
                 "IQOPTION_CONNECTION_QUARANTINED",
                 "IQOPTION_CONNECTION_IN_PROGRESS",
             }:
-                self._automation_pill.setText("● BOT ARMADO · RECONECTANDO")
+                self._automation_pill.setText(t("iq.status.reconnecting"))
             else:
-                self._automation_pill.setText("● BOT LIGADO · ENTRADAS BLOQUEADAS")
+                self._automation_pill.setText(t("iq.status.entries_blocked"))
             self._automation_pill.setObjectName("StatusPillOffline")
         else:
-            self._automation_pill.setText("○ BOT EM ESPERA")
+            self._automation_pill.setText(t("iq.status.standby"))
             self._automation_pill.setObjectName("StatusPillOffline")
 
         self._automation_pill.style().unpolish(self._automation_pill)
@@ -386,19 +429,15 @@ class IqOptionWorkspaceWidget(QWidget):
             reason if reason == "IQOPTION_BOT_ARMED_REVIEW_REQUIRED" else entry_blocker or reason
         )
         self._automation_detail.setText(
-            f"Entradas bloqueadas: {iqoption_bot_reason_text(display_reason)}"
+            t("iq.status.entries_blocked_prefix", reason=iqoption_bot_reason_text(display_reason))
             if armed and entry_ready is False
             else iqoption_bot_reason_text(reason)
         )
         market_reason = entry_blocker or reason
         if market_reason == "IQOPTION_ACTIVE_SUSPENDED":
-            self._automation_detail.setText(
-                "Ativo suspenso pela IQ Option para opções turbo. Aguardando disponibilidade."
-            )
+            self._automation_detail.setText(t("iq.reason.asset_suspended"))
         elif market_reason == "IQOPTION_ACTIVE_UNAVAILABLE":
-            self._automation_detail.setText(
-                "Ativo indisponível no catálogo turbo da IQ Option; nenhuma ordem enviada."
-            )
+            self._automation_detail.setText(t("iq.reason.asset_unavailable"))
 
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
         filtered = tuple(item for item in orders if "IQ" in item.broker.upper())
@@ -435,7 +474,7 @@ class IqOptionWorkspaceWidget(QWidget):
         self._reconnect_remaining_seconds = max(0, seconds)
         self._reconnect_attempts = max(0, attempts)
         if self._iqoption_login_button is not None:
-            self._iqoption_login_button.setText("↻ Reconectar agora")
+            self._iqoption_login_button.setText(t("iq.reconnect.button_now"))
         self._render_reconnect_countdown()
         if self._reconnect_remaining_seconds > 0:
             self._reconnect_timer.start()
@@ -448,9 +487,9 @@ class IqOptionWorkspaceWidget(QWidget):
 
     def _render_reconnect_countdown(self) -> None:
         minutes, seconds = divmod(self._reconnect_remaining_seconds, 60)
+        time_str = f"{minutes:02d}:{seconds:02d}"
         self._iqoption_login_status.setText(
-            f"Reconexão automática em {minutes:02d}:{seconds:02d} · "
-            f"tentativas {self._reconnect_attempts}/3 · SSID gerenciado pelo worker"
+            t("iq.reconnect.countdown", time=time_str, attempts=self._reconnect_attempts)
         )
 
     def tab_label(self) -> str:
@@ -459,8 +498,20 @@ class IqOptionWorkspaceWidget(QWidget):
         return f"{self._display_name} — {_mode_text(self._last_status.account_mode)}"
 
     def retranslate(self) -> None:
+        self._page_title.setText(t("page.iqoption"))
+        self._page_subtitle.setText(t("page.iqoption_subtitle"))
+        self._card_conn_title.setText(t("card.connection"))
+        self._card_conn_hint.setText(t("card.connection_hint"))
+        self._card_strat_title.setText(t("card.strategy"))
+        self._card_strat_hint.setText(t("card.strategy_hint"))
+        self._card_risk_title.setText(t("card.risk"))
+        self._card_risk_hint.setText(t("card.risk_hint"))
+        self._account_caption.setText(t("deriv.hub.account"))
+        self._balance_caption.setText(t("broker.balance"))
+        self._orders_header.setText(t("orders.title") + " · IQ OPTION")
         self._tabs.setTabText(0, "📊 " + t("tabs.status"))
         self._tabs.setTabText(1, "⚙️ " + t("tabs.configuration"))
+        self._safe_stop_button.retranslate()
         if self._iqoption_login_button is not None:
             self._iqoption_login_button.setText("🔑 " + t("iq_option.login.button"))
         if self._iqoption_login_status is not None and not self._iqoption_login_status.text():

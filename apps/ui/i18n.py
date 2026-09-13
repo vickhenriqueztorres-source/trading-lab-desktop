@@ -1331,6 +1331,359 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Strategy Catalog",
         "es": "Catálogo de Estratégias",
     },
+    # Page Headers & Subtitles
+    "page.deriv": {
+        "en": "Deriv · Digit Operations",
+        "es": "Deriv · Operaciones de Dígitos",
+    },
+    "page.deriv_subtitle": {
+        "en": (
+            "Connect your account, choose your strategy, and control risk before starting the bot."
+        ),
+        "es": (
+            "Conecta tu cuenta, elige la estrategia y controla el riesgo antes de encender el bot."
+        ),
+    },
+    "page.iqoption": {
+        "en": "IQ Option · Multi-Asset",
+        "es": "IQ Option · Multi-Activos",
+    },
+    "page.iqoption_subtitle": {
+        "en": (
+            "Monitor OTC and Forex pairs in real time with instant execution and risk management."
+        ),
+        "es": (
+            "Monitorea pares OTC y Forex en tiempo real "
+            "con ejecución instantánea y gestión de riesgo."
+        ),
+    },
+    "page.activity": {
+        "en": "Activity & Operations",
+        "es": "Actividad y Operaciones",
+    },
+    "page.activity_subtitle": {
+        "en": "Real-time log of executed orders, outcome settlements, and operational audit.",
+        "es": "Registro en tiempo real de órdenes ejecutadas, resultados y auditoría operativa.",
+    },
+    # Section Cards
+    "card.connection": {
+        "en": "Connection & Account",
+        "es": "Conexión y Cuenta",
+    },
+    "card.connection_hint": {
+        "en": "Secure broker connection and available account balance",
+        "es": "Conexión segura y saldo disponible en la cuenta",
+    },
+    "card.strategy": {
+        "en": "Strategy",
+        "es": "Estrategia",
+    },
+    "card.strategy_hint": {
+        "en": "Select and configure statistical trading models",
+        "es": "Selecciona y configura los modelos estadísticos de operación",
+    },
+    "card.risk": {
+        "en": "Risk Limits",
+        "es": "Límites de Riesgo",
+    },
+    "card.risk_hint": {
+        "en": "Strict stop loss, exposure ceilings, and cooldown periods",
+        "es": "Control de pérdidas, límites de exposición y pausas preventivas",
+    },
+    # Risk Tooltips
+    "risk.daily_stop_tip": {
+        "en": "If daily loss reaches this value, the bot stops automatically.",
+        "es": "Si la pérdida del día llega a este valor, el bot se detiene solo.",
+    },
+    "risk.daily_take_profit_tip": {
+        "en": "Daily profit target; when reached, the bot stops automatically.",
+        "es": "Meta de ganancia diaria; al alcanzarla, el bot se detiene solo.",
+    },
+    "risk.stake_tip": {
+        "en": "Stake amount allocated to each individual trade.",
+        "es": "Monto asignado a cada operación individual.",
+    },
+    "risk.max_consecutive_losses_tip": {
+        "en": "Maximum consecutive losses allowed before activating safety cooldown.",
+        "es": "Pérdidas consecutivas máximas permitidas antes de pausar.",
+    },
+    "risk.cooldown_tip": {
+        "en": "Mandatory waiting time between trades for risk management.",
+        "es": "Tiempo de espera obligatorio entre operaciones para control de riesgo.",
+    },
+    "risk.confidence_tip": {
+        "en": "Statistical confidence threshold required to execute a trade.",
+        "es": "Nivel de confianza estadística requerido para emitir una entrada.",
+    },
+    # Activity Page & Filters
+    "activity.empty": {
+        "en": "No operations yet. Start the bot to begin.",
+        "es": "Aún no hay operaciones. Enciende el bot para empezar.",
+    },
+    "activity.filter_all": {
+        "en": "All brokers",
+        "es": "Todos los corredores",
+    },
+    "activity.filter_deriv": {
+        "en": "Deriv",
+        "es": "Deriv",
+    },
+    "activity.filter_iqoption": {
+        "en": "IQ Option",
+        "es": "IQ Option",
+    },
+    "activity.filter_all_results": {
+        "en": "All outcomes",
+        "es": "Todos los resultados",
+    },
+    "activity.filter_wins": {
+        "en": "Winning trades",
+        "es": "Operaciones ganadas",
+    },
+    "activity.filter_losses": {
+        "en": "Losing trades",
+        "es": "Operaciones perdidas",
+    },
+    "result.win": {
+        "en": "WON",
+        "es": "GANADA",
+    },
+    "result.loss": {
+        "en": "LOST",
+        "es": "PERDIDA",
+    },
+    # Settings
+    "settings.general": {
+        "en": "General",
+        "es": "General",
+    },
+    "settings.general_hint": {
+        "en": "Language selection and application preferences",
+        "es": "Selección de idioma y preferencias generales",
+    },
+    "settings.language": {
+        "en": "Language",
+        "es": "Idioma",
+    },
+    "settings.notifications": {
+        "en": "Notifications",
+        "es": "Notificaciones",
+    },
+    "settings.notifications_hint": {
+        "en": "Operational alerts and risk management warnings",
+        "es": "Alertas operativas y avisos de gestión de riesgo",
+    },
+    "settings.diagnostics": {
+        "en": "Diagnostics",
+        "es": "Diagnósticos",
+    },
+    "settings.diagnostics_hint": {
+        "en": "Generate redacted diagnostic bundle for support",
+        "es": "Genera un paquete de diagnóstico redactado para soporte",
+    },
+    "settings.about": {
+        "en": "About",
+        "es": "Acerca de",
+    },
+    "settings.about_hint": {
+        "en": "System version and official support links",
+        "es": "Información del sistema y soporte oficial",
+    },
+    "support.telegram": {
+        "en": "Telegram Support Channel",
+        "es": "Canal de Soporte en Telegram",
+    },
+    "support.telegram_url": {
+        "en": "https://t.me/tradinglab_support",
+        "es": "https://t.me/tradinglab_support",
+    },
+    # Strategy selection modes
+    "strategy.mode_single": {
+        "en": "Single mode · one active strategy",
+        "es": "Modo único · una estrategia activa",
+    },
+    "strategy.mode_multi": {
+        "en": "Joint mode · selected strategies",
+        "es": "Modo conjunto · estrategias elegidas",
+    },
+    "strategy.mode_stress": {
+        "en": "Stress test · Demo only",
+        "es": "Prueba de carga · solo Demo",
+    },
+    "strategy.stress_checkbox": {
+        "en": "Stress test (all strategies — Demo only)",
+        "es": "Prueba de carga (todas las estrategias — solo Demo)",
+    },
+    "strategy.stress_tooltip": {
+        "en": "Evaluates all strategies while keeping at most one order in flight.",
+        "es": "Evalúa todas las estrategias manteniendo como máximo una orden en vuelo.",
+    },
+    # Automation Statuses in Deriv
+    "bot.waiting_new_tick": {
+        "en": "● BOT ACTIVE · waiting for new tick",
+        "es": "● BOT ACTIVO · esperando nuevo tick",
+    },
+    "bot.warming_up_ticks": {
+        "en": "● BOT ACTIVE · warming up data",
+        "es": "● BOT ACTIVO · calentando datos",
+    },
+    "bot.waiting_signal": {
+        "en": "● BOT ACTIVE · waiting for signal",
+        "es": "● BOT ACTIVO · esperando señal",
+    },
+    "bot.quality_filter": {
+        "en": "● BOT ACTIVE · quality filter",
+        "es": "● BOT ACTIVO · filtro de calidad",
+    },
+    "bot.performance_cooldown": {
+        "en": "● BOT ACTIVE · performance cooldown",
+        "es": "● BOT ACTIVO · pausa de rendimiento",
+    },
+    "bot.risk_cooldown": {
+        "en": "● BOT ACTIVE · safety pause",
+        "es": "● BOT ACTIVO · pausa de seguridad",
+    },
+    "bot.martingale_pinned": {
+        "en": "● BOT ACTIVE · waiting for recovery asset",
+        "es": "● BOT ACTIVO · esperando activo de recuperación",
+    },
+    "bot.martingale_released": {
+        "en": "● BOT ACTIVE · normal selection resumed",
+        "es": "● BOT ACTIVO · selección normal reanudada",
+    },
+    "bot.order_in_flight": {
+        "en": "● BOT ACTIVE · operation in flight",
+        "es": "● BOT ACTIVO · operación en curso",
+    },
+    "bot.order_submitted": {
+        "en": "● BOT ACTIVE · order submitted",
+        "es": "● BOT ACTIVO · orden enviada",
+    },
+    "bot.demo_active": {
+        "en": "● DEMO BOT ACTIVE",
+        "es": "● BOT DEMO ACTIVO",
+    },
+    "bot.demo_paused": {
+        "en": "○ DEMO BOT PAUSED",
+        "es": "○ BOT DEMO PAUSADO",
+    },
+    "bot.real_read_only": {
+        "en": "○ REAL ACCOUNT READ-ONLY",
+        "es": "○ CUENTA REAL SOLO LECTURA",
+    },
+    "bot.waiting_seconds": {
+        "en": "Waiting for {seconds}s.",
+        "es": "Esperando hace {seconds}s.",
+    },
+    # IQ Option Bot Reasons
+    "iq.reason.clock_untrusted": {
+        "en": (
+            "Broker clock unverified or drift exceeds 120s. "
+            "Latency visible for diagnosis without blocking entries."
+        ),
+        "es": (
+            "Reloj de la corredora sin confirmación reciente o desvío superior a 120s. "
+            "Latencia visible para diagnóstico sin bloquear entradas."
+        ),
+    },
+    "iq.reason.transport_down": {
+        "en": ("Transport unavailable. Bot remains armed and will resume after reconciliation."),
+        "es": (
+            "Transporte no disponible. "
+            "El bot permanece armado y se reanudará tras la reconciliación."
+        ),
+    },
+    "iq.reason.balance_stale": {
+        "en": "Balance out of date. New entries await a confirmed reading from IQ Option.",
+        "es": "Saldo desactualizado. Nuevas entradas esperan una lectura confirmada de IQ Option.",
+    },
+    "iq.reason.disarmed": {
+        "en": "Bot waiting for start command.",
+        "es": "Bot esperando el comando para encender.",
+    },
+    "iq.reason.all_markets_closed": {
+        "en": (
+            "Turbo markets closed currently by broker. "
+            "Radar will automatically resume once OTC or Forex pairs open."
+        ),
+        "es": (
+            "Mercados Turbo cerrados en este momento por la corredora. "
+            "El radar reanudará automáticamente cuando abran los pares OTC o Forex."
+        ),
+    },
+    "iq.reason.market_closed": {
+        "en": "Market for selected asset currently closed by broker. Awaiting reopening.",
+        "es": (
+            "Mercado para el activo seleccionado cerrado actualmente por la corredora. "
+            "Esperando reapertura."
+        ),
+    },
+    "iq.reason.symbol_unsupported": {
+        "en": "Selected asset not found in broker trading catalog.",
+        "es": "Activo seleccionado no encontrado en el catálogo de negociación de la corredora.",
+    },
+    "iq.reason.asset_suspended": {
+        "en": "Asset suspended by broker for turbo options. Awaiting availability.",
+        "es": "Activo suspendido por la corredora para opciones turbo. Esperando disponibilidad.",
+    },
+    "iq.reason.asset_unavailable": {
+        "en": "Asset unavailable in broker turbo catalog; no order sent.",
+        "es": "Activo no disponible en el catálogo turbo de la corredora; ninguna orden enviada.",
+    },
+    "iq.status.active": {
+        "en": "● BOT ACTIVE",
+        "es": "● BOT ACTIVO",
+    },
+    "iq.status.review_required": {
+        "en": "⚠ INCONCLUSIVE VERIFICATION",
+        "es": "⚠ VERIFICACIÓN INCONCLUSIVA",
+    },
+    "iq.status.checking_order": {
+        "en": "● BOT ARMED · CHECKING ORDER",
+        "es": "● BOT ARMADO · VERIFICANDO ORDEN",
+    },
+    "iq.status.reconnecting": {
+        "en": "● BOT ARMED · RECONNECTING",
+        "es": "● BOT ARMADO · RECONECTANDO",
+    },
+    "iq.status.entries_blocked": {
+        "en": "● BOT ON · ENTRIES BLOCKED",
+        "es": "● BOT ENCENDIDO · ENTRADAS BLOQUEADAS",
+    },
+    "iq.status.standby": {
+        "en": "○ BOT STANDBY",
+        "es": "○ BOT EN ESPERA",
+    },
+    "iq.status.entries_blocked_prefix": {
+        "en": "Entries blocked: {reason}",
+        "es": "Entradas bloqueadas: {reason}",
+    },
+    "iq.balance.confirmed": {
+        "en": "● CONFIRMED",
+        "es": "● CONFIRMADO",
+    },
+    "iq.balance.last_confirmed": {
+        "en": "↻ LAST CONFIRMED BALANCE",
+        "es": "↻ ÚLTIMO SALDO CONFIRMADO",
+    },
+    "iq.balance.unconfirmed": {
+        "en": "⚠ UNCONFIRMED · ENTRIES BLOCKED",
+        "es": "⚠ SIN CONFIRMACIÓN · ENTRADAS BLOQUEADAS",
+    },
+    "iq.balance.awaiting": {
+        "en": "Awaiting confirmed reading",
+        "es": "Esperando lectura confirmada",
+    },
+    "iq.reconnect.button_now": {
+        "en": "↻ Reconnect now",
+        "es": "↻ Reconectar ahora",
+    },
+    "iq.reconnect.countdown": {
+        "en": "Auto-reconnect in {time} · attempts {attempts}/3 · Managed by worker",
+        "es": (
+            "Reconexión automática en {time} · intentos {attempts}/3 · Administrado por el worker"
+        ),
+    },
 }
 
 

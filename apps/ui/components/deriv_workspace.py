@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from apps.ui.components.deriv_strategy_summary import DerivStrategySummaryWidget
 from apps.ui.components.order_table import OrderTableView
+from apps.ui.components.safe_stop_button import SafeStopButton
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import t
 from apps.ui.theme import ACCENT_CYAN
@@ -32,23 +33,23 @@ from packages.protocol.ui_messages import (
 _STRATEGIES = {
     "tail-probability-edge": (
         "Tail Probability Edge",
-        "Over/Under adaptativo para concentração estatística em dígitos baixos ou altos.",
-        "ESTRATÉGIA 1  ·  OVER / UNDER",
+        "Over/Under adaptativo para concentración estadística en dígitos bajos o altos.",
+        "ESTRATEGIA 1  ·  OVER / UNDER",
     ),
     "selective-differs-edge": (
         "Selective Differs Edge",
-        "Digit Differs com seleção conservadora do dígito menos provável.",
-        "ESTRATÉGIA 2  ·  DIGIT DIFFERS",
+        "Digit Differs con selección conservadora del dígito menos probable.",
+        "ESTRATEGIA 2  ·  DIGIT DIFFERS",
     ),
     "parity-regime-edge": (
         "Parity Regime Edge",
-        "Even/Odd condicional para procurar dependência estável de paridade.",
-        "ESTRATÉGIA 3  ·  EVEN / ODD",
+        "Even/Odd condicional para buscar dependencia estable de paridad.",
+        "ESTRATEGIA 3  ·  EVEN / ODD",
     ),
     "payout-routed-differs-session": (
-        "Sessão Differs",
-        "Digit Differs com proposal fresca, barreira fixa e piso de payout de segurança.",
-        "SESSÃO 4  ·  DIGIT DIFFERS",
+        "Sesión Differs",
+        "Digit Differs con proposal fresca, barrera fija y piso de payout de seguridad.",
+        "SESIÓN 4  ·  DIGIT DIFFERS",
     ),
 }
 
@@ -63,6 +64,7 @@ class DerivWorkspaceWidget(QWidget):
 
     deriv_demo_connect_requested = Signal()
     strategy_selected = Signal(str)
+    safe_stop_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -74,9 +76,24 @@ class DerivWorkspaceWidget(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(10)
+        root.setSpacing(12)
+
+        # Page Header: Title + 1-sentence Subtitle
+        header = QVBoxLayout()
+        header.setSpacing(4)
+        self._page_title = QLabel(t("page.deriv"))
+        self._page_title.setObjectName("sectionTitle")
+        self._page_title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        header.addWidget(self._page_title)
+        self._page_subtitle = QLabel(t("page.deriv_subtitle"))
+        self._page_subtitle.setObjectName("hint")
+        header.addWidget(self._page_subtitle)
+        root.addLayout(header)
+
+        # Card 1: Connection & Account
         root.addWidget(self._build_account_header())
 
+        # Card 2: Strategy workspace with Rail and Tabs
         body = QHBoxLayout()
         body.setSpacing(14)
         body.addWidget(self._build_strategy_rail())
@@ -88,8 +105,21 @@ class DerivWorkspaceWidget(QWidget):
         frame = QFrame()
         frame.setObjectName("DerivHero")
         outer = QVBoxLayout(frame)
-        outer.setContentsMargins(18, 10, 18, 10)
+        outer.setContentsMargins(18, 12, 18, 12)
         outer.setSpacing(8)
+
+        card_title_row = QHBoxLayout()
+        card_title_row.setSpacing(8)
+        self._card_conn_title = QLabel(t("card.connection"))
+        self._card_conn_title.setObjectName("sectionTitle")
+        self._card_conn_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        card_title_row.addWidget(self._card_conn_title)
+        self._card_conn_hint = QLabel(t("card.connection_hint"))
+        self._card_conn_hint.setObjectName("hint")
+        card_title_row.addWidget(self._card_conn_hint)
+        card_title_row.addStretch()
+        outer.addLayout(card_title_row)
+
         layout = QHBoxLayout()
         layout.setSpacing(14)
 
@@ -151,10 +181,20 @@ class DerivWorkspaceWidget(QWidget):
         self._automation_detail.setMinimumWidth(250)
         layout.addWidget(self._automation_detail, 2)
 
+        buttons_box = QHBoxLayout()
+        buttons_box.setSpacing(8)
+
         self._deriv_connect_button = QPushButton()
         self._deriv_connect_button.setObjectName("PrimaryButton")
         self._deriv_connect_button.clicked.connect(self.deriv_demo_connect_requested.emit)
-        layout.addWidget(self._deriv_connect_button)
+        buttons_box.addWidget(self._deriv_connect_button)
+
+        self._safe_stop_button = SafeStopButton()
+        self._safe_stop_button.setObjectName("danger")
+        self._safe_stop_button.safe_stop_triggered.connect(self.safe_stop_requested.emit)
+        buttons_box.addWidget(self._safe_stop_button)
+
+        layout.addLayout(buttons_box)
         outer.addLayout(layout)
 
         self._real_mode_notice = QLabel()
@@ -170,6 +210,16 @@ class DerivWorkspaceWidget(QWidget):
         layout = QVBoxLayout(rail)
         layout.setContentsMargins(12, 14, 12, 14)
         layout.setSpacing(6)
+
+        self._card_strat_title = QLabel(t("card.strategy"))
+        self._card_strat_title.setObjectName("sectionTitle")
+        self._card_strat_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        layout.addWidget(self._card_strat_title)
+
+        self._card_strat_hint = QLabel(t("card.strategy_hint"))
+        self._card_strat_hint.setObjectName("hint")
+        self._card_strat_hint.setWordWrap(True)
+        layout.addWidget(self._card_strat_hint)
 
         self._library_title = QLabel()
         self._library_title.setObjectName("Title")
@@ -309,25 +359,25 @@ class DerivWorkspaceWidget(QWidget):
         waiting_status: UiBotWaitingStatus | None = None,
     ) -> None:
         if real_mode:
-            self._automation_pill.setText("○ CONTA REAL SOMENTE LEITURA")
+            self._automation_pill.setText(t("bot.real_read_only"))
             self._automation_pill.setObjectName("StatusPillOffline")
         elif enabled and connected:
             labels = {
-                "BOT_WAITING_FOR_NEW_TICK": "● BOT ATIVO · aguardando sinal novo",
-                "BOT_WARMING_UP_TICKS": "● BOT ATIVO · aquecendo dados",
-                "BOT_WAITING_FOR_STRATEGY_SIGNAL": "● BOT ATIVO · aguardando sinal",
-                "BOT_NO_POSITIVE_NET_EDGE": "● BOT ATIVO · filtro de qualidade",
-                "BOT_PERFORMANCE_COOLDOWN": "● BOT ATIVO · pausa temporária de desempenho",
-                "BOT_RISK_COOLDOWN_ACTIVE": "● BOT ATIVO · pausa de segurança",
-                "BOT_MARTINGALE_ASSET_PINNED": "● BOT ATIVO · aguardando ativo de recuperação",
-                "BOT_MARTINGALE_PIN_RELEASED": "● BOT ATIVO · seleção normal retomada",
-                "BOT_ORDER_IN_FLIGHT": "● BOT ATIVO · operação em andamento",
-                "BOT_ORDER_SUBMITTED": "● BOT ATIVO · ordem enviada",
+                "BOT_WAITING_FOR_NEW_TICK": t("bot.waiting_new_tick"),
+                "BOT_WARMING_UP_TICKS": t("bot.warming_up_ticks"),
+                "BOT_WAITING_FOR_STRATEGY_SIGNAL": t("bot.waiting_signal"),
+                "BOT_NO_POSITIVE_NET_EDGE": t("bot.quality_filter"),
+                "BOT_PERFORMANCE_COOLDOWN": t("bot.performance_cooldown"),
+                "BOT_RISK_COOLDOWN_ACTIVE": t("bot.risk_cooldown"),
+                "BOT_MARTINGALE_ASSET_PINNED": t("bot.martingale_pinned"),
+                "BOT_MARTINGALE_PIN_RELEASED": t("bot.martingale_released"),
+                "BOT_ORDER_IN_FLIGHT": t("bot.order_in_flight"),
+                "BOT_ORDER_SUBMITTED": t("bot.order_submitted"),
             }
-            self._automation_pill.setText(labels.get(reason, "● BOT DEMO ATIVO"))
+            self._automation_pill.setText(labels.get(reason, t("bot.demo_active")))
             self._automation_pill.setObjectName("StatusPillOnline")
         else:
-            self._automation_pill.setText("○ BOT DEMO PAUSADO")
+            self._automation_pill.setText(t("bot.demo_paused"))
             self._automation_pill.setObjectName("StatusPillOffline")
         self._automation_pill.style().unpolish(self._automation_pill)
         self._automation_pill.style().polish(self._automation_pill)
@@ -336,7 +386,7 @@ class DerivWorkspaceWidget(QWidget):
             self._automation_detail.setText("")
             self._automation_detail.setVisible(False)
         else:
-            duration = f"Esperando há {waiting_status.waiting_since_seconds}s."
+            duration = t("bot.waiting_seconds", seconds=waiting_status.waiting_since_seconds)
             self._automation_detail.setText(f"{waiting_status.description} {duration}")
             self._automation_detail.setToolTip(waiting_status.reason_code)
             self._automation_detail.setVisible(True)
@@ -352,18 +402,17 @@ class DerivWorkspaceWidget(QWidget):
 
     def update_strategy_statuses(self, statuses: Sequence[UiDerivStrategyStatus]) -> None:
         self._strategy_statuses = {item.strategy_id: item for item in statuses}
+        status_labels = {
+            "SHADOW_SIGNAL": "DEMO SIGNAL",
+            "MONITORING": "MONITORING",
+            "DATA_BLOCKED": "BLOCKED",
+        }
         for strategy_id, button in self._strategy_buttons.items():
             status = self._strategy_statuses.get(strategy_id)
             if status is None:
-                suffix = "AGUARDANDO"
-            elif status.signal_state == "SHADOW_SIGNAL":
-                suffix = "SINAL DEMO ELEGÍVEL"
-            elif status.signal_state == "MONITORING":
-                suffix = "MONITORANDO"
-            elif status.signal_state == "DATA_BLOCKED":
-                suffix = "BLOQUEADA"
+                suffix = "WAITING"
             else:
-                suffix = "AQUECENDO"
+                suffix = status_labels.get(status.signal_state, "WARMING UP")
             button.setText(f"{_STRATEGIES[strategy_id][0]}\n{suffix}")
 
     def _select_strategy(self, strategy_id: str) -> None:
@@ -429,9 +478,16 @@ class DerivWorkspaceWidget(QWidget):
         return f"Deriv — {_mode_text(self._last_status.account_mode)}"
 
     def retranslate(self) -> None:
+        self._page_title.setText(t("page.deriv"))
+        self._page_subtitle.setText(t("page.deriv_subtitle"))
+        self._card_conn_title.setText(t("card.connection"))
+        self._card_conn_hint.setText(t("card.connection_hint"))
+        self._card_strat_title.setText(t("card.strategy"))
+        self._card_strat_hint.setText(t("card.strategy_hint"))
         self._account_caption.setText(t("deriv.hub.account"))
         self._balance_caption.setText(t("broker.balance"))
         self._deriv_connect_button.setText(t("deriv.connect.button"))
+        self._safe_stop_button.retranslate()
         if not self._deriv_connect_status.text():
             self._deriv_connect_status.setText(t("deriv.connect.status.ready"))
         self._library_title.setText(t("deriv.library.title"))

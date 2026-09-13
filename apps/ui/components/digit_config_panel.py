@@ -113,16 +113,14 @@ class DigitConfigPanelWidget(QFrame):
         strategy_row = QHBoxLayout()
         strategy_row.setSpacing(12)
         self.selection_mode_input = QComboBox()
-        self.selection_mode_input.addItem("Modo único · uma estratégia", "single")
-        self.selection_mode_input.addItem("Modo conjunto · estratégias escolhidas", "multi")
-        self.selection_mode_input.addItem("Teste de carga · somente Demo", "stress")
+        self.selection_mode_input.addItem(t("strategy.mode_single"), "single")
+        self.selection_mode_input.addItem(t("strategy.mode_multi"), "multi")
+        self.selection_mode_input.addItem(t("strategy.mode_stress"), "stress")
         self.selection_mode_input.currentIndexChanged.connect(self._selection_mode_changed)
         strategy_row.addWidget(self.selection_mode_input)
-        self.stress_mode_input = QCheckBox("Teste de carga (todas — somente Demo)")
+        self.stress_mode_input = QCheckBox(t("strategy.stress_checkbox"))
         self.stress_mode_input.setChecked(False)
-        self.stress_mode_input.setToolTip(
-            "Avalia todas as estratégias, mas mantém no máximo uma ordem em voo."
-        )
+        self.stress_mode_input.setToolTip(t("strategy.stress_tooltip"))
         self.stress_mode_input.toggled.connect(self._stress_mode_changed)
         strategy_row.addWidget(self.stress_mode_input)
         self._strategy_inputs: dict[str, QCheckBox] = {}
@@ -165,15 +163,21 @@ class DigitConfigPanelWidget(QFrame):
             field.setMinimumWidth(0)
             field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+        self.stake_input.setToolTip(t("risk.stake_tip"))
+        self.stop_loss_input.setToolTip(t("risk.daily_stop_tip"))
+        self.take_profit_input.setToolTip(t("risk.daily_take_profit_tip"))
+
         self.max_losses_input = QSpinBox()
         self.max_losses_input.setRange(1, 5)
         self.max_losses_input.setValue(1)
+        self.max_losses_input.setToolTip(t("risk.max_consecutive_losses_tip"))
         self.max_losses_input.valueChanged.connect(self._mark_dirty_and_validate)
 
         self.cooldown_input = QComboBox()
         for seconds in (10, 30, 60):
             self.cooldown_input.addItem(f"{seconds} s", float(seconds))
         self.cooldown_input.setCurrentIndex(1)
+        self.cooldown_input.setToolTip(t("risk.cooldown_tip"))
         self.cooldown_input.currentIndexChanged.connect(self._mark_dirty_and_validate)
 
         self.symbol_input = QComboBox()
@@ -186,6 +190,7 @@ class DigitConfigPanelWidget(QFrame):
         self.confidence_slider.setSingleStep(5)
         self.confidence_slider.setPageStep(10)
         self.confidence_slider.setValue(925)
+        self.confidence_slider.setToolTip(t("risk.confidence_tip"))
         self.confidence_slider.valueChanged.connect(self._confidence_changed)
         self.confidence_value = QLabel("92.5 %")
         self.confidence_value.setObjectName("ValueMono")
@@ -526,6 +531,28 @@ class DigitConfigPanelWidget(QFrame):
             label.setText(t(key))
         self.apply_button.setText(t("APPLY_CONFIG_BTN"))
         self.reset_session_button.setText(t("RESET_DEMO_SESSION_BTN"))
+
+        # Retranslate selection modes & stress checkbox
+        mode_keys = {
+            "single": "strategy.mode_single",
+            "multi": "strategy.mode_multi",
+            "stress": "strategy.mode_stress",
+        }
+        for i in range(self.selection_mode_input.count()):
+            data = str(self.selection_mode_input.itemData(i))
+            if data in mode_keys:
+                self.selection_mode_input.setItemText(i, t(mode_keys[data]))
+        self.stress_mode_input.setText(t("strategy.stress_checkbox"))
+        self.stress_mode_input.setToolTip(t("strategy.stress_tooltip"))
+
+        # Retranslate risk tooltips
+        self.stake_input.setToolTip(t("risk.stake_tip"))
+        self.stop_loss_input.setToolTip(t("risk.daily_stop_tip"))
+        self.take_profit_input.setToolTip(t("risk.daily_take_profit_tip"))
+        self.max_losses_input.setToolTip(t("risk.max_consecutive_losses_tip"))
+        self.cooldown_input.setToolTip(t("risk.cooldown_tip"))
+        self.confidence_slider.setToolTip(t("risk.confidence_tip"))
+
         self._validate()
 
     def _confidence_changed(self, value: int) -> None:

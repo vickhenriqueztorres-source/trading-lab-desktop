@@ -49,7 +49,7 @@ class OrderTableView(QFrame):
         self._orders: tuple[OrderSummary, ...] | None = None
         layout.addWidget(self._table)
 
-        self._empty_label = QLabel(t("orders.empty"))
+        self._empty_label = QLabel(t("activity.empty"))
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-style: italic; padding: 20px;")
         layout.addWidget(self._empty_label)
@@ -133,11 +133,11 @@ class OrderTableView(QFrame):
                 if ord.result_review_required:
                     state_label = t("orders.result.unconfirmed")
                 elif ord.realized_pnl_minor_units > 0:
-                    state_label = f"✓ WON (+ {pnl})"
+                    state_label = f"✓ {t('result.win')} (+{pnl})"
                 elif ord.realized_pnl_minor_units < 0:
-                    state_label = f"✗ LOST ({pnl})"
+                    state_label = f"✗ {t('result.loss')} ({pnl})"
                 else:
-                    state_label = f"↔ TIE / REFUND ({pnl})"
+                    state_label = f"↔ TIE ({pnl})"
             state_item = QTableWidgetItem(state_label)
             if ord.reconciliation_review_required:
                 state_item.setForeground(Qt.GlobalColor.yellow)
@@ -166,7 +166,7 @@ class OrderTableView(QFrame):
 
     def retranslate(self) -> None:
         self._title.setText(t("orders.title"))
-        self._empty_label.setText(t("orders.empty"))
+        self._empty_label.setText(t("activity.empty"))
         self._setup_headers()
         orders = self._orders
         self._orders = None

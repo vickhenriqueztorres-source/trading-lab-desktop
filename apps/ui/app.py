@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -30,8 +29,6 @@ from apps.ui.components import (
     HealthGatePillWidget,
     IqOptionStrategyConfigWidget,
     IqOptionWorkspaceWidget,
-    OperationalLogTerminal,
-    OrderTableView,
     ResultsDashboardWidget,
     SettingsWorkspaceWidget,
     SyntheticStrategyConfigWidget,
@@ -43,7 +40,7 @@ from apps.ui.design import asset_path
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import I18nManager, t
 from apps.ui.ipc_client import UiIpcError
-from apps.ui.pages.overview_page import OverviewPage
+from apps.ui.pages import ActivityPage, OverviewPage
 from apps.ui.shell import BottomBar, Sidebar, TopBar
 from apps.ui.theme import (
     ACCENT_AMBER,
@@ -249,6 +246,7 @@ class TradingLabMainWindow(QMainWindow):
         # Page 1: Deriv Workspace
         self._deriv_workspace = DerivWorkspaceWidget()
         self._deriv_workspace.deriv_demo_connect_requested.connect(self._on_connect_deriv_demo)
+        self._deriv_workspace.safe_stop_requested.connect(self._on_safe_stop)
         self._synthetic_config_panel = SyntheticStrategyConfigWidget()
         self._asset_radar_panel = DerivAssetRadarWidget()
         self._synthetic_live_panel = SyntheticStrategyLiveWidget()
@@ -267,6 +265,7 @@ class TradingLabMainWindow(QMainWindow):
         # Page 2: IQ Option Workspace
         self._iqoption_workspace = IqOptionWorkspaceWidget()
         self._iqoption_workspace.iqoption_login_requested.connect(self._on_iqoption_login)
+        self._iqoption_workspace.safe_stop_requested.connect(self._on_safe_stop)
         self._iqoption_config_panel = IqOptionStrategyConfigWidget()
         self._iqoption_config_panel.config_apply_requested.connect(
             self._on_iqoption_risk_config_apply
@@ -283,6 +282,7 @@ class TradingLabMainWindow(QMainWindow):
 
         # Page 5: Settings
         self._settings_workspace = SettingsWorkspaceWidget()
+        self._settings_workspace.diagnostic_requested.connect(self._on_export_diagnostic)
         self._pages.addWidget(self._settings_workspace)
 
         pages_layout.addWidget(self._pages)
@@ -345,26 +345,12 @@ class TradingLabMainWindow(QMainWindow):
         return self._overview_page
 
     def _create_activity_page(self) -> QWidget:
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(14)
-        self._activity_intro = QLabel()
-        self._activity_intro.setWordWrap(True)
-        self._activity_intro.setObjectName("GuidanceText")
-        layout.addWidget(self._activity_intro)
-
-        self._activity_tabs = QTabWidget()
-        orders_page = QWidget()
-        orders_layout = QVBoxLayout(orders_page)
-        orders_layout.setContentsMargins(0, 0, 0, 0)
-        self._order_table_widget = OrderTableView()
-        orders_layout.addWidget(self._order_table_widget)
-        self._activity_tabs.addTab(orders_page, "")
-        self._log_terminal = OperationalLogTerminal()
-        self._activity_tabs.addTab(self._log_terminal, "")
-        layout.addWidget(self._activity_tabs, 1)
-        return content
+        self._activity_page = ActivityPage()
+        self._order_table_widget = self._activity_page.order_table
+        self._log_terminal = self._activity_page.log_terminal
+        self._activity_tabs = self._activity_page.tabs
+        self._activity_intro = self._activity_page.intro_label
+        return self._activity_page
 
     def _create_account_page(self) -> QWidget:
         page = QWidget()
@@ -463,6 +449,7 @@ class TradingLabMainWindow(QMainWindow):
         self._iqoption_workspace.retranslate()
         self._iqoption_config_panel.retranslate()
         self._settings_workspace.retranslate()
+        self._activity_page.retranslate()
         self._overview_page.retranslate()
         self._retranslate_navigation()
         self._refresh_projection()
@@ -573,7 +560,7 @@ class TradingLabMainWindow(QMainWindow):
         self._health_pill_widget.update_gates(snapshot.health_gates)
 
         # 6. Update Orders
-        self._order_table_widget.update_orders(snapshot.active_orders)
+        self._activity_page.update_orders(snapshot.active_orders)
         self._log_terminal.update_entries(snapshot.operational_logs)
         self._results_dashboard.update_results(snapshot.active_orders)
         self._deriv_workspace.update_orders(snapshot.active_orders)
