@@ -10,6 +10,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(project_root / "apps"), "apps"),
+        (str(project_root / "apps" / "ui" / "assets"), "apps/ui/assets"),
         (str(project_root / "packages"), "packages"),
         (str(project_root / "data" / "manifest.json"), "data"),
     ],
@@ -18,6 +19,7 @@ a = Analysis(
         "PySide6.QtCore",
         "PySide6.QtGui",
         "PySide6.QtWidgets",
+        "PySide6.QtSvg",
         "cryptography",
         "cryptography.hazmat.primitives.asymmetric.ed25519",
         "websockets",
@@ -45,6 +47,9 @@ a = Analysis(
         "apps.ui.app",
         "apps.ui.runner",
         "apps.ui.components",
+        "apps.ui.design",
+        "apps.ui.design.tokens",
+        "apps.ui.design.icons",
         "apps.ui.i18n",
         "apps.ui.theme",
         "packages.brokers",
@@ -103,6 +108,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=str(project_root / "build_scripts" / "version_info.txt"),
+    icon=str(project_root / "apps" / "ui" / "assets" / "app.ico"),
 )
 
 coll = COLLECT(

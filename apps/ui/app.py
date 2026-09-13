@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QGuiApplication
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -42,6 +42,7 @@ from apps.ui.components import (
 )
 from apps.ui.components.iqoption_workspace import iqoption_bot_reason_text
 from apps.ui.controller import UiController
+from apps.ui.design import asset_path
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import I18nManager, t
 from apps.ui.ipc_client import UiIpcError
@@ -168,6 +169,9 @@ class TradingLabMainWindow(QMainWindow):
         self._iqoption_saved_login_started = False
 
         self.setWindowTitle(_window_title(t("app.practice_badge")))
+        app_icon_file = asset_path("app.ico")
+        if app_icon_file.is_file():
+            self.setWindowIcon(QIcon(str(app_icon_file)))
         self.resize(1180, 780)
         self.setMinimumSize(960, 640)
 

@@ -6271,3 +6271,27 @@ Validação:
   - Executável portátil standalone: `dist/resilience-v1.9.11/TradingLab-Desktop-v1.9.11-RESILIENCE.exe`.
   - Tamanho: 56.629.760 bytes (54,01 MB).
   - SHA-256: `72ACF4F2D367C3490BAD6CE2E9B5CDC7A892DDBB39A996CEE28C9AF896D19AE3`.
+
+## 2026-09-13 — UI Redesign v2 (Prompt 1: Design Tokens e Stylesheet)
+
+- Iniciada a modernização visual da interface conforme a referência de identidade de marca (Concept 3 — Cauda de Probabilidade):
+  - Branch de trabalho: `feat/ui-redesign-v2`.
+  - Salva referência visual em `docs/reference/trading-lab-v2-reference.png` e atualizado `.gitignore`.
+  - Criado o módulo `apps/ui/design/tokens.py` com dataclass congelada `Tokens` contendo a paleta canônica (#0A0F14, #101820, #16212B, #1C2A36, #3AA7B8, #1FB57A, #E5484D, #D9A21B, #E8EEF2, #93A4B3, #5F7080).
+  - Reescrito `apps/ui/theme.py` para utilizar `TOKENS` e gerar folha de estilos limpa e de baixo consumo de recursos (sem drop shadows, blur ou timers decorativos).
+  - Validação: 1212 testes unitários e de contrato aprovados, ruff e mypy limpos. Commit: `4f05673`.
+
+## 2026-09-13 — UI Redesign v2 (Prompt 2: Brand Assets e SVG Icon Loader)
+
+- Criada a infraestrutura completa de assets vetoriais e carregamento dinâmico de ícones:
+  - Criado diretório `apps/ui/assets/` com:
+    - `logo-mark.svg` (64x64): marca conceitual da curva de probabilidade normal e cauda em Petrol Blue (#3AA7B8).
+    - `logo-wordmark.svg` (320x64): marca vetorial e tipografia TRADING LAB em #E8EEF2.
+    - 17 ícones de navegação e status estilo Lucide 24x24 (stroke-width 1.75, currentColor, sem preenchimento): `nav-overview`, `nav-deriv`, `nav-iqoption`, `nav-activity`, `nav-account`, `nav-settings`, `status-dot`, `icon-play`, `icon-stop`, `icon-search`, `icon-mail`, `icon-shield`, `icon-clock`, `icon-wifi`, `icon-check`, `icon-alert`, `icon-chevron-down`.
+    - `app.ico`: ícone do Windows multi-resolução (16x16, 32x32, 48x48, 256x256) gerado pelo script `scripts/build_icons.py`.
+  - Criado `apps/ui/design/icons.py` com `asset_path()` para resolução em desenvolvimento e runtime congelado (`_MEIPASS`), e `icon()` com substituição de `currentColor`, renderização via `QSvgRenderer` em `QPixmap` com `devicePixelRatio` e cache em memória `(name, color, size)`.
+  - Atualizado `apps/ui/app.py` para definir o ícone da janela principal via `self.setWindowIcon(QIcon(str(asset_path("app.ico"))))`.
+  - Atualizado `pyproject.toml` (package-data `apps.ui.assets`) e `build_scripts/TradingLab.spec` (datas, hiddenimports e icon).
+  - Criada suíte de testes `tests/unit/test_ui_icons.py` validando integridade de assets, resolução de caminhos, formato ICO e comportamento do cache.
+  - Validação: 1217 testes unitários e contratuais aprovados, ruff e mypy limpos.
+
