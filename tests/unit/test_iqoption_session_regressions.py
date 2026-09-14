@@ -554,11 +554,11 @@ def test_order_projection_reuses_cells_and_renders_new_settlement() -> None:
         widget.update_orders([order])
     assert widget._table.item(0, 0) is first
     widget.update_orders([replace(order, state="SETTLED", realized_pnl_minor_units=85)])
-    assert "WON" in widget._table.item(0, 5).text()
+    assert any(win_word in widget._table.item(0, 5).text() for win_word in ("WON", "GANADA", "WIN"))
     widget.update_orders([replace(order, state="SETTLED", realized_pnl_minor_units=0)])
     tie_label = widget._table.item(0, 5).text()
-    assert "TIE / REFUND" in tie_label
-    assert "WON" not in tie_label
+    assert "TIE" in tie_label
+    assert not any(win_word in tie_label for win_word in ("WON", "GANADA", "WIN"))
     widget.update_orders(
         [
             replace(

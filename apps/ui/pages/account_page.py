@@ -43,7 +43,6 @@ class AccountPage(QWidget):
                 background-color: {TOKENS.BG_CARD};
                 border: 1px solid {TOKENS.BORDER_COLOR};
                 border-radius: {TOKENS.RADIUS_LG}px;
-                padding: 20px;
             }}
             QLabel#pageTitle {{
                 color: {TOKENS.TEXT_PRIMARY};
@@ -158,8 +157,8 @@ class AccountPage(QWidget):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
         # Top row: title + badge
         header = QHBoxLayout()
@@ -190,6 +189,8 @@ class AccountPage(QWidget):
 
         # Progress bar
         self._progress_sub = QProgressBar()
+        self._progress_sub.setFixedHeight(6)
+        self._progress_sub.setTextVisible(False)
         self._progress_sub.setRange(0, 100)
         self._progress_sub.setValue(100)
         layout.addWidget(self._progress_sub)
@@ -200,8 +201,8 @@ class AccountPage(QWidget):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
         # Header row
         header = QHBoxLayout()
@@ -237,8 +238,8 @@ class AccountPage(QWidget):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
         # Header row
         header = QHBoxLayout()
@@ -269,8 +270,8 @@ class AccountPage(QWidget):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
         # Header row
         header = QHBoxLayout()
@@ -325,6 +326,8 @@ class AccountPage(QWidget):
                 # Parse ISO date
                 clean_iso = status.expires_at.replace("Z", "+00:00")
                 exp_dt = datetime.fromisoformat(clean_iso)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=UTC)
                 now_dt = datetime.now(UTC)
                 delta = exp_dt - now_dt
                 days = max(0, delta.days)

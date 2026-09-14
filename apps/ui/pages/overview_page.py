@@ -163,7 +163,7 @@ class OverviewPage(QWidget):
         )
         col1_layout.addWidget(self._lbl_strategy_label)
 
-        self._lbl_strategy_name = QLabel("Digit Differs Edge")
+        self._lbl_strategy_name = QLabel("—")
         self._lbl_strategy_name.setStyleSheet(
             f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY};"
         )
@@ -488,13 +488,13 @@ class OverviewPage(QWidget):
 
             # Col 5: Status
             if item.selected:
-                st_text = "EM FOCO"
+                st_text = t("radar.status_focus")
                 st_color = ACCENT_PRIMARY
             elif item.status == "TRIGGERED":
-                st_text = "SINAL OBSERVADO"
+                st_text = t("radar.status_triggered")
                 st_color = ACCENT_AMBER
             elif item.status == "WARMING_UP":
-                st_text = "AQUECENDO"
+                st_text = t("radar.status_warming_up")
                 st_color = ACCENT_AMBER
             elif item.status in {"DISCOVERY_ONLY", "WAITING_DATA"}:
                 st_text = item.status

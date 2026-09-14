@@ -235,9 +235,7 @@ class DigitConfigPanelWidget(QFrame):
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
-        self.martingale_enabled_input.setToolTip(
-            "Martingale Delimitado compartilhado pelas três estratégias"
-        )
+        self.martingale_enabled_input.setToolTip(t("MARTINGALE_ENABLED_LABEL"))
         self.martingale_enabled_input.toggled.connect(self._martingale_changed)
         martingale_grid.addWidget(self.martingale_enabled_input, 0, 0)
 

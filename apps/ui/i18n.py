@@ -46,7 +46,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "DIGIT_SYMBOL_LABEL": {"en": "Deriv Synthetic Index", "es": "Índice Sintético Deriv"},
     "DIGIT_CONFIDENCE_DISCLAIMER": {
         "en": "Statistical threshold; it is not a profit forecast or result guarantee.",
-        "es": "Umbral estadístico; no es una previsión de lucro ni garantía de resultado.",
+        "es": "Umbral estadístico; no es una previsión de ganancias ni garantía de resultado.",
     },
     "DIGIT_CONFIG_VALID": {"en": "Configuration is valid.", "es": "Configuración válida."},
     "DIGIT_CONFIG_INVALID": {
@@ -146,7 +146,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "es": (
             "Ámbar marca el dígito observado más frecuente y cian el menos frecuente. "
-            "Esta ventana histórica no es una predicción ni una garantía de lucro."
+            "Esta ventana histórica no es una predicción ni una garantía de ganancias."
         ),
     },
     "deriv.radar.title": {
@@ -450,7 +450,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "kpi.net_profit": {
         "en": "NET PROFIT",
-        "es": "LUCRO NETO",
+        "es": "BENEFICIO NETO",
     },
     "kpi.today_delta": {
         "en": "{value} today",
@@ -1943,9 +1943,177 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Skip tour",
         "es": "Saltar introducción",
     },
+    # --- IQ Option Strategy & Workspace ---
+    "iq.strategy.title": {
+        "en": "IQ Option Strategy · RSI 14 Bounded Edge",
+        "es": "Estrategia IQ Option · RSI 14 Bounded Edge",
+    },
+    "iq.strategy.desc": {
+        "en": "Timeframe: 1M · Rule: CALL (RSI < 30) | PUT (RSI > 70) · Execution: Instant",
+        "es": "Timeframe: 1M · Regla: CALL (RSI < 30) | PUT (RSI > 70) · Ejecución: Instantánea",
+    },
+    "iq.strategy.auto_select": {
+        "en": "AUTO SELECTION",
+        "es": "SELECCIÓN AUTOMÁTICA",
+    },
+    "iq.strategy.evidence_wait": {
+        "en": "Local evidence: awaiting Core snapshot",
+        "es": "Evidencia local: esperando snapshot del Core",
+    },
+    "iq.strategy.evidence_unavailable": {
+        "en": "Local evidence: unavailable",
+        "es": "Evidencia local: no disponible",
+    },
+    "iq.workspace.hero_title": {
+        "en": "IQ Option · Multi-Asset Radar",
+        "es": "IQ Option · Radar Multiactivo",
+    },
+    "iq.workspace.hero_subtitle": {
+        "en": "RSI 14 Bounded Edge · M1",
+        "es": "RSI 14 Bounded Edge · M1",
+    },
+    "iq.workspace.hero_desc": {
+        "en": (
+            "Dynamic Binary/Digital catalog, regular and OTC markets; "
+            "instant execution protected by stealth anti-detection layer."
+        ),
+        "es": (
+            "Catálogo dinámico Binary/Digital, mercados regulares y OTC; "
+            "ejecución instantánea protegida por capa stealth anti-detección."
+        ),
+    },
+    "iq.workspace.auto_scan_desc": {
+        "en": "AUTO SCAN: Monitor 15 OTC & Forex pairs (RSI < 30 / > 70)",
+        "es": "AUTO SCAN: Monitoreo de 15 pares OTC y Forex (RSI < 30 / > 70)",
+    },
+    "iq.workspace.login_box_desc": {
+        "en": (
+            "Connect securely to Practice or Real account. "
+            "Your credentials are protected via Windows DPAPI vault."
+        ),
+        "es": (
+            "Conéctate con seguridad a la cuenta de Práctica o Real. "
+            "Tus credenciales están protegidas mediante el cofre DPAPI de Windows."
+        ),
+    },
+    # --- Deriv Synthetic Panel ---
+    "synthetic.mode_notice": {
+        "en": "DEMO VALIDATION · REAL READ-ONLY",
+        "es": "VALIDACIÓN DEMO · REAL SOLO LECTURA",
+    },
+    "synthetic.waiting_data": {
+        "en": "AWAITING DATA",
+        "es": "ESPERANDO DATOS",
+    },
+    "synthetic.warmup": {
+        "en": "Warm-up {current} / {total}",
+        "es": "Calentamiento {current} / {total}",
+    },
+    "synthetic.metric_signal": {
+        "en": "LAST SHADOW SIGNAL",
+        "es": "ÚLTIMA SEÑAL SHADOW",
+    },
+    "synthetic.metric_contract": {
+        "en": "CONTRACT / BARRIER",
+        "es": "CONTRATO / BARRERA",
+    },
+    "synthetic.metric_probability": {
+        "en": "CONSERVATIVE PROB. / FLOOR",
+        "es": "PROB. CONSERVADORA / PISO",
+    },
+    "synthetic.metric_latency": {
+        "en": "ANALYSIS LATENCY",
+        "es": "LATENCIA DE ANÁLISIS",
+    },
+    "synthetic.notice": {
+        "en": (
+            "The engine analyzes Deriv ticks and can place orders only in Demo accounts. "
+            "Without conservative statistical edge, it stays monitoring."
+        ),
+        "es": (
+            "El motor analiza los ticks de Deriv y coloca contratos solo en la cuenta Demo. "
+            "Sin ventaja estadística conservadora, permanece monitoreando."
+        ),
+    },
     "broker.disconnected_hint": {
         "en": "Sign in to view your balance and activate the strategy.",
         "es": "Inicia sesión para ver tu saldo y activar la estrategia.",
+    },
+    "synthetic.state_warming_up": {
+        "en": "WARMING UP",
+        "es": "CALENTANDO",
+    },
+    "synthetic.state_monitoring": {
+        "en": "MONITORING",
+        "es": "MONITOREANDO",
+    },
+    "synthetic.state_signal_detected": {
+        "en": "SIGNAL DETECTED",
+        "es": "SEÑAL DETECTADA",
+    },
+    "synthetic.state_data_blocked": {
+        "en": "DATA BLOCKED",
+        "es": "DATOS BLOQUEADOS",
+    },
+    "settings.app_version": {
+        "en": "Trading Lab Desktop v{version} · DIGIT EDGE",
+        "es": "Trading Lab Desktop v{version} · DIGIT EDGE",
+    },
+    "iq.kpi.net_profit": {
+        "en": "NET PROFIT",
+        "es": "BENEFICIO NETO",
+    },
+    "iq.kpi.total_wins": {
+        "en": "TOTAL WINS",
+        "es": "TOTAL GANANCIAS",
+    },
+    "iq.kpi.total_losses": {
+        "en": "TOTAL LOSSES",
+        "es": "TOTAL PÉRDIDAS",
+    },
+    "iq.kpi.win_rate": {
+        "en": "WIN RATE",
+        "es": "ASERTIVIDAD",
+    },
+    "radar.status_focus": {
+        "en": "IN FOCUS",
+        "es": "EN FOCO",
+    },
+    "radar.status_triggered": {
+        "en": "SIGNAL OBSERVED",
+        "es": "SEÑAL OBSERVADA",
+    },
+    "radar.status_triggered_unsent": {
+        "en": "SIGNAL OBSERVED · NOT SENT",
+        "es": "SEÑAL OBSERVADA · NO ENVIADA",
+    },
+    "radar.status_warming_up": {
+        "en": "WARMING UP",
+        "es": "CALENTANDO",
+    },
+    "radar.status_awaiting_volume": {
+        "en": "AWAITING VOLUME",
+        "es": "ESPERANDO VOLUMEN",
+    },
+    "radar.status_discovery": {
+        "en": "DISCOVERY ONLY",
+        "es": "SOLO DETECCIÓN",
+    },
+    "radar.status_verifying": {
+        "en": "AWAITING VERIFICATION",
+        "es": "ESPERANDO VERIFICACIÓN",
+    },
+    "radar.status_fix_params": {
+        "en": "FIX PARAMETERS",
+        "es": "CORREGIR PARÁMETROS",
+    },
+    "radar.status_manual_review": {
+        "en": "MANUAL REVIEW",
+        "es": "REVISIÓN MANUAL",
+    },
+    "radar.status_market_unavailable": {
+        "en": "MARKET UNAVAILABLE",
+        "es": "MERCADO NO DISPONIBLE",
     },
 }
 

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from apps.ui.components.digit_config_panel import DigitConfigPanelWidget
+from apps.ui.i18n import t
 from apps.ui.theme import ACCENT_AMBER, ACCENT_CYAN, ACCENT_GREEN, TEXT_MUTED
 from packages.protocol import UiDerivStrategyStatus, UiDigitRiskConfig
 
@@ -29,43 +30,43 @@ _STRATEGY_DETAILS: dict[str, _StrategyDetails] = {
     "tail-probability-edge": {
         "contract": "DIGITOVER / DIGITUNDER · 1 tick",
         "parameters": (
-            ("Contexto", "Paridade do dígito anterior"),
-            ("Janelas", "200 · 350 · 500 ticks"),
-            ("Barreiras", "Over 2/3/4 · Under 7/6/5"),
-            ("Confirmação", "Limite Wilson de 99%"),
+            ("Contexto", "Paridad del dígito anterior"),
+            ("Ventanas", "200 · 350 · 500 ticks"),
+            ("Barreras", "Over 2/3/4 · Under 7/6/5"),
+            ("Confirmación", "Límite Wilson del 99%"),
         ),
-        "evidence": "Hipótese: concentração condicional nas caudas baixa ou alta",
+        "evidence": "Hipótesis: concentración condicional en las colas baja o alta",
     },
     "selective-differs-edge": {
         "contract": "DIGITDIFF · 1 tick",
         "parameters": (
-            ("Seleção", "Dígito menos provável"),
-            ("Janelas", "200 · 350 · 500 ticks"),
-            ("Piso de pesquisa", "92,25% conservador"),
-            ("Confirmação", "Mesmo dígito nas 3 janelas"),
+            ("Selección", "Dígito menos probable"),
+            ("Ventanas", "200 · 350 · 500 ticks"),
+            ("Piso de búsqueda", "92,25% conservador"),
+            ("Confirmación", "Mismo dígito en las 3 ventanas"),
         ),
-        "evidence": "Hipótese: exclusão probabilística com correção de seleção",
+        "evidence": "Hipótesis: exclusión probabilística con corrección de selección",
     },
     "parity-regime-edge": {
         "contract": "DIGITEVEN / DIGITODD · 1 tick",
         "parameters": (
-            ("Contexto", "Paridade do dígito anterior"),
-            ("Janelas", "200 · 350 · 500 ticks"),
-            ("Piso de pesquisa", "52,00% conservador"),
-            ("Confirmação", "Mesmo regime nas 3 janelas"),
+            ("Contexto", "Paridad del dígito anterior"),
+            ("Ventanas", "200 · 350 · 500 ticks"),
+            ("Piso de búsqueda", "52,00% conservador"),
+            ("Confirmación", "Mismo régimen en las 3 ventanas"),
         ),
-        "evidence": "Hipótese: dependência condicional entre par e ímpar",
+        "evidence": "Hipótesis: dependencia condicional entre par e impar",
     },
     "payout-routed-differs-session": {
         "contract": "DIGITDIFF · 1 tick",
         "parameters": (
-            ("Sessão", "Símbolo ativo escolhido pelo cliente/ranking existente"),
-            ("Barreira", "Fixa em 0"),
+            ("Sesión", "Símbolo activo elegido por el cliente/ranking existente"),
+            ("Barrera", "Fija en 0"),
             ("Payout observado", "0,090000"),
-            ("Piso de segurança", "0,088000"),
+            ("Piso de seguridad", "0,088000"),
         ),
         "evidence": (
-            "Sem histórico de dígitos; usa proposal fresca apenas como verificação de payout"
+            "Sin historial de dígitos; usa proposal reciente solo como verificación de payout"
         ),
     },
 }
@@ -89,7 +90,7 @@ class SyntheticStrategyConfigWidget(QWidget):
         self._contract = QLabel()
         self._contract.setObjectName("ValueMono")
         header_layout.addWidget(self._contract, 1)
-        self._mode = QLabel("VALIDAÇÃO DEMO · REAL SOMENTE LEITURA")
+        self._mode = QLabel(t("synthetic.mode_notice"))
         self._mode.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._mode.setObjectName("StatusPillOffline")
         header_layout.addWidget(self._mode)
@@ -140,13 +141,13 @@ class SyntheticStrategyConfigWidget(QWidget):
             labels[0].setText(str(values[0]).upper())
             labels[1].setText(str(values[1]))
         self._evidence.setText(
-            f"{details['evidence']} · Bounded Martingale opcional, compartilhado pelas 3 "
-            "estratégias e sempre validado pelo Risk Ledger. Ordens automáticas só podem ser "
-            "enviadas na conta Demo conectada, com o bot ligado e um sinal confirmado."
+            f"{details['evidence']} · Bounded Martingale opcional, compartido por las 3 "
+            "estrategias y siempre validado por el Risk Ledger. Las órdenes automáticas solo "
+            "pueden enviarse en la cuenta Demo conectada, con el bot activo y una señal confirmada."
         )
         self.risk_panel.setToolTip(
             f"{details['contract']} · {details['evidence']} · "
-            "limites compartilhados pelas três estratégias"
+            "límites compartidos por las tres estrategias"
         )
         self.risk_panel.set_active_strategy(
             strategy_id,
@@ -177,7 +178,7 @@ class SyntheticStrategyLiveWidget(QWidget):
         status_frame.setObjectName("Card")
         status_layout = QHBoxLayout(status_frame)
         status_layout.setContentsMargins(14, 10, 14, 10)
-        self._state = QLabel("AGUARDANDO DADOS")
+        self._state = QLabel(t("synthetic.waiting_data"))
         self._state.setObjectName("StatusPillOffline")
         self._state.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_layout.addWidget(self._state)
@@ -193,7 +194,7 @@ class SyntheticStrategyLiveWidget(QWidget):
         warmup.setObjectName("RiskSummary")
         warmup_layout = QVBoxLayout(warmup)
         warmup_layout.setContentsMargins(14, 10, 14, 10)
-        self._warmup_text = QLabel("Aquecimento 0 / 0")
+        self._warmup_text = QLabel(t("synthetic.warmup", current=0, total=0))
         self._warmup_text.setObjectName("MetricCaption")
         warmup_layout.addWidget(self._warmup_text)
         self._warmup = QProgressBar()
@@ -207,17 +208,13 @@ class SyntheticStrategyLiveWidget(QWidget):
         signal.setObjectName("Card")
         grid = QGridLayout(signal)
         grid.setContentsMargins(14, 10, 14, 10)
-        self._signal_time = self._metric(grid, 0, "ÚLTIMO SINAL SHADOW")
-        self._signal_contract = self._metric(grid, 1, "CONTRATO / BARREIRA")
-        self._signal_probability = self._metric(grid, 2, "PROB. CONSERVADORA / PISO")
-        self._analysis_latency = self._metric(grid, 3, "LATÊNCIA DE ANÁLISE")
+        self._signal_time = self._metric(grid, 0, t("synthetic.metric_signal"))
+        self._signal_contract = self._metric(grid, 1, t("synthetic.metric_contract"))
+        self._signal_probability = self._metric(grid, 2, t("synthetic.metric_probability"))
+        self._analysis_latency = self._metric(grid, 3, t("synthetic.metric_latency"))
         root.addWidget(signal)
 
-        notice = QLabel(
-            "O motor analisa os ticks da Deriv e pode comprar contratos somente na conta Demo. "
-            "Sem vantagem estatística conservadora, ele permanece monitorando e não força "
-            "uma entrada."
-        )
+        notice = QLabel(t("synthetic.notice"))
         notice.setWordWrap(True)
         notice.setStyleSheet(f"color: {TEXT_MUTED};")
         root.addWidget(notice)
@@ -247,11 +244,11 @@ class SyntheticStrategyLiveWidget(QWidget):
     def _render(self) -> None:
         status = self._statuses.get(self._strategy_id)
         if status is None:
-            self._state.setText("AGUARDANDO DADOS")
+            self._state.setText(t("synthetic.waiting_data"))
             self._state.setObjectName("StatusPillOffline")
             self._market.setText("—")
             self._reason.setText("STRATEGY_WAITING_FOR_MARKET_DATA")
-            self._warmup_text.setText("Aquecimento 0 / 0")
+            self._warmup_text.setText(t("synthetic.warmup", current=0, total=0))
             self._warmup.setValue(0)
             for label in (
                 self._signal_time,
@@ -262,10 +259,14 @@ class SyntheticStrategyLiveWidget(QWidget):
                 label.setText("—")
             return
         labels = {
-            "WARMING_UP": ("AQUECENDO", "StatusPillOffline", ACCENT_AMBER),
-            "MONITORING": ("MONITORANDO", "StatusPillOnline", ACCENT_CYAN),
-            "SHADOW_SIGNAL": ("SINAL DETECTADO", "StatusPillOnline", ACCENT_GREEN),
-            "DATA_BLOCKED": ("DADOS BLOQUEADOS", "StatusPillOffline", ACCENT_AMBER),
+            "WARMING_UP": (t("synthetic.state_warming_up"), "StatusPillOffline", ACCENT_AMBER),
+            "MONITORING": (t("synthetic.state_monitoring"), "StatusPillOnline", ACCENT_CYAN),
+            "SHADOW_SIGNAL": (
+                t("synthetic.state_signal_detected"),
+                "StatusPillOnline",
+                ACCENT_GREEN,
+            ),
+            "DATA_BLOCKED": (t("synthetic.state_data_blocked"), "StatusPillOffline", ACCENT_AMBER),
         }
         state_text, object_name, _color = labels.get(
             status.signal_state,
@@ -277,7 +278,9 @@ class SyntheticStrategyLiveWidget(QWidget):
         self._state.style().polish(self._state)
         self._market.setText(status.markets)
         self._reason.setText(status.reason_code)
-        self._warmup_text.setText(f"Aquecimento {status.warmup_current} / {status.warmup_required}")
+        self._warmup_text.setText(
+            t("synthetic.warmup", current=status.warmup_current, total=status.warmup_required)
+        )
         progress = (
             0
             if status.warmup_required <= 0

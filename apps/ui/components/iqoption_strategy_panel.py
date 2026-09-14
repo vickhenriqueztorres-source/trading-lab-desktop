@@ -178,7 +178,7 @@ class IqOptionStrategyConfigWidget(QFrame):
         self._symbol.setEnabled(not automatic and entry is None)
         if automatic:
             self._symbol.setCurrentIndex(self._symbol.findData("AUTO"))
-            self._timeframe.setText("Por candidato (manifesto)")
+            self._timeframe.setText("AUTO")
         elif entry is not None:
             asset = str(entry["asset"])
             if self._symbol.findData(asset) < 0:
@@ -188,7 +188,7 @@ class IqOptionStrategyConfigWidget(QFrame):
         else:
             if self._symbol.currentData() == "AUTO":
                 self._symbol.setCurrentIndex(self._symbol.findData("EURUSD-OTC"))
-            self._timeframe.setText("M1 · laboratório Demo")
+            self._timeframe.setText("M1")
         local = self._strategy.currentData() == "iqoption-rsi-demo"
         model = self._strategy.model()
         if isinstance(model, QStandardItemModel):

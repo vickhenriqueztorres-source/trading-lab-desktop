@@ -38,20 +38,17 @@ class IqOptionAssetRadarWidget(QWidget):
         header_layout.setContentsMargins(14, 10, 14, 10)
 
         titles = QVBoxLayout()
-        self._title = QLabel("RADAR MULTI-ATIVOS · IQ OPTION (RSI 14)")
+        self._title = QLabel(t("radar.title"))
         self._title.setObjectName("Title")
         titles.addWidget(self._title)
 
-        self._subtitle = QLabel(
-            "Descoberta da sessão para Binary/Turbo/Digital, separando "
-            "mercados regulares e OTC e sua disponibilidade atual."
-        )
+        self._subtitle = QLabel(t("radar.subtitle"))
         self._subtitle.setObjectName("Subtitle")
         self._subtitle.setWordWrap(True)
         titles.addWidget(self._subtitle)
         header_layout.addLayout(titles, 1)
 
-        self._state = QLabel("AUTO SCANNING")
+        self._state = QLabel(t("radar.monitoring"))
         self._state.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._state.setObjectName("StatusPillOnline")
         header_layout.addWidget(self._state)
@@ -69,11 +66,11 @@ class IqOptionAssetRadarWidget(QWidget):
 
         self._table.setHorizontalHeaderLabels(
             [
-                "Ativo / Par",
-                "RSI (14)",
-                "Sinal",
-                "Zona / Condição",
-                "Status",
+                t("radar.col_asset"),
+                t("radar.col_rsi"),
+                t("radar.col_signal"),
+                t("deriv.radar.state"),
+                t("radar.col_status"),
             ]
         )
 
@@ -85,10 +82,7 @@ class IqOptionAssetRadarWidget(QWidget):
         table_header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         root.addWidget(self._table)
 
-        self._notice = QLabel(
-            "⚡ Estratégia RSI Bounded Edge: Compra (CALL) quando RSI < 30 "
-            "e Venda (PUT) quando RSI > 70."
-        )
+        self._notice = QLabel(t("radar.rsi_tip"))
         self._notice.setWordWrap(True)
         self._notice.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         root.addWidget(self._notice)
@@ -123,17 +117,17 @@ class IqOptionAssetRadarWidget(QWidget):
         catalog_evidence = all(item.source == "IQOPTION_SESSION_CATALOG" for item in self._ranking)
 
         if catalog_evidence:
-            self._state.setText(f"CATÁLOGO SINCRONIZADO · {len(self._ranking)} ATIVOS")
+            self._state.setText(f"{t('radar.col_status')}: {len(self._ranking)}")
         elif no_evidence:
-            self._state.setText("SEM EVIDÊNCIA DO CORE")
+            self._state.setText(t("radar.monitoring"))
         elif triggered is not None:
-            self._state.setText(f"SINAL OBSERVADO · NÃO ENVIADO · {triggered.display_name}")
+            self._state.setText(f"{t('radar.col_signal')} · {triggered.display_name}")
             self._state.setObjectName("StatusPillOnline")
         elif selected is not None and selected.symbol != "AUTO":
-            self._state.setText(f"FOCO: {selected.display_name}")
+            self._state.setText(f"{t('radar.col_asset')}: {selected.display_name}")
             self._state.setObjectName("StatusPillOnline")
         else:
-            self._state.setText("AUTO SCANNING")
+            self._state.setText(t("radar.monitoring"))
             self._state.setObjectName("StatusPillOnline")
 
         self._state.style().unpolish(self._state)
@@ -245,9 +239,9 @@ class IqOptionAssetRadarWidget(QWidget):
             # Column 4: Status
             if item.status in {"READ_ONLY_PROBE", "CORRECT_CONFIGURATION", "MANUAL_REVIEW"}:
                 status_text = {
-                    "READ_ONLY_PROBE": "AGUARDANDO VERIFICAÇÃO",
-                    "CORRECT_CONFIGURATION": "CORRIGIR PARÂMETROS",
-                    "MANUAL_REVIEW": "REVISÃO MANUAL",
+                    "READ_ONLY_PROBE": t("radar.status_verifying"),
+                    "CORRECT_CONFIGURATION": t("radar.status_fix_params"),
+                    "MANUAL_REVIEW": t("radar.status_manual_review"),
                 }[item.status]
                 status_color = ACCENT_AMBER
             elif item.status in {
@@ -260,25 +254,25 @@ class IqOptionAssetRadarWidget(QWidget):
                 status_text = item.status
                 status_color = ACCENT_AMBER
             elif item.status == "MARKET_UNAVAILABLE":
-                status_text = "MERCADO INDISPONÍVEL"
+                status_text = t("radar.status_market_unavailable")
                 status_color = ACCENT_AMBER
             elif item.status == "DISCOVERY_ONLY":
-                status_text = "SOMENTE DETECÇÃO"
+                status_text = t("radar.status_discovery")
                 status_color = TEXT_MUTED
             elif item.status == "WARMING_UP":
-                status_text = "AQUECENDO"
+                status_text = t("radar.status_warming_up")
                 status_color = ACCENT_AMBER
             elif item.status == "TICK_VOLUME_UNAVAILABLE":
-                status_text = "AGUARDANDO VOLUME"
+                status_text = t("radar.status_awaiting_volume")
                 status_color = ACCENT_AMBER
             elif item.status == "TRIGGERED":
-                status_text = "SINAL OBSERVADO · NÃO ENVIADO"
+                status_text = t("radar.status_triggered_unsent")
                 status_color = ACCENT_AMBER
             elif item.selected:
-                status_text = "EM FOCO"
+                status_text = t("radar.status_focus")
                 status_color = ACCENT_CYAN
             else:
-                status_text = "MONITORANDO"
+                status_text = t("radar.monitoring")
                 status_color = TEXT_MUTED
 
             status_item = QTableWidgetItem(status_text)

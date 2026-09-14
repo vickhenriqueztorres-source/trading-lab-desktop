@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from apps.ui.formatting import format_minor_units
+from apps.ui.i18n import t
 from apps.ui.theme import ACCENT_CYAN, ACCENT_GREEN, ACCENT_RED, TEXT_MUTED
 from packages.protocol import OrderSummary, UiIqOptionExecutionMetrics, UiIqOptionRiskConfig
 
@@ -33,16 +34,16 @@ class IqOptionStrategySummaryWidget(QWidget):
         outcomes = QHBoxLayout()
         outcomes.setSpacing(8)
         self._net_title, self._net_val = self._create_kpi_card(
-            outcomes, "RESULTADO LÍQUIDO", "$0.00", ACCENT_CYAN
+            outcomes, t("iq.kpi.net_profit"), "$0.00", ACCENT_CYAN
         )
         self._gain_title, self._gain_val = self._create_kpi_card(
-            outcomes, "TOTAL GANHOS", "$0.00", ACCENT_GREEN
+            outcomes, t("iq.kpi.total_wins"), "$0.00", ACCENT_GREEN
         )
         self._loss_title, self._loss_val = self._create_kpi_card(
-            outcomes, "TOTAL PERDAS", "$0.00", ACCENT_RED
+            outcomes, t("iq.kpi.total_losses"), "$0.00", ACCENT_RED
         )
         self._win_title, self._win_val = self._create_kpi_card(
-            outcomes, "ASSERTIVIDADE", "—", ACCENT_CYAN
+            outcomes, t("iq.kpi.win_rate"), "—", ACCENT_CYAN
         )
         root.addLayout(outcomes)
 
@@ -54,26 +55,23 @@ class IqOptionStrategySummaryWidget(QWidget):
         banner_layout.setSpacing(12)
 
         info_col = QVBoxLayout()
-        info_title = QLabel("ESTRATÉGIA IQ OPTION · RSI 14 BOUNDED EDGE")
+        info_title = QLabel(t("iq.strategy.title"))
         info_title.setObjectName("Title")
         info_col.addWidget(info_title)
 
-        self._strategy_desc = QLabel(
-            "Timeframe: 1M  ·  Regra: CALL (RSI < 30 Sobrevenda) | PUT (RSI > 70 Sobrecompra)"
-            "  ·  Execução: Instantânea"
-        )
+        self._strategy_desc = QLabel(t("iq.strategy.desc"))
         self._strategy_desc.setObjectName("Subtitle")
         self._strategy_desc.setWordWrap(True)
         info_col.addWidget(self._strategy_desc)
         banner_layout.addLayout(info_col, 1)
 
-        self._mode_pill = QLabel("SELEÇÃO AUTOMÁTICA")
+        self._mode_pill = QLabel(t("iq.strategy.auto_select"))
         self._mode_pill.setObjectName("StatusPillOnline")
         banner_layout.addWidget(self._mode_pill)
 
         root.addWidget(banner)
 
-        self._evidence = QLabel("Evidência local: aguardando snapshot do Core")
+        self._evidence = QLabel(t("iq.strategy.evidence_wait"))
         self._evidence.setObjectName("GuidanceText")
         self._evidence.setWordWrap(True)
         root.addWidget(self._evidence)
@@ -144,17 +142,17 @@ class IqOptionStrategySummaryWidget(QWidget):
         if config is None:
             return
         if config.symbol == "AUTO":
-            self._mode_pill.setText("SELEÇÃO AUTOMÁTICA")
+            self._mode_pill.setText(t("iq.strategy.auto_select"))
             self._mode_pill.setObjectName("StatusPillOnline")
         else:
-            self._mode_pill.setText(f"ATIVO: {config.symbol}")
+            self._mode_pill.setText(f"AUTO: {config.symbol}")
             self._mode_pill.setObjectName("StatusPillOnline")
         self._mode_pill.style().unpolish(self._mode_pill)
         self._mode_pill.style().polish(self._mode_pill)
 
     def update_metrics(self, metrics: UiIqOptionExecutionMetrics | None) -> None:
         if metrics is None:
-            self._evidence.setText("Evidência local: indisponível")
+            self._evidence.setText(t("iq.strategy.evidence_unavailable"))
             return
         wait = (
             f" · aguardando {metrics.waiting_reason} ({metrics.waiting_seconds}s)"

@@ -6363,4 +6363,30 @@ Validação:
     - `pytest -q tests/contract`: 186 passed, 1 skipped.
     - `compileall apps packages`: 100% dos bytecodes compilados com sucesso.
 
+### WL-2026-09-14-01 Conclusão do Redesign UI v2 (Prompts 7, 8, 9)
 
+- **Identificador:** WL-2026-09-14-01
+- **Branch:** `feat/ui-redesign-v2`
+- **Requisitos:** UI Redesign Playbook (PROMPT 7, 8, 9), AIGUARD, zero Portuguese, token design system
+- **Entregas:**
+  - **PROMPT 7 (Autenticação e Mi Cuenta):**
+    - Protocolo IPC estendido com `UI_AUTH_START_LOGIN`, `UI_AUTH_SUBMIT_OTP`, `UI_AUTH_STATUS` em `packages/protocol/ui_messages.py`.
+    - `UiService` e `AuthClient` integrados em `apps/core/ui_service.py` encaminhando para o `AuthAgent`.
+    - `LoginWindow` (`apps/ui/auth/login_window.py`) criada com input de e-mail e código OTP de 6 dígitos com suporte a reenvio com cooldown de 60s, validação de formato e tratamento de erros.
+    - `AccountPage` (`apps/ui/pages/account_page.py`) criada exibindo plano da licença (PRO), dias restantes, Device ID em mono com botão de cópia rápida, status da sessão, botão de renovação e contato com suporte.
+    - Suíte de testes: `tests/unit/test_login_window.py` (9 passed), `tests/contract/test_auth_ipc_bridge.py` (6 passed).
+  - **PROMPT 8 (Onboarding de Primeiro Acesso e Empty States):**
+    - `FirstRunDialog` (`apps/ui/onboarding/first_run_dialog.py`) criado como assistente de boas-vindas em 3 etapas com persistência no settings local (`onboarding_done`).
+    - Empty states estilizados para Radar multi-ativos (`radar.empty`) e conexão de corretoras (`broker.disconnected_hint`).
+    - Suíte de testes: `tests/unit/test_onboarding.py` (5 passed).
+  - **PROMPT 9 (Zero Portuguese, Guard-rails, Screenshots e PR):**
+    - Verificação e eliminação de 100% dos termos em português na UI (espanhol como idioma primário, inglês como secundário).
+    - Criado script automatizado de guard-rail `scripts/check_i18n.py` validando integridade léxica e cobertura de chaves.
+    - Gerados 6 screenshots oficiais em `docs/screenshots/v2/` cobrindo todas as páginas com renderização DirectWrite/Windows.
+    - Documentação atualizada no `README.md` com instruções completas de configuração e testes.
+- **Validação:**
+  - `python scripts/check_i18n.py`: 100% de cobertura ES/EN, 0 termos em português.
+  - `python -m ruff check .`: 0 erros.
+  - `python -m ruff format --check .`: 100% formatado (595 arquivos).
+  - `python -m mypy apps packages`: 0 erros em 348 arquivos.
+  - `python -m pytest -q tests/unit tests/contract`: 1243 passed, 2 skipped (100% pass rate).

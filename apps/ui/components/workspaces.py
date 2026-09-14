@@ -413,7 +413,7 @@ class SettingsWorkspaceWidget(QWidget):
         self._about_hint.setObjectName("hint")
         c_layout.addWidget(self._about_hint)
 
-        self._version_label = QLabel("Trading Lab Desktop v1.9.11 · DIGIT EDGE")
+        self._version_label = QLabel(t("settings.app_version", version="1.9.11"))
         self._version_label.setObjectName("ValueMono")
         c_layout.addWidget(self._version_label)
 

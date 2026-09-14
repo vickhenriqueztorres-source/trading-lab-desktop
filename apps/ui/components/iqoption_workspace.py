@@ -146,18 +146,15 @@ class IqOptionWorkspaceWidget(QWidget):
         # Title / Description
         identity = QVBoxLayout()
         identity.setSpacing(2)
-        self._eyebrow = QLabel("IQ OPTION · MULTI-ASSET RADAR")
+        self._eyebrow = QLabel(t("iq.workspace.hero_title"))
         self._eyebrow.setObjectName("Eyebrow")
         identity.addWidget(self._eyebrow)
 
-        self._title = QLabel("RSI 14 Bounded Edge · M1")
+        self._title = QLabel(t("iq.workspace.hero_subtitle"))
         self._title.setObjectName("HeroTitle")
         identity.addWidget(self._title)
 
-        self._description = QLabel(
-            "Catálogo dinámico Binary/Digital, mercados regulares y OTC; "
-            "ejecución instantánea protegida por capa stealth anti-detección."
-        )
+        self._description = QLabel(t("iq.workspace.hero_desc"))
         self._description.setWordWrap(True)
         self._description.setObjectName("Subtitle")
         identity.addWidget(self._description)
@@ -206,9 +203,7 @@ class IqOptionWorkspaceWidget(QWidget):
         self._automation_pill.setObjectName("StatusPillOnline")
         bot_box.addWidget(self._automation_pill)
 
-        self._automation_detail = QLabel(
-            "AUTO SCAN: Monitor 15 OTC & Forex pairs (RSI < 30 / > 70)"
-        )
+        self._automation_detail = QLabel(t("iq.workspace.auto_scan_desc"))
         self._automation_detail.setObjectName("Subtitle")
         self._automation_detail.setWordWrap(True)
         self._automation_detail.setStyleSheet(f"color: {ACCENT_CYAN}; font-size: 11px;")
@@ -299,10 +294,7 @@ class IqOptionWorkspaceWidget(QWidget):
         self._l_title.setObjectName("Title")
         l_layout.addWidget(self._l_title)
 
-        self._l_desc = QLabel(
-            "Conéctate con seguridad a la cuenta de Entrenamiento (Practice) o Real. "
-            "Tus credenciales están protegidas mediante el cofre DPAPI de Windows."
-        )
+        self._l_desc = QLabel(t("iq.workspace.login_box_desc"))
         self._l_desc.setWordWrap(True)
         self._l_desc.setObjectName("Subtitle")
         l_layout.addWidget(self._l_desc)

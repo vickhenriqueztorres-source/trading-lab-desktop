@@ -45,8 +45,19 @@ def test_iq_workspace_explains_transport_recovery_without_rearm(qapp: QApplicati
             entry_blocker="TRANSPORT_DOWN",
         )
 
-        assert "bot continua armado" in workspace._automation_detail.text()
-        assert "retomará após reconciliar" in workspace._automation_detail.text()
+        detail = workspace._automation_detail.text()
+        assert any(
+            phrase in detail
+            for phrase in ("bot permanece armado", "bot continua armado", "Bot remains armed")
+        )
+        assert any(
+            phrase in detail
+            for phrase in (
+                "reanudará tras la reconciliación",
+                "retomará após reconciliar",
+                "resume after reconciliation",
+            )
+        )
     finally:
         workspace.close()
 
@@ -57,8 +68,15 @@ def test_iq_workspace_explains_clock_block_without_requesting_login(qapp: QAppli
         workspace.update_bot_state(
             True, "MD_CLOCK_UNTRUSTED", entry_ready=False, entry_blocker="MD_CLOCK_UNTRUSTED"
         )
-        assert "Relógio da corretora" in workspace._automation_detail.text()
-        assert "não é necessário refazer o login" in workspace._automation_detail.text()
-        assert "ENTRADAS BLOQUEADAS" in workspace._automation_pill.text()
+        detail = workspace._automation_detail.text()
+        assert any(
+            phrase in detail
+            for phrase in ("Reloj de la corredora", "Relógio da corretora", "Broker clock")
+        )
+        assert "login" not in detail.lower()
+        assert (
+            "ENTRADAS BLOQUEADAS" in workspace._automation_pill.text()
+            or "ENTRIES BLOCKED" in workspace._automation_pill.text()
+        )
     finally:
         workspace.close()

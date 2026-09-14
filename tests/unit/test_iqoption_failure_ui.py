@@ -4,18 +4,19 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "mode,text",
+    "mode,key",
     [
-        ("READ_ONLY_PROBE", "AGUARDANDO VERIFICAÇÃO"),
-        ("CORRECT_CONFIGURATION", "CORRIGIR PARÂMETROS"),
-        ("MANUAL_REVIEW", "REVISÃO MANUAL"),
+        ("READ_ONLY_PROBE", "radar.status_verifying"),
+        ("CORRECT_CONFIGURATION", "radar.status_fix_params"),
+        ("MANUAL_REVIEW", "radar.status_manual_review"),
     ],
 )
-def test_radar_explains_recovery_scope_and_condition(monkeypatch, mode, text):
+def test_radar_explains_recovery_scope_and_condition(monkeypatch, mode, key):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
     from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
+    from apps.ui.i18n import t
     from packages.protocol.ui_messages import UiIqOptionAssetRank
 
     app = QApplication.instance() or QApplication([])
@@ -35,7 +36,7 @@ def test_radar_explains_recovery_scope_and_condition(monkeypatch, mode, text):
             )
         ]
     )
-    assert widget._table.item(0, 4).text() == text
+    assert widget._table.item(0, 4).text() == t(key)
     assert widget._table.item(0, 4).toolTip() == details
     assert widget._table.item(0, 3).text() == details
     assert "SINAL DISPARADO" not in widget._table.item(0, 4).text()

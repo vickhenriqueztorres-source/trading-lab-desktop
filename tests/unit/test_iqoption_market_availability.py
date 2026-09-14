@@ -112,6 +112,7 @@ def test_unavailable_radar_is_not_neutral_or_triggered():
     from PySide6.QtWidgets import QApplication
 
     from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
+    from apps.ui.i18n import t
     from packages.protocol.ui_messages import UiIqOptionAssetRank
 
     app = QApplication.instance() or QApplication([])
@@ -130,7 +131,7 @@ def test_unavailable_radar_is_not_neutral_or_triggered():
         ]
     )
     assert "Suspenso pela corretora" in widget._table.item(0, 3).text()
-    assert widget._table.item(0, 4).text() == "MERCADO INDISPONÍVEL"
+    assert widget._table.item(0, 4).text() == t("radar.status_market_unavailable")
     widget.close()
     assert app is not None
 

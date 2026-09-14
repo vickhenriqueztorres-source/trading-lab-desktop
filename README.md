@@ -245,3 +245,22 @@ tests/
 Use [CONTRIBUTING.md](CONTRIBUTING.md) para mudanças e [SECURITY.md](SECURITY.md) para incidentes.
 Nunca publique senha, token, cookie, OTP, lease bruta, chave privada ou credencial de broker em
 issue, log, fixture, screenshot ou pacote de suporte.
+
+## Configuration and Development Environment (v2)
+
+### Environment Variables
+- `TRADING_LAB_AUTH_BASE_URL`: Base URL for the licensing and authentication backend (default: `https://api.tradinglab.com` in production, or `http://localhost:8000` during development).
+- `SUPPORT_RENEW_URL`: URL directed to renew or upgrade licenses (configured via `build_defaults.py` or overridden by environment variable).
+- `SUPPORT_CONTACT_URL`: Contact URL for support assistance (e.g. Telegram or WhatsApp support channel).
+
+### Running in Simulation Mode
+To run Trading Lab Desktop in simulation / local development mode without live brokers:
+```powershell
+python -m apps.launcher.cli --simulated
+```
+
+### Validating Internationalization (Zero Portuguese Guard-rail)
+To ensure complete translation coverage and verify that no Portuguese terms or unlocalized literals leak into UI code:
+```powershell
+python scripts/check_i18n.py
+```
