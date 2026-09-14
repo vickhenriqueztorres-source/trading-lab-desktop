@@ -68,6 +68,23 @@ def main() -> int:
             from PySide6.QtWidgets import QApplication
 
             app = QApplication.instance() or QApplication(sys.argv)
+
+            try:
+                auth_resp = controller.auth_status()
+            except Exception:
+                auth_resp = None
+
+            is_authorized = auth_resp is not None and auth_resp.status == "AUTHORIZED"
+            if not is_authorized:
+                from apps.ui.auth import LoginWindow
+
+                initial_error = (
+                    auth_resp.reason if auth_resp and auth_resp.status == "BLOCKED" else None
+                )
+                login_dialog = LoginWindow(controller, initial_error=initial_error)
+                if login_dialog.exec() != 1:
+                    return 0
+
             window = TradingLabMainWindow(controller, profile_dir=profile_dir)
             window.show()
             app.exec()

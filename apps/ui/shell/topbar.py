@@ -145,8 +145,8 @@ class TopBar(QFrame):
             self._lbl_status.setStyleSheet(f"color: {TOKENS.ACCENT_RED};")
 
     def set_account_info(self, email: str | None, plan: str | None) -> None:
-        self._email = email
-        self._plan = plan
+        self._email = str(email) if isinstance(email, str) else None
+        self._plan = str(plan) if isinstance(plan, str) else None
         self._update_account_chip()
 
     def _update_account_chip(self) -> None:

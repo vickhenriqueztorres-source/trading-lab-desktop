@@ -10,7 +10,6 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -40,7 +39,7 @@ from apps.ui.design import asset_path
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import I18nManager, t
 from apps.ui.ipc_client import UiIpcError
-from apps.ui.pages import ActivityPage, OverviewPage
+from apps.ui.pages import AccountPage, ActivityPage, OverviewPage
 from apps.ui.shell import BottomBar, Sidebar, TopBar
 from apps.ui.theme import (
     ACCENT_AMBER,
@@ -49,6 +48,7 @@ from apps.ui.theme import (
     get_application_stylesheet,
 )
 from packages.protocol.ui_messages import (
+    UiAuthStatusResponse,
     UiDigitRiskConfig,
     UiDigitRiskConfigStatus,
     UiGlobalState,
@@ -139,6 +139,8 @@ class TradingLabMainWindow(QMainWindow):
         self._iqoption_bot_enabled = False
         self._deriv_real_selected = False
         self._iqoption_saved_login_started = False
+        self._auth_status: UiAuthStatusResponse | None = None
+        self._auth_poll_counter = 0
 
         self.setWindowTitle(_window_title(t("app.practice_badge")))
         app_icon_file = asset_path("app.ico")
@@ -276,8 +278,9 @@ class TradingLabMainWindow(QMainWindow):
         # Page 3: Activity
         self._pages.addWidget(self._create_activity_page())
 
-        # Page 4: Account (Placeholder for Prompt 7)
-        self._account_page = self._create_account_page()
+        # Page 4: Account
+        self._account_page = AccountPage()
+        self._account_page.sign_out_requested.connect(self._on_sign_out_requested)
         self._pages.addWidget(self._account_page)
 
         # Page 5: Settings
@@ -352,39 +355,37 @@ class TradingLabMainWindow(QMainWindow):
         self._activity_intro = self._activity_page.intro_label
         return self._activity_page
 
-    def _create_account_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+    def _on_sign_out_requested(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            t("account.sign_out_confirm_title"),
+            t("account.sign_out_confirm"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        with contextlib.suppress(Exception):
+            self._controller.auth_sign_out()
+        self._auth_status = None
+        self._topbar.set_account_info(None, None)
+        self._account_page.update_auth_status(None)
 
-        title = QLabel(t("nav.account"))
-        title.setObjectName("sectionTitle")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        layout.addWidget(title)
+        from apps.ui.auth import LoginWindow
 
-        subtitle = QLabel(t("account.placeholder_subtitle"))
-        subtitle.setObjectName("hint")
-        layout.addWidget(subtitle)
-
-        card = QFrame()
-        card.setObjectName("card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 20, 20, 20)
-        card_layout.setSpacing(10)
-
-        plan_label = QLabel(t("account.plan_none"))
-        plan_label.setObjectName("kpiValue")
-        plan_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        card_layout.addWidget(plan_label)
-
-        hint = QLabel(t("account.local_trial"))
-        hint.setObjectName("hint")
-        card_layout.addWidget(hint)
-
-        layout.addWidget(card)
-        layout.addStretch()
-        return page
+        self.hide()
+        login_dialog = LoginWindow(self._controller, self)
+        if login_dialog.exec() == 1:
+            with contextlib.suppress(Exception):
+                self._auth_status = self._controller.auth_status()
+            if self._auth_status:
+                self._topbar.set_account_info(
+                    self._auth_status.user_id_preview, self._auth_status.plan
+                )
+                self._account_page.update_auth_status(self._auth_status)
+            self.show()
+        else:
+            self.close()
 
     def _on_page_selected(self, index: int) -> None:
         if not (0 <= index < self._pages.count()):
@@ -450,6 +451,7 @@ class TradingLabMainWindow(QMainWindow):
         self._iqoption_config_panel.retranslate()
         self._settings_workspace.retranslate()
         self._activity_page.retranslate()
+        self._account_page.retranslate()
         self._overview_page.retranslate()
         self._retranslate_navigation()
         self._refresh_projection()
@@ -483,6 +485,20 @@ class TradingLabMainWindow(QMainWindow):
             self._lbl_ipc_status.setStyleSheet(
                 f"color: {ACCENT_RED}; font-weight: bold; font-size: 11px;"
             )
+
+        if self._auth_status is None or self._auth_poll_counter >= 15:
+            self._auth_poll_counter = 0
+            with contextlib.suppress(Exception):
+                self._auth_status = self._controller.auth_status()
+        else:
+            self._auth_poll_counter += 1
+
+        if self._auth_status is not None:
+            user_preview = getattr(self._auth_status, "user_id_preview", "")
+            plan = getattr(self._auth_status, "plan", "")
+            if isinstance(user_preview, str) and isinstance(plan, str):
+                self._topbar.set_account_info(user_preview, plan)
+                self._account_page.update_auth_status(self._auth_status)
 
         snapshot = self._controller.snapshot
         self._overview_page.update_projection(snapshot, self._controller)

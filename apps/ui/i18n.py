@@ -315,26 +315,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Core Disconnected",
         "es": "Core Desconectado",
     },
-    "account.not_signed_in": {
-        "en": "Not signed in",
-        "es": "No conectado",
-    },
-    "account.plan_pro": {
-        "en": "PRO",
-        "es": "PRO",
-    },
-    "account.plan_none": {
-        "en": "FREE",
-        "es": "FREE",
-    },
-    "account.placeholder_subtitle": {
-        "en": "Manage your license, broker accounts and subscription",
-        "es": "Gestiona tu licencia, cuentas de broker y suscripción",
-    },
-    "account.local_trial": {
-        "en": "Local Trial",
-        "es": "Prueba Local",
-    },
     "status.system_ready": {
         "en": "System Ready",
         "es": "Sistema Listo",
@@ -1683,6 +1663,289 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": (
             "Reconexión automática en {time} · intentos {attempts}/3 · Administrado por el worker"
         ),
+    },
+    # --- Login & Authentication ---
+    "login.title": {
+        "en": "Sign in to Trading Lab",
+        "es": "Accede a Trading Lab",
+    },
+    "login.subtitle": {
+        "en": "Enter your email and we'll send you a 6-digit code. No passwords.",
+        "es": "Ingresa tu correo y te enviaremos un código de 6 dígitos. Sin contraseñas.",
+    },
+    "login.email_label": {
+        "en": "Email address",
+        "es": "Correo electrónico",
+    },
+    "login.email_placeholder": {
+        "en": "you@email.com",
+        "es": "tu@correo.com",
+    },
+    "login.send_code": {
+        "en": "Send code",
+        "es": "Enviar código",
+    },
+    "login.sending": {
+        "en": "Sending code…",
+        "es": "Enviando código…",
+    },
+    "login.code_sent_to": {
+        "en": "Code sent to {email}",
+        "es": "Código enviado a {email}",
+    },
+    "login.code_instructions": {
+        "en": "Enter the 6-digit code sent to your email.",
+        "es": "Ingresa el código de 6 dígitos que enviamos a tu correo.",
+    },
+    "login.code_expires_in": {
+        "en": "The code expires in {time}",
+        "es": "El código vence en {time}",
+    },
+    "login.verify": {
+        "en": "Verify code",
+        "es": "Verificar código",
+    },
+    "login.verifying": {
+        "en": "Verifying…",
+        "es": "Verificando…",
+    },
+    "login.resend": {
+        "en": "Resend code",
+        "es": "Reenviar código",
+    },
+    "login.resend_in": {
+        "en": "Resend in {seconds}s",
+        "es": "Reenviar en {seconds}s",
+    },
+    "login.change_email": {
+        "en": "Change email",
+        "es": "Cambiar de correo",
+    },
+    "login.activating": {
+        "en": "Activating license…",
+        "es": "Activando licencia…",
+    },
+    "login.activating_hint": {
+        "en": "Registering this device and activating your license…",
+        "es": "Registrando este equipo y activando tu licencia…",
+    },
+    "login.err_invalid_email": {
+        "en": "Enter a valid email address.",
+        "es": "Ingresa un correo electrónico válido.",
+    },
+    "login.err_otp_invalid": {
+        "en": "The entered code is incorrect. Please try again.",
+        "es": "El código ingresado es incorrecto. Inténtalo de nuevo.",
+    },
+    "login.err_expired": {
+        "en": "The code has expired. Request a new one.",
+        "es": "El código ha expirado. Solicita uno nuevo.",
+    },
+    "login.err_license_expired": {
+        "en": "Your subscription has expired. Renew to continue trading.",
+        "es": "Tu suscripción venció. Renueva para seguir operando.",
+    },
+    "login.err_device_limit": {
+        "en": (
+            "Your license is already active on another computer. Contact support to switch devices."
+        ),
+        "es": (
+            "Tu licencia ya está activa en otro equipo. "
+            "Contacta soporte para cambiar de dispositivo."
+        ),
+    },
+    "login.err_unavailable": {
+        "en": "The authentication service is currently unavailable.",
+        "es": "El servicio de autenticación no está disponible en este momento.",
+    },
+    "login.err_rate_limited": {
+        "en": "Too many attempts. Please wait a few minutes and try again.",
+        "es": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+    },
+    "login.renew": {
+        "en": "Renew subscription",
+        "es": "Renovar suscripción",
+    },
+    # --- My Account ---
+    "account.title": {
+        "en": "My account",
+        "es": "Mi cuenta",
+    },
+    "account.subtitle": {
+        "en": "Manage your subscription, device, and session.",
+        "es": "Administra tu suscripción, dispositivo y sesión.",
+    },
+    "account.subscription": {
+        "en": "Subscription",
+        "es": "Suscripción",
+    },
+    "account.subscription_hint": {
+        "en": "Details of the active plan and expiration status.",
+        "es": "Detalles del plan contratado y estado de vigencia.",
+    },
+    "account.plan": {
+        "en": "Active plan",
+        "es": "Plan activo",
+    },
+    "account.plan_none": {
+        "en": "No subscription",
+        "es": "Sin suscripción",
+    },
+    "account.plan_starter": {
+        "en": "Starter Plan",
+        "es": "Plan Starter",
+    },
+    "account.plan_pro": {
+        "en": "Pro Plan",
+        "es": "Plan Pro",
+    },
+    "account.plan_enterprise": {
+        "en": "Enterprise Plan",
+        "es": "Plan Enterprise",
+    },
+    "account.status": {
+        "en": "Status",
+        "es": "Estado",
+    },
+    "account.status_active": {
+        "en": "Active",
+        "es": "Activa",
+    },
+    "account.status_expired": {
+        "en": "Expired",
+        "es": "Vencida",
+    },
+    "account.expires_in": {
+        "en": "Expires in {days} days ({date})",
+        "es": "Vence en {days} días ({date})",
+    },
+    "account.expires_today": {
+        "en": "Expires today ({date})",
+        "es": "Vence hoy ({date})",
+    },
+    "account.renew": {
+        "en": "Renew subscription",
+        "es": "Renovar suscripción",
+    },
+    "account.device": {
+        "en": "Device",
+        "es": "Dispositivo",
+    },
+    "account.device_hint": {
+        "en": "Unique identifier assigned to this computer.",
+        "es": "Identificador único asignado a este equipo.",
+    },
+    "account.device_id": {
+        "en": "Device ID",
+        "es": "ID del equipo",
+    },
+    "account.this_device": {
+        "en": "This computer (authorized)",
+        "es": "Este equipo (autorizado)",
+    },
+    "account.device_limit_hint": {
+        "en": "Your plan allows 1 device. To switch computers, contact support.",
+        "es": "Tu plan permite 1 equipo. Para cambiar de computadora, contacta soporte.",
+    },
+    "account.session": {
+        "en": "Session",
+        "es": "Sesión",
+    },
+    "account.session_hint": {
+        "en": "User account linked to this application.",
+        "es": "Cuenta de usuario vinculada a esta aplicación.",
+    },
+    "account.email": {
+        "en": "Email address",
+        "es": "Correo electrónico",
+    },
+    "account.not_signed_in": {
+        "en": "Not signed in",
+        "es": "No identificado",
+    },
+    "account.sign_out": {
+        "en": "Sign out",
+        "es": "Cerrar sesión",
+    },
+    "account.sign_out_confirm_title": {
+        "en": "Sign out",
+        "es": "Cerrar sesión",
+    },
+    "account.sign_out_confirm": {
+        "en": "Are you sure you want to sign out on this device?",
+        "es": "¿Estás seguro de que deseas cerrar sesión en este equipo?",
+    },
+    "account.support": {
+        "en": "Support",
+        "es": "Soporte",
+    },
+    "account.support_hint": {
+        "en": "Have questions or need help? Our support team is available.",
+        "es": "¿Tienes dudas o necesitas ayuda? Nuestro equipo de soporte está disponible.",
+    },
+    "account.contact_support": {
+        "en": "Contact support",
+        "es": "Contactar soporte",
+    },
+    # --- Onboarding & Empty States ---
+    "onboarding.title": {
+        "en": "Welcome to Trading Lab",
+        "es": "Bienvenido a Trading Lab",
+    },
+    "onboarding.step1_title": {
+        "en": "Connect your broker",
+        "es": "Conecta tu broker",
+    },
+    "onboarding.step1_text": {
+        "en": (
+            "Go to Deriv or IQ Option in the left menu and sign in with your account. "
+            "Always start in PRACTICE MODE."
+        ),
+        "es": (
+            "Ve a Deriv o IQ Option en el menú izquierdo e inicia sesión con tu cuenta. "
+            "Empieza siempre en MODO PRÁCTICA."
+        ),
+    },
+    "onboarding.step2_title": {
+        "en": "Define your risk",
+        "es": "Define tu riesgo",
+    },
+    "onboarding.step2_text": {
+        "en": (
+            "Set your daily stop loss and take profit. "
+            "The bot stops automatically when reaching either."
+        ),
+        "es": (
+            "Ajusta el stop diario y la meta. "
+            "El bot se detiene solo cuando llega a cualquiera de los dos."
+        ),
+    },
+    "onboarding.step3_title": {
+        "en": "Turn on the bot",
+        "es": "Enciende el bot",
+    },
+    "onboarding.step3_text": {
+        "en": ("Click START BOT in the bottom bar. You can stop it at any time with Safe Stop."),
+        "es": (
+            "Pulsa ENCENDER BOT en la barra inferior. "
+            "Puedes detenerlo en cualquier momento con Parada segura."
+        ),
+    },
+    "onboarding.next": {
+        "en": "Next",
+        "es": "Siguiente",
+    },
+    "onboarding.finish": {
+        "en": "Get Started",
+        "es": "Comenzar",
+    },
+    "onboarding.skip": {
+        "en": "Skip tour",
+        "es": "Saltar introducción",
+    },
+    "broker.disconnected_hint": {
+        "en": "Sign in to view your balance and activate the strategy.",
+        "es": "Inicia sesión para ver tu saldo y activar la estrategia.",
     },
 }
 

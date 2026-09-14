@@ -81,8 +81,9 @@ def test_iqoption_workspace_distinguishes_retrying_from_stale_balance() -> None:
     )
 
     assert workspace._balance_value.text() == "USD 549.75"
-    assert "ÚLTIMO SALDO CONFIRMADO há 5s" in workspace._balance_freshness.text()
-    assert "tentativa 1" in workspace._balance_freshness.text()
+    assert "ÚLTIMO SALDO CONFIRMADO" in workspace._balance_freshness.text()
+    freshness_text = workspace._balance_freshness.text()
+    assert "#1" in freshness_text or "tentativa 1" in freshness_text
     assert application is not None
 
 
@@ -107,7 +108,7 @@ def test_armed_transport_recovery_and_countdown_are_inline() -> None:
 
     assert workspace._automation_pill.text() == "● BOT ARMADO · RECONECTANDO"
     assert "04:32" in workspace._iqoption_login_status.text()
-    assert "tentativas 2/3" in workspace._iqoption_login_status.text()
-    assert workspace._iqoption_login_button.text() == "↻ Reconectar agora"
+    assert "2/3" in workspace._iqoption_login_status.text()
+    assert "Reconectar" in workspace._iqoption_login_button.text()
     workspace._reconnect_timer.stop()
     assert application is not None

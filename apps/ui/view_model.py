@@ -19,9 +19,16 @@ class DashboardViewModel:
     global_exposure: str = "INDISPONÍVEL"
     risk_state: str = "NORMAL"
     consecutive_losses: int = 0
+    auth_email: str | None = None
+    auth_plan: str | None = None
 
     @classmethod
-    def from_snapshot(cls, snapshot: UiProjectionSnapshot) -> DashboardViewModel:
+    def from_snapshot(
+        cls,
+        snapshot: UiProjectionSnapshot,
+        auth_email: str | None = None,
+        auth_plan: str | None = None,
+    ) -> DashboardViewModel:
         brokers = tuple(
             (
                 f"{card.broker} | {card.account_mode.value} | "
@@ -61,6 +68,8 @@ class DashboardViewModel:
             global_exposure=global_exposure,
             risk_state=snapshot.risk_state,
             consecutive_losses=snapshot.consecutive_losses,
+            auth_email=auth_email,
+            auth_plan=auth_plan,
         )
 
     @staticmethod

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -178,6 +180,62 @@ def test_ui_ipc_reconnects_after_idle_server_closes_connection() -> None:
         try:
             time.sleep(0.1)
             assert client.projection().global_state is UiGlobalState.READY
+        finally:
+            client.close()
+    finally:
+        service.stop()
+
+
+def test_ui_ipc_auth_flow_contract() -> None:
+    token = SecretValue.from_text(secrets.token_hex(32))
+    mock_auth = MagicMock()
+    mock_auth.status.return_value = MagicMock(
+        auth_state="AUTHORIZED",
+        user_id_preview="ju***@gmail.com",
+        device_id="dev-12345",
+        lease_active=True,
+    )
+    mock_auth.authorization.return_value = MagicMock(
+        new_entries_allowed=True,
+        reason=MagicMock(value="OK"),
+        expires_at=datetime(2026, 10, 15, 0, 0, 0, tzinfo=UTC),
+    )
+    mock_auth.start_login.return_value = MagicMock(challenge_id="chal-abc")
+    mock_auth.submit_otp.return_value = MagicMock(user_id_preview="ju***@gmail.com")
+
+    service = CoreUiProjectionService(
+        token,
+        _snapshot,
+        lambda: None,
+        lambda: True,
+        lambda: None,
+        auth_supervisor=mock_auth,
+    )
+    service.start()
+    try:
+        client = UiIpcClient.connect(service.port, token)
+        try:
+            # 1. auth_status
+            status_resp = client.auth_status()
+            assert status_resp.authorized is True
+            assert status_resp.status == "AUTHORIZED"
+            assert status_resp.user_id_preview == "ju***@gmail.com"
+            assert status_resp.device_id == "dev-12345"
+
+            # 2. auth_start_login
+            login_ack = client.auth_start_login("julio@example.com")
+            assert login_ack.status == "PENDING_OTP"
+            assert login_ack.challenge_id == "chal-abc"
+            assert login_ack.user_id_preview == "ju***@example.com"
+
+            # 3. auth_submit_otp
+            otp_ack = client.auth_submit_otp("chal-abc", "123456")
+            assert otp_ack.status == "AUTHORIZED"
+            assert otp_ack.user_id_preview == "ju***@gmail.com"
+
+            # 4. auth_sign_out
+            sign_out_ack = client.auth_sign_out()
+            assert sign_out_ack.ok is True
         finally:
             client.close()
     finally:

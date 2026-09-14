@@ -5,6 +5,10 @@ from collections.abc import Callable
 
 from apps.ui.ipc_client import UiIpcClient, UiIpcError
 from packages.protocol import (
+    UiAuthSignOutAck,
+    UiAuthStartLoginAck,
+    UiAuthStatusResponse,
+    UiAuthSubmitOtpAck,
     UiCommandAck,
     UiDigitRiskConfig,
     UiGenerateDiagnosticResponse,
@@ -113,6 +117,23 @@ class UiController:
 
     def control_iqoption_bot(self, enabled: bool) -> UiCommandAck:
         ack = self._client.control_iqoption_bot(enabled)
+        self.refresh()
+        return ack
+
+    def auth_start_login(self, email: str) -> UiAuthStartLoginAck:
+        return self._client.auth_start_login(email)
+
+    def auth_submit_otp(self, challenge_id: str, code: str) -> UiAuthSubmitOtpAck:
+        ack = self._client.auth_submit_otp(challenge_id, code)
+        if ack.status == "AUTHORIZED":
+            self.refresh()
+        return ack
+
+    def auth_status(self) -> UiAuthStatusResponse:
+        return self._client.auth_status()
+
+    def auth_sign_out(self) -> UiAuthSignOutAck:
+        ack = self._client.auth_sign_out()
         self.refresh()
         return ack
 

@@ -15,6 +15,14 @@ from packages.protocol import (
     MessageType,
     ProtocolError,
     ProtocolErrorCode,
+    UiAuthSignOutAck,
+    UiAuthSignOutCommand,
+    UiAuthStartLoginAck,
+    UiAuthStartLoginCommand,
+    UiAuthStatusRequest,
+    UiAuthStatusResponse,
+    UiAuthSubmitOtpAck,
+    UiAuthSubmitOtpCommand,
     UiCommandAck,
     UiDigitRiskConfig,
     UiGenerateDiagnosticResponse,
@@ -215,6 +223,38 @@ class UiIpcClient:
             payload=UiIqOptionBotControlCommand(enabled).to_payload(),
         )
         return UiCommandAck.from_payload(response.payload)
+
+    def auth_start_login(self, email: str) -> UiAuthStartLoginAck:
+        response = self._round_trip(
+            MessageType.UI_AUTH_START_LOGIN_COMMAND,
+            MessageType.UI_AUTH_START_LOGIN_ACK,
+            payload=UiAuthStartLoginCommand(email).to_payload(),
+        )
+        return UiAuthStartLoginAck.from_payload(response.payload)
+
+    def auth_submit_otp(self, challenge_id: str, code: str) -> UiAuthSubmitOtpAck:
+        response = self._round_trip(
+            MessageType.UI_AUTH_SUBMIT_OTP_COMMAND,
+            MessageType.UI_AUTH_SUBMIT_OTP_ACK,
+            payload=UiAuthSubmitOtpCommand(challenge_id=challenge_id, code=code).to_payload(),
+        )
+        return UiAuthSubmitOtpAck.from_payload(response.payload)
+
+    def auth_status(self) -> UiAuthStatusResponse:
+        response = self._round_trip(
+            MessageType.UI_AUTH_STATUS_REQUEST,
+            MessageType.UI_AUTH_STATUS_RESPONSE,
+            payload=UiAuthStatusRequest().to_payload(),
+        )
+        return UiAuthStatusResponse.from_payload(response.payload)
+
+    def auth_sign_out(self) -> UiAuthSignOutAck:
+        response = self._round_trip(
+            MessageType.UI_AUTH_SIGN_OUT_COMMAND,
+            MessageType.UI_AUTH_SIGN_OUT_ACK,
+            payload=UiAuthSignOutCommand().to_payload(),
+        )
+        return UiAuthSignOutAck.from_payload(response.payload)
 
     def close(self) -> None:
         with self._lock:

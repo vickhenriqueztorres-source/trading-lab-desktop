@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import inspect
@@ -10,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from apps.core.deriv_telemetry import DerivTelemetrySnapshot
@@ -23,6 +24,7 @@ from apps.core.runtime import CoreRuntime
 from apps.core.worker_supervisor import WorkerHealthState
 from packages.domain.market import BrokerAccountBalance, BrokerClockSnapshot
 from packages.domain.models import Broker
+from packages.identity import OtpCode
 from packages.observability.diagnostic import DiagnosticBundleResult
 from packages.observability.events import OperationalEvent
 from packages.protocol import (
@@ -36,6 +38,14 @@ from packages.protocol import (
     ProtocolError,
     ProtocolErrorCode,
     UiAccountMode,
+    UiAuthSignOutAck,
+    UiAuthSignOutCommand,
+    UiAuthStartLoginAck,
+    UiAuthStartLoginCommand,
+    UiAuthStatusRequest,
+    UiAuthStatusResponse,
+    UiAuthSubmitOtpAck,
+    UiAuthSubmitOtpCommand,
     UiBalanceQuality,
     UiBotWaitingStatus,
     UiCommandAck,
@@ -948,6 +958,16 @@ class CoreUiProjectionBuilder:
         return UiGlobalState.READY if gate_open else UiGlobalState.DEGRADED
 
 
+def _mask_email(email: str) -> str:
+    if not email:
+        return ""
+    if "@" not in email:
+        return email[:2] + "***" if len(email) > 2 else email + "***"
+    local, domain = email.split("@", 1)
+    masked_local = (local[0] if local else "") + "***" if len(local) <= 2 else local[:2] + "***"
+    return f"{masked_local}@{domain}"
+
+
 class CoreUiProjectionService:
     """Authenticated loopback UI endpoint; the UI remains a disposable projection client."""
 
@@ -970,6 +990,7 @@ class CoreUiProjectionService:
             Callable[[IqOptionRiskConfig], tuple[bool, str | None]] | None
         ) = None,
         iqoption_bot_control: Callable[[bool], tuple[bool, str]] | None = None,
+        auth_supervisor: Any = None,
         *,
         request_timeout: float = 2.0,
     ) -> None:
@@ -993,6 +1014,16 @@ class CoreUiProjectionService:
         )
         self._iqoption_risk_config_update = iqoption_risk_config_update
         self._iqoption_bot_control = iqoption_bot_control
+        self._auth_supervisor = auth_supervisor
+        if self._auth_supervisor is None:
+            try:
+                import sys
+
+                frame = sys._getframe(1)
+                lifecycle = frame.f_locals.get("self")
+                self._auth_supervisor = getattr(lifecycle, "_auth", None)
+            except Exception:
+                self._auth_supervisor = None
         self._request_timeout = request_timeout
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1328,9 +1359,183 @@ class CoreUiProjectionService:
                 MessageType.UI_IQOPTION_BOT_CONTROL_ACK,
                 ack.to_payload(),
             )
+        if request.message_type is MessageType.UI_AUTH_START_LOGIN_COMMAND:
+            auth_start_cmd = UiAuthStartLoginCommand.from_payload(request.payload)
+            auth_sup = self._get_auth_supervisor()
+            if auth_sup is None:
+                start_ack = UiAuthStartLoginAck(
+                    ok=False, status="UNAVAILABLE", reason="AUTH_SERVICE_UNAVAILABLE"
+                )
+            else:
+                try:
+                    start_resp = auth_sup.start_login(auth_start_cmd.email)
+                    start_ack = UiAuthStartLoginAck(
+                        ok=True,
+                        status="PENDING_OTP",
+                        challenge_id=start_resp.challenge_id,
+                        user_id_preview=_mask_email(auth_start_cmd.email),
+                        expires_at=None,
+                        reason=None,
+                    )
+                except Exception as exc:
+                    start_ack = UiAuthStartLoginAck(
+                        ok=False,
+                        status="REJECTED",
+                        reason=getattr(exc, "code", getattr(exc, "reason_code", str(exc))),
+                    )
+            return _response(request, MessageType.UI_AUTH_START_LOGIN_ACK, start_ack.to_payload())
+        if request.message_type is MessageType.UI_AUTH_SUBMIT_OTP_COMMAND:
+            auth_otp_cmd = UiAuthSubmitOtpCommand.from_payload(request.payload)
+            auth_sup = self._get_auth_supervisor()
+            if auth_sup is None:
+                otp_ack = UiAuthSubmitOtpAck(
+                    ok=False, status="UNAVAILABLE", reason="AUTH_SERVICE_UNAVAILABLE"
+                )
+            else:
+                try:
+                    otp_resp = auth_sup.submit_otp(
+                        auth_otp_cmd.challenge_id, OtpCode(auth_otp_cmd.code)
+                    )
+                    auth_dec = auth_sup.authorization("DERIV", "strategy-test")
+                    user_preview = _mask_email(getattr(otp_resp, "user_id_preview", "") or "")
+                    expiry = getattr(auth_dec, "expires_at", None)
+                    iso_fn = getattr(expiry, "isoformat", None)
+                    iso_res = iso_fn() if callable(iso_fn) else None
+                    expiry_str = iso_res if isinstance(iso_res, str) else None
+                    raw_reason = getattr(auth_dec, "reason", None)
+                    val_reason = getattr(raw_reason, "value", None)
+                    reason_val = (
+                        str(val_reason)
+                        if isinstance(val_reason, str)
+                        else str(raw_reason)
+                        if isinstance(raw_reason, str)
+                        else "OK"
+                    )
+                    raw_status = getattr(otp_resp, "status", None)
+                    val_status = getattr(raw_status, "value", None)
+                    status_val = (
+                        str(val_status)
+                        if isinstance(val_status, str)
+                        else str(raw_status)
+                        if isinstance(raw_status, str)
+                        else "AUTHORIZED"
+                    )
+                    raw_dev_id = getattr(auth_sup.status(), "device_id", None)
+                    dev_id = str(raw_dev_id) if isinstance(raw_dev_id, str) else None
+                    otp_ack = UiAuthSubmitOtpAck(
+                        ok=bool(getattr(auth_dec, "new_entries_allowed", True)),
+                        status=status_val,
+                        user_id_preview=user_preview,
+                        plan="PRO" if "REAL" in reason_val else "PHASE0_PRACTICE",
+                        expires_at=expiry_str,
+                        device_id=dev_id,
+                        reason=reason_val,
+                    )
+                except Exception as exc:
+                    otp_ack = UiAuthSubmitOtpAck(
+                        ok=False,
+                        status="ERROR",
+                        reason=getattr(exc, "code", getattr(exc, "reason_code", str(exc))),
+                    )
+            return _response(request, MessageType.UI_AUTH_SUBMIT_OTP_ACK, otp_ack.to_payload())
+        if request.message_type is MessageType.UI_AUTH_STATUS_REQUEST:
+            UiAuthStatusRequest.from_payload(request.payload)
+            auth_sup = self._get_auth_supervisor()
+            if auth_sup is None:
+                status_resp = UiAuthStatusResponse(
+                    authorized=False, status="UNAVAILABLE", reason="AUTH_SERVICE_UNAVAILABLE"
+                )
+            else:
+                try:
+                    cur_status = auth_sup.status()
+                    auth_dec = auth_sup.authorization("DERIV", "strategy-test")
+                    user_preview = _mask_email(getattr(cur_status, "user_id_preview", "") or "")
+                    expiry = getattr(auth_dec, "expires_at", None)
+                    iso_fn = getattr(expiry, "isoformat", None)
+                    iso_res = iso_fn() if callable(iso_fn) else None
+                    expiry_str = iso_res if isinstance(iso_res, str) else None
+                    raw_reason = getattr(auth_dec, "reason", None)
+                    val_reason = getattr(raw_reason, "value", None)
+                    reason_val = (
+                        str(val_reason)
+                        if isinstance(val_reason, str)
+                        else str(raw_reason)
+                        if isinstance(raw_reason, str)
+                        else "OK"
+                    )
+                    is_auth = bool(getattr(cur_status, "lease_active", False))
+                    raw_state = getattr(cur_status, "auth_state", None)
+                    val_state = getattr(raw_state, "value", None)
+                    status_state = (
+                        str(val_state)
+                        if isinstance(val_state, str)
+                        else str(raw_state)
+                        if isinstance(raw_state, str)
+                        else ("AUTHORIZED" if is_auth else "AUTH_REQUIRED")
+                    )
+                    raw_dev_id = getattr(cur_status, "device_id", None)
+                    dev_id = str(raw_dev_id) if isinstance(raw_dev_id, str) else None
+                    status_resp = UiAuthStatusResponse(
+                        authorized=is_auth,
+                        status=status_state,
+                        user_id_preview=user_preview,
+                        plan="PRO" if "REAL" in reason_val else "PHASE0_PRACTICE",
+                        expires_at=expiry_str,
+                        device_id=dev_id,
+                        reason=reason_val,
+                    )
+                except Exception as exc:
+                    status_resp = UiAuthStatusResponse(
+                        authorized=False,
+                        status="ERROR",
+                        reason=getattr(exc, "code", getattr(exc, "reason_code", str(exc))),
+                    )
+            return _response(request, MessageType.UI_AUTH_STATUS_RESPONSE, status_resp.to_payload())
+        if request.message_type is MessageType.UI_AUTH_SIGN_OUT_COMMAND:
+            UiAuthSignOutCommand.from_payload(request.payload)
+            auth_sup = self._get_auth_supervisor()
+            if auth_sup is None:
+                signout_ack = UiAuthSignOutAck(ok=False, reason="AUTH_SERVICE_UNAVAILABLE")
+            else:
+                try:
+                    self._perform_sign_out(auth_sup)
+                    signout_ack = UiAuthSignOutAck(ok=True)
+                except Exception as exc:
+                    signout_ack = UiAuthSignOutAck(ok=False, reason=str(exc))
+            return _response(request, MessageType.UI_AUTH_SIGN_OUT_ACK, signout_ack.to_payload())
         raise ProtocolError(
             ProtocolErrorCode.UI_IPC_INVALID_MESSAGE, "UI message type is unsupported"
         )
+
+    def _get_auth_supervisor(self) -> Any:
+        if self._auth_supervisor is not None:
+            return self._auth_supervisor
+        try:
+            import sys
+
+            frame: Any = sys._getframe(1)
+            while frame is not None:
+                obj = frame.f_locals.get("self")
+                if obj is not None and hasattr(obj, "_auth"):
+                    self._auth_supervisor = getattr(obj, "_auth", None)
+                    return self._auth_supervisor
+                frame = frame.f_back
+        except Exception:
+            pass
+        return None
+
+    def _perform_sign_out(self, auth_sup: Any) -> None:
+        profile_dir = getattr(auth_sup, "_profile_dir", None)
+        if profile_dir is not None:
+            from pathlib import Path
+
+            vault_dir = Path(profile_dir) / "vault"
+            if vault_dir.exists() and vault_dir.is_dir():
+                for p in vault_dir.glob("*.vault"):
+                    with contextlib.suppress(Exception):
+                        p.unlink(missing_ok=True)
+        if hasattr(auth_sup, "restart"):
+            auth_sup.restart()
 
     def _safe_stop_state(self) -> bool:
         try:

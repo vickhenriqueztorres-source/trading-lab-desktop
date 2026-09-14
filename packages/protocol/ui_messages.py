@@ -2326,3 +2326,215 @@ def _mapping(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise _invalid()
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthStartLoginCommand:
+    email: str
+
+    def __post_init__(self) -> None:
+        if not self.email.strip() or len(self.email) > 256 or "@" not in self.email:
+            raise ValueError("email is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"email": self.email}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthStartLoginCommand:
+        _exact(payload, {"email"})
+        try:
+            return cls(email=_string(payload, "email", 256))
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthStartLoginAck:
+    ok: bool
+    status: str = "PENDING_OTP"
+    challenge_id: str | None = None
+    user_id_preview: str | None = None
+    expires_at: str | None = None
+    reason: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"ok": self.ok, "status": self.status}
+        if self.challenge_id is not None:
+            payload["challenge_id"] = self.challenge_id
+        if self.user_id_preview is not None:
+            payload["user_id_preview"] = self.user_id_preview
+        if self.expires_at is not None:
+            payload["expires_at"] = self.expires_at
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthStartLoginAck:
+        ok = payload.get("ok")
+        if not isinstance(ok, bool):
+            raise _invalid()
+        status = _optional_string(payload, "status", 64) or ("PENDING_OTP" if ok else "REJECTED")
+        return cls(
+            ok=ok,
+            status=status,
+            challenge_id=_optional_string(payload, "challenge_id", 128),
+            user_id_preview=_optional_string(payload, "user_id_preview", 128),
+            expires_at=_optional_string(payload, "expires_at", 64),
+            reason=_optional_string(payload, "reason", 128),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthSubmitOtpCommand:
+    challenge_id: str
+    code: str
+
+    def __post_init__(self) -> None:
+        if not self.challenge_id.strip() or len(self.challenge_id) > 128:
+            raise ValueError("challenge_id is invalid")
+        if not self.code.strip() or len(self.code) > 16:
+            raise ValueError("code is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"challenge_id": self.challenge_id, "code": self.code}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthSubmitOtpCommand:
+        _exact(payload, {"challenge_id", "code"})
+        try:
+            return cls(
+                challenge_id=_string(payload, "challenge_id", 128),
+                code=_string(payload, "code", 16),
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthSubmitOtpAck:
+    ok: bool
+    status: str
+    user_id_preview: str | None = None
+    plan: str | None = None
+    expires_at: str | None = None
+    device_id: str | None = None
+    reason: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"ok": self.ok, "status": self.status}
+        if self.user_id_preview is not None:
+            payload["user_id_preview"] = self.user_id_preview
+        if self.plan is not None:
+            payload["plan"] = self.plan
+        if self.expires_at is not None:
+            payload["expires_at"] = self.expires_at
+        if self.device_id is not None:
+            payload["device_id"] = self.device_id
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthSubmitOtpAck:
+        ok = payload.get("ok")
+        if not isinstance(ok, bool):
+            raise _invalid()
+        status = _string(payload, "status", 64)
+        return cls(
+            ok=ok,
+            status=status,
+            user_id_preview=_optional_string(payload, "user_id_preview", 128),
+            plan=_optional_string(payload, "plan", 64),
+            expires_at=_optional_string(payload, "expires_at", 64),
+            device_id=_optional_string(payload, "device_id", 128),
+            reason=_optional_string(payload, "reason", 128),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthStatusRequest:
+    def to_payload(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthStatusRequest:
+        _exact(payload, set())
+        return cls()
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthStatusResponse:
+    authorized: bool
+    status: str
+    user_id_preview: str | None = None
+    plan: str | None = None
+    expires_at: str | None = None
+    device_id: str | None = None
+    reason: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "authorized": self.authorized,
+            "status": self.status,
+        }
+        if self.user_id_preview is not None:
+            payload["user_id_preview"] = self.user_id_preview
+        if self.plan is not None:
+            payload["plan"] = self.plan
+        if self.expires_at is not None:
+            payload["expires_at"] = self.expires_at
+        if self.device_id is not None:
+            payload["device_id"] = self.device_id
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthStatusResponse:
+        auth = payload.get("authorized")
+        if not isinstance(auth, bool):
+            raise _invalid()
+        status = _string(payload, "status", 64)
+        return cls(
+            authorized=auth,
+            status=status,
+            user_id_preview=_optional_string(payload, "user_id_preview", 128),
+            plan=_optional_string(payload, "plan", 64),
+            expires_at=_optional_string(payload, "expires_at", 64),
+            device_id=_optional_string(payload, "device_id", 128),
+            reason=_optional_string(payload, "reason", 128),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthSignOutCommand:
+    def to_payload(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthSignOutCommand:
+        _exact(payload, set())
+        return cls()
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthSignOutAck:
+    ok: bool
+    reason: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"ok": self.ok}
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthSignOutAck:
+        ok = payload.get("ok")
+        if not isinstance(ok, bool):
+            raise _invalid()
+        return cls(
+            ok=ok,
+            reason=_optional_string(payload, "reason", 128),
+        )
