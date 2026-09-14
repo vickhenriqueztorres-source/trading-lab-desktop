@@ -81,6 +81,21 @@ class DerivAssetRadarWidget(QWidget):
 
     def update_ranking(self, ranking: Sequence[UiDerivAssetRank]) -> None:
         self._ranking = tuple(ranking)
+        if not self._ranking:
+            self._table.clearSpans()
+            self._table.setRowCount(1)
+            self._table.setSpan(0, 0, 1, 6)
+            empty_item = QTableWidgetItem(t("radar.empty"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_item.setForeground(QColor(TEXT_MUTED))
+            self._table.setItem(0, 0, empty_item)
+            self._state.setText(t("deriv.radar.abstain"))
+            self._state.setObjectName("StatusPillOffline")
+            self._state.style().unpolish(self._state)
+            self._state.style().polish(self._state)
+            return
+
+        self._table.clearSpans()
         self._table.setRowCount(len(self._ranking))
         selected = next((item for item in self._ranking if item.selected), None)
         if selected is None:

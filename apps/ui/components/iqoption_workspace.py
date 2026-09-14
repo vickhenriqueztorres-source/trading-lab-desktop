@@ -338,6 +338,8 @@ class IqOptionWorkspaceWidget(QWidget):
         else:
             self._connection_pill.setText(f"○ {t('broker.disconnected')}")
             self._connection_pill.setObjectName("StatusPillOffline")
+            if not self._iqoption_login_status.text():
+                self._iqoption_login_status.setText(t("broker.disconnected_hint"))
 
         self._connection_pill.style().unpolish(self._connection_pill)
         self._connection_pill.style().polish(self._connection_pill)

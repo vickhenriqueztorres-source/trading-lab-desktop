@@ -337,6 +337,18 @@ class TradingLabMainWindow(QMainWindow):
 
         self._on_page_selected(0)
         self._retranslate_navigation()
+        QTimer.singleShot(150, self._maybe_show_onboarding)
+
+    def _maybe_show_onboarding(self) -> None:
+        import os
+
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        from apps.ui.onboarding import FirstRunDialog, is_onboarding_done
+
+        if not is_onboarding_done(self._profile_dir):
+            dialog = FirstRunDialog(self._profile_dir, parent=self)
+            dialog.exec()
 
     def _on_overview_bot_toggle(self) -> None:
         if self._overview_page._active_broker == "IQ Option":

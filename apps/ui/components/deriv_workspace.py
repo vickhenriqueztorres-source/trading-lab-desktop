@@ -336,9 +336,12 @@ class DerivWorkspaceWidget(QWidget):
         if status.is_connected:
             self._connection_pill.setText(f"● {t('broker.connected')}")
             self._connection_pill.setObjectName("StatusPillOnline")
+            self._deriv_connect_status.setVisible(False)
         else:
             self._connection_pill.setText(f"○ {t('broker.disconnected')}")
             self._connection_pill.setObjectName("StatusPillOffline")
+            self._deriv_connect_status.setText(t("broker.disconnected_hint"))
+            self._deriv_connect_status.setVisible(True)
         self._connection_pill.style().unpolish(self._connection_pill)
         self._connection_pill.style().polish(self._connection_pill)
         clock = t("broker.clock_synced") if status.clock_synced else t("broker.clock_untrusted")

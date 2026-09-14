@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from apps.ui.i18n import t
 from apps.ui.theme import ACCENT_AMBER, ACCENT_CYAN, ACCENT_GREEN, ACCENT_RED, TEXT_MUTED
 from packages.protocol import UiIqOptionAssetRank
 
@@ -100,9 +101,16 @@ class IqOptionAssetRadarWidget(QWidget):
             return
         if not ranking:
             self._ranking = ()
-            self._table.setRowCount(0)
-            self._state.setText("SEM EVIDÊNCIA DO CORE")
+            self._table.clearSpans()
+            self._table.setRowCount(1)
+            self._table.setSpan(0, 0, 1, 5)
+            empty_item = QTableWidgetItem(t("radar.empty"))
+            empty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_item.setForeground(QColor(TEXT_MUTED))
+            self._table.setItem(0, 0, empty_item)
+            self._state.setText("STANDBY")
             return
+        self._table.clearSpans()
         self._ranking = tuple(ranking)
         self._table.setRowCount(len(self._ranking))
 
