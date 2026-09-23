@@ -21,14 +21,22 @@ class Tokens:
 
     TEXT_PRIMARY: str = "#E8EEF2"
     TEXT_SECONDARY: str = "#93A4B3"
-    TEXT_MUTED: str = "#5F7080"
+    TEXT_MUTED: str = "#94A3B8"
 
     FONT_MAIN: str = '"Segoe UI"'
     FONT_MONO: str = '"Consolas"'
 
-    RADIUS_SM: int = 6
-    RADIUS_MD: int = 10
-    RADIUS_LG: int = 14
+    RADIUS_XS: int = 3
+    RADIUS_SM: int = 4
+    RADIUS_MD: int = 6
+    RADIUS_LG: int = 10
+
+    FONT_SIZE_XS: int = 11
+    FONT_SIZE_SM: int = 12
+    FONT_SIZE_MD: int = 13
+    FONT_SIZE_LG: int = 15
+    FONT_SIZE_XL: int = 20
+    FONT_SIZE_HERO: int = 26
 
     SPACE_1: int = 8
     SPACE_2: int = 16

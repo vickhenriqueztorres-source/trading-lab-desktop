@@ -385,7 +385,7 @@ class IQOptionReadOnlyWorkerServer:
                     # never create a competing reconnect loop.
                     self._session.close()
                     return
-                time.sleep(0.01)
+                time.sleep(0.08)
 
         self._pump_thread = threading.Thread(
             target=pump,

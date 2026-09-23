@@ -505,6 +505,98 @@ IQOPTION_SETTLEMENT_REPAIR_AUDIT = Migration(
     ),
 )
 
+ORDER_MANUAL_REVIEW_AND_VERSION = Migration(
+    version=12,
+    name="0012_manual_review_and_order_version",
+    statements=(
+        "ALTER TABLE orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE orders ADD COLUMN idempotency_key TEXT",
+        "ALTER TABLE orders ADD COLUMN manual_resolution_id TEXT",
+        "ALTER TABLE orders ADD COLUMN manual_resolution_reason TEXT",
+        "ALTER TABLE orders ADD COLUMN manual_resolution_operator TEXT",
+        "ALTER TABLE orders ADD COLUMN manual_resolution_at TEXT",
+        """
+        CREATE INDEX IF NOT EXISTS ix_orders_state_broker
+        ON orders(state, broker)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_orders_idempotency
+        ON orders(idempotency_key)
+        """,
+    ),
+)
+
+ORDER_RECOVERY_AND_HISTORICAL_CONFLICT = Migration(
+    version=13,
+    name="0013_order_recovery_and_historical_conflict",
+    statements=(
+        """
+        UPDATE orders
+        SET state = 'MANUAL_REVIEW',
+            resolution_source = 'HISTORICAL_CONFLICT_RECOVERY',
+            version = version + 1,
+            updated_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'NOW')
+        WHERE state IN ('ACCEPTED', 'OPEN', 'UNKNOWN', 'SETTLEMENT_UNKNOWN', 'RECONCILING')
+          AND EXISTS (
+              SELECT 1 FROM reconciliation_attempts ra
+              WHERE ra.order_id = orders.order_id AND ra.result = 'CONFLICT'
+          )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_reconciliation_attempts_order_result
+        ON reconciliation_attempts(order_id, result)
+        """,
+    ),
+)
+
+RESOLVE_IQOPTION_FALSE_ACCOUNT_CONFLICTS = Migration(
+    version=14,
+    name="0014_resolve_iqoption_false_account_conflicts",
+    statements=(
+        """
+        UPDATE orders
+        SET state = 'REJECTED',
+            resolution_source = 'FALSE_ACCOUNT_CONFLICT_AUTO_RESOLVED',
+            version = version + 1,
+            manual_resolution_id = 'migration-0014-auto',
+            manual_resolution_reason = (
+                'Conflito falso reparado automaticamente: alias de saldo da corretora'
+            ),
+            manual_resolution_operator = 'MIGRATION_0014',
+            manual_resolution_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'NOW'),
+            updated_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'NOW')
+        WHERE state = 'MANUAL_REVIEW'
+          AND broker = 'IQ_OPTION'
+          AND EXISTS (
+              SELECT 1 FROM reconciliation_attempts ra
+              WHERE ra.order_id = orders.order_id AND ra.reason_code = 'ACCOUNT_CONFLICT'
+          )
+        """,
+        """
+        UPDATE risk_reservations
+        SET state = 'RELEASED',
+            release_reason = 'MIGRATION_0014_FALSE_CONFLICT_RELEASED',
+            released_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'NOW'),
+            release_count = release_count + 1
+        WHERE state = 'ACTIVE'
+          AND intent_id IN (
+              SELECT intent_id FROM orders
+              WHERE resolution_source = 'FALSE_ACCOUNT_CONFLICT_AUTO_RESOLVED'
+          )
+        """,
+        """
+        UPDATE reconciliation_attempts
+        SET result = 'RESOLVED',
+            reason_code = 'FALSE_CONFLICT_REPAIRED'
+        WHERE reason_code = 'ACCOUNT_CONFLICT'
+          AND order_id IN (
+              SELECT order_id FROM orders
+              WHERE resolution_source = 'FALSE_ACCOUNT_CONFLICT_AUTO_RESOLVED'
+          )
+        """,
+    ),
+)
+
 MIGRATIONS = (
     INITIAL_STATE,
     OUTBOX_STATE_REASON,
@@ -517,6 +609,9 @@ MIGRATIONS = (
     IQOPTION_EXECUTION_STATE,
     OUTCOMES_V2_EVIDENCE,
     IQOPTION_SETTLEMENT_REPAIR_AUDIT,
+    ORDER_MANUAL_REVIEW_AND_VERSION,
+    ORDER_RECOVERY_AND_HISTORICAL_CONFLICT,
+    RESOLVE_IQOPTION_FALSE_ACCOUNT_CONFLICTS,
 )
 
 

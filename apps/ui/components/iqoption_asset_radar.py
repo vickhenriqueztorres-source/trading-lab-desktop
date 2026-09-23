@@ -25,6 +25,36 @@ from packages.protocol import UiIqOptionAssetRank
 class IqOptionAssetRadarWidget(QWidget):
     """Real-time Multi-Asset Scanner & Radar for IQ Option RSI strategy."""
 
+    @staticmethod
+    def _update_cell(
+        item: QTableWidgetItem | None,
+        text: str,
+        *,
+        color: str | None = None,
+        align: Qt.AlignmentFlag | None = None,
+        tooltip: str | None = None,
+    ) -> QTableWidgetItem:
+        if item is None:
+            item = QTableWidgetItem(text)
+            if color:
+                item.setForeground(QColor(color))
+            if align is not None:
+                item.setTextAlignment(align)
+            if tooltip:
+                item.setToolTip(tooltip)
+            return item
+        if item.text() != text:
+            item.setText(text)
+        if color:
+            qcolor = QColor(color)
+            if item.foreground().color() != qcolor:
+                item.setForeground(qcolor)
+        if align is not None and item.textAlignment() != align:
+            item.setTextAlignment(align)
+        if tooltip is not None and item.toolTip() != tooltip:
+            item.setToolTip(tooltip)
+        return item
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._ranking: tuple[UiIqOptionAssetRank, ...] = ()
@@ -60,16 +90,19 @@ class IqOptionAssetRadarWidget(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(28)
+        self._table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self._table.setAlternatingRowColors(True)
-        self._table.setMinimumHeight(220)
-        self._table.setMaximumHeight(320)
+        self._table.setMinimumHeight(180)
+        self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._table.setHorizontalHeaderLabels(
             [
                 t("radar.col_asset"),
                 t("radar.col_rsi"),
                 t("radar.col_signal"),
-                t("deriv.radar.state"),
+                t("radar.col_condition"),
                 t("radar.col_status"),
             ]
         )
@@ -103,10 +136,12 @@ class IqOptionAssetRadarWidget(QWidget):
             empty_item.setForeground(QColor(TEXT_MUTED))
             self._table.setItem(0, 0, empty_item)
             self._state.setText("STANDBY")
+            self._table.setFixedHeight(80)
             return
         self._table.clearSpans()
         self._ranking = tuple(ranking)
-        self._table.setRowCount(len(self._ranking))
+        if self._table.rowCount() != len(self._ranking):
+            self._table.setRowCount(len(self._ranking))
 
         triggered = next((item for item in self._ranking if item.status == "TRIGGERED"), None)
         selected = next((item for item in self._ranking if item.selected), None)
@@ -116,106 +151,135 @@ class IqOptionAssetRadarWidget(QWidget):
         )
         catalog_evidence = all(item.source == "IQOPTION_SESSION_CATALOG" for item in self._ranking)
 
+        target_obj = "StatusPillOnline"
         if catalog_evidence:
             self._state.setText(f"{t('radar.col_status')}: {len(self._ranking)}")
         elif no_evidence:
             self._state.setText(t("radar.monitoring"))
         elif triggered is not None:
             self._state.setText(f"{t('radar.col_signal')} · {triggered.display_name}")
-            self._state.setObjectName("StatusPillOnline")
         elif selected is not None and selected.symbol != "AUTO":
             self._state.setText(f"{t('radar.col_asset')}: {selected.display_name}")
-            self._state.setObjectName("StatusPillOnline")
         else:
             self._state.setText(t("radar.monitoring"))
-            self._state.setObjectName("StatusPillOnline")
 
-        self._state.style().unpolish(self._state)
-        self._state.style().polish(self._state)
+        if self._state.objectName() != target_obj:
+            self._state.setObjectName(target_obj)
+            self._state.style().unpolish(self._state)
+            self._state.style().polish(self._state)
 
-        for row, item in enumerate(self._ranking):
-            # Column 0: Symbol display name
-            sym_item = QTableWidgetItem(item.display_name)
-            sym_item.setToolTip(item.candidate_details)
-            sym_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self._table.setUpdatesEnabled(False)
+        try:
+            for row, item in enumerate(self._ranking):
+                # Column 0: Symbol display name
+                sym_item = self._update_cell(
+                    self._table.item(row, 0),
+                    item.display_name,
+                    align=Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    tooltip=item.candidate_details,
+                )
+                if self._table.item(row, 0) is not sym_item:
+                    self._table.setItem(row, 0, sym_item)
 
             # Column 1: RSI Value
             rsi_val = float(item.rsi) if item.rsi.replace(".", "", 1).isdigit() else 50.0
-            rsi_item = QTableWidgetItem(f"{item.rsi}")
-            rsi_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Color coding for RSI value
             if rsi_val <= 30.0:
-                rsi_item.setForeground(QColor(ACCENT_GREEN))
+                rsi_color = ACCENT_GREEN
             elif rsi_val >= 70.0:
-                rsi_item.setForeground(QColor(ACCENT_RED))
+                rsi_color = ACCENT_RED
             else:
-                rsi_item.setForeground(QColor(ACCENT_CYAN))
+                rsi_color = ACCENT_CYAN
+            rsi_item = self._update_cell(
+                self._table.item(row, 1),
+                f"{item.rsi}",
+                color=rsi_color,
+                align=Qt.AlignmentFlag.AlignCenter,
+            )
+            if self._table.item(row, 1) is not rsi_item:
+                self._table.setItem(row, 1, rsi_item)
 
             # Column 2: Direction / Signal
             if item.status == "WARMING_UP":
-                sig_text = "… AQUECENDO"
+                sig_text = "CALENTANDO"
                 sig_color = ACCENT_AMBER
             elif item.status == "DISCOVERY_ONLY":
-                sig_text = "◌ DETECTADO"
+                sig_text = "DETECTADO"
                 sig_color = TEXT_MUTED
             elif item.status == "TICK_VOLUME_UNAVAILABLE":
-                sig_text = "— SEM VOLUME"
+                sig_text = "SIN VOLUMEN"
                 sig_color = ACCENT_AMBER
             elif item.direction == "CALL":
-                sig_text = "🟢 COMPRA (CALL)"
-                sig_color = ACCENT_GREEN
+                if item.status == "TRIGGERED":
+                    sig_text = "▲ CALL"
+                    sig_color = ACCENT_GREEN
+                else:
+                    sig_text = "▲ CALL"
+                    sig_color = ACCENT_CYAN
             elif item.direction == "PUT":
-                sig_text = "🔴 VENDA (PUT)"
-                sig_color = ACCENT_RED
+                if item.status == "TRIGGERED":
+                    sig_text = "▼ PUT"
+                    sig_color = ACCENT_RED
+                else:
+                    sig_text = "▼ PUT"
+                    sig_color = ACCENT_AMBER
             else:
-                sig_text = "⚪ NEUTRO"
+                sig_text = "—"
                 sig_color = TEXT_MUTED
 
-            sig_item = QTableWidgetItem(sig_text)
-            sig_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            sig_item.setForeground(QColor(sig_color))
+            sig_item = self._update_cell(
+                self._table.item(row, 2),
+                sig_text,
+                color=sig_color,
+                align=Qt.AlignmentFlag.AlignCenter,
+            )
+            if self._table.item(row, 2) is not sig_item:
+                self._table.setItem(row, 2, sig_item)
 
             # Column 3: Condition / Zone
-            if item.status in {"READ_ONLY_PROBE", "CORRECT_CONFIGURATION", "MANUAL_REVIEW"}:
-                cond_text = item.candidate_details
-                cond_color = ACCENT_AMBER
-            elif item.condition in {
+            if item.status in {
+                "READ_ONLY_PROBE",
+                "CORRECT_CONFIGURATION",
+                "MANUAL_REVIEW",
+            } or item.condition in {
                 "NO_CANDIDATE",
                 "ASSET_MISMATCH",
-                "STATUS_NOT_ELIGIBLE",
+                "OUTSIDE_HOURS",
                 "DEMO_ONLY",
+                "STATUS_NOT_ELIGIBLE",
             }:
-                cond_text = "Sem estratégia validada para este ativo"
-                cond_color = TEXT_MUTED
+                cond_text = item.candidate_details
+                cond_color = ACCENT_AMBER
             elif item.condition == "OUTSIDE_HOURS":
-                cond_text = "Aguardando horário UTC da estratégia"
+                cond_text = "Esperando horario UTC de la estrategia"
                 cond_color = ACCENT_AMBER
             elif item.condition == "OVERSOLD":
-                cond_text = "SOBREVENDA (< 30)"
+                cond_text = "SOBREVENTA (< 30)"
                 cond_color = ACCENT_GREEN
             elif item.condition == "OVERBOUGHT":
                 cond_text = "SOBRECOMPRA (> 70)"
                 cond_color = ACCENT_RED
             elif item.condition.startswith("AQUECENDO "):
-                cond_text = item.condition.replace("AQUECENDO", "Aquecendo", 1)
+                cond_text = item.condition.replace("AQUECENDO", "Calentando", 1)
                 cond_color = ACCENT_AMBER
             elif item.condition in {"IQOPTION_ACTIVE_SUSPENDED", "IQOPTION_ACTIVE_UNAVAILABLE"}:
                 cond_text = (
-                    "Suspenso pela corretora · opções turbo"
+                    "Suspendido por el broker · opciones turbo"
                     if item.condition == "IQOPTION_ACTIVE_SUSPENDED"
-                    else "Ausente ou desativado no catálogo turbo"
+                    else "Ausente o desactivado en catálogo turbo"
                 )
                 cond_color = ACCENT_AMBER
             elif item.condition == "VOLUME_INDISPONIVEL":
-                cond_text = "Volume de ticks indisponível"
+                cond_text = "Volumen de ticks no disponible"
                 cond_color = ACCENT_AMBER
             elif item.condition == "OPEN_READ_ONLY":
-                cond_text = "Aberto · produto sem execução habilitada"
+                cond_text = "Abierto · producto sin ejecución habilitada"
                 cond_color = ACCENT_AMBER
             elif item.condition == "MARKET_CLOSED":
-                cond_text = "Fechado nesta sessão da corretora"
+                cond_text = "Cerrado en esta sesión del broker"
                 cond_color = TEXT_MUTED
+            elif item.condition in {"SEM_RESPOSTA", "TIMEOUT", "DATA_UNAVAILABLE"}:
+                cond_text = "Sem resposta da corretora"
+                cond_color = ACCENT_AMBER
             elif item.condition in {
                 "REGIME",
                 "TRIGGER",
@@ -225,16 +289,21 @@ class IqOptionAssetRadarWidget(QWidget):
                 "NO_SIGNAL",
                 "OUTSIDE_HOURS",
             }:
-                cond_text = f"SEM SINAL · {item.condition}"
+                cond_text = f"SIN SEÑAL · {item.condition}"
                 cond_color = TEXT_MUTED
             else:
                 cond_text = "ZONA NEUTRA (30 — 70)"
                 cond_color = TEXT_MUTED
 
-            cond_item = QTableWidgetItem(cond_text)
-            cond_item.setToolTip(item.candidate_details)
-            cond_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-            cond_item.setForeground(QColor(cond_color))
+            cond_item = self._update_cell(
+                self._table.item(row, 3),
+                cond_text,
+                color=cond_color,
+                align=Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                tooltip=item.candidate_details,
+            )
+            if self._table.item(row, 3) is not cond_item:
+                self._table.setItem(row, 3, cond_item)
 
             # Column 4: Status
             if item.status in {"READ_ONLY_PROBE", "CORRECT_CONFIGURATION", "MANUAL_REVIEW"}:
@@ -252,6 +321,9 @@ class IqOptionAssetRadarWidget(QWidget):
                 "STATUS_NOT_ELIGIBLE",
             }:
                 status_text = item.status
+                status_color = ACCENT_AMBER
+            elif item.status in {"TIMEOUT", "DATA_UNAVAILABLE", "SKIPPED"}:
+                status_text = "TIMEOUT"
                 status_color = ACCENT_AMBER
             elif item.status == "MARKET_UNAVAILABLE":
                 status_text = t("radar.status_market_unavailable")
@@ -275,16 +347,37 @@ class IqOptionAssetRadarWidget(QWidget):
                 status_text = t("radar.monitoring")
                 status_color = TEXT_MUTED
 
-            status_item = QTableWidgetItem(status_text)
-            status_item.setToolTip(item.candidate_details)
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            status_item.setForeground(QColor(status_color))
+            status_item = self._update_cell(
+                self._table.item(row, 4),
+                status_text,
+                color=status_color,
+                align=Qt.AlignmentFlag.AlignCenter,
+                tooltip=item.candidate_details,
+            )
+            if self._table.item(row, 4) is not status_item:
+                self._table.setItem(row, 4, status_item)
+        finally:
+            self._table.setUpdatesEnabled(True)
 
-            self._table.setItem(row, 0, sym_item)
-            self._table.setItem(row, 1, rsi_item)
-            self._table.setItem(row, 2, sig_item)
-            self._table.setItem(row, 3, cond_item)
-            self._table.setItem(row, 4, status_item)
+        header_h = self._table.horizontalHeader().height() or 28
+        total_h = header_h + len(self._ranking) * 28 + 6
+        self._table.setFixedHeight(min(max(total_h, 180), 420))
+
+    def retranslate(self) -> None:
+        self._title.setText(t("radar.title"))
+        self._subtitle.setText(t("radar.subtitle"))
+        self._notice.setText(t("radar.rsi_tip"))
+        self._table.setHorizontalHeaderLabels(
+            [
+                t("radar.col_asset"),
+                t("radar.col_rsi"),
+                t("radar.col_signal"),
+                t("radar.col_condition"),
+                t("radar.col_status"),
+            ]
+        )
+        if self._ranking:
+            self.update_ranking(self._ranking)
 
 
 __all__ = ["IqOptionAssetRadarWidget"]

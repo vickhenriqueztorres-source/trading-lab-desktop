@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dualtrade-desktop"
-version = "1.9.11"
+version = "1.9.18"
 description = "DualTrade Desktop resilient local trading core"
 requires-python = ">=3.13"
 dependencies = [
@@ -19,6 +19,16 @@ dev = [
     "pytest==8.4.1",
     "ruff==0.15.22",
 ]
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary,pool]>=3.2",
+    "pydantic>=2.7",
+    "jinja2>=3.1",
+    "itsdangerous>=2.2",
+    "httpx>=0.27",
+    "python-multipart>=0.0.12",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -27,7 +37,9 @@ markers = [
     "external_deriv_public: opt-in smoke tests against Deriv public read-only API",
     "external_deriv_demo: opt-in smoke tests against a Deriv demo read-only session",
     "slow: bounded local stress or soak test",
+    "integration: end-to-end integration tests against real or staging services",
 ]
+
 
 [tool.ruff]
 line-length = 100

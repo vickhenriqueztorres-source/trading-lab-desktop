@@ -130,7 +130,7 @@ def test_unavailable_radar_is_not_neutral_or_triggered():
             )
         ]
     )
-    assert "Suspenso pela corretora" in widget._table.item(0, 3).text()
+    assert "Suspendido por el broker" in widget._table.item(0, 3).text()
     assert widget._table.item(0, 4).text() == t("radar.status_market_unavailable")
     widget.close()
     assert app is not None

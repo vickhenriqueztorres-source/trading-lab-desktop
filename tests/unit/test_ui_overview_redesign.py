@@ -210,3 +210,94 @@ def test_overview_page_instantiation_and_projection() -> None:
         assert "Market Radar" in page._radar_title.text()
     finally:
         I18nManager.set_language("es")
+
+
+def test_overview_page_separated_broker_stats_and_compact_mode() -> None:
+    _get_qapp()
+    I18nManager.set_language("es")
+    page = OverviewPage()
+
+    mock_controller = MagicMock()
+    mock_controller.connected = True
+
+    # Check official logos loaded on broker cards
+    assert page._lbl_deriv_logo.pixmap() is not None
+    assert not page._lbl_deriv_logo.pixmap().isNull()
+    assert page._lbl_iq_logo.pixmap() is not None
+    assert not page._lbl_iq_logo.pixmap().isNull()
+
+    # Test compact mode scaling
+    page.set_compact_mode(True)
+    assert page._content_layout.contentsMargins().left() == 12
+    assert page._hero.minimumHeight() == 105
+
+    page.set_compact_mode(False)
+    assert page._content_layout.contentsMargins().left() == 24
+    assert page._hero.minimumHeight() == 125
+
+    # Create broker cards with unlimited operations (> 50 trades)
+    b_deriv = BrokerCardStatus(
+        "DERIV",
+        UiAccountMode.PRACTICE,
+        True,
+        1500000,
+        "USD",
+        True,
+        "Demo",
+        15,
+        total_trades=75,
+        wins=50,
+        losses=25,
+        realized_pnl_minor_units=15000,
+    )
+    b_iq = BrokerCardStatus(
+        "IQOPTION",
+        UiAccountMode.PRACTICE,
+        True,
+        2800000,
+        "USD",
+        True,
+        "Practice",
+        10,
+        total_trades=120,
+        wins=80,
+        losses=40,
+        realized_pnl_minor_units=32000,
+    )
+
+    snapshot = UiProjectionSnapshot(
+        global_state=UiGlobalState.READY,
+        safe_stop_active=False,
+        health_gates=(HealthGateStatus("HG_GLOBAL", True, None, "Operational"),),
+        broker_cards=(b_deriv, b_iq),
+        active_orders=(),
+        daily_pnl_minor_units=47000,
+        daily_pnl_currency="USD",
+        global_exposure_minor_units=0,
+        global_max_exposure_minor_units=50000,
+        consecutive_losses=0,
+        risk_state="NORMAL",
+        deriv_bot_armed=False,
+    )
+
+    page.update_projection(snapshot, mock_controller)
+
+    # Deriv separated statistics verification
+    assert page._lbl_deriv_trades_val.text() == "75"
+    assert page._lbl_deriv_wins_val.text() == "50"
+    assert page._lbl_deriv_losses_val.text() == "25"
+    assert page._lbl_deriv_winrate_val.text() == "66.7%"
+    assert "+USD 150.00" in page._lbl_deriv_pnl_val.text()
+
+    # IQ Option separated statistics verification
+    assert page._lbl_iq_trades_val.text() == "120"
+    assert page._lbl_iq_wins_val.text() == "80"
+    assert page._lbl_iq_losses_val.text() == "40"
+    assert page._lbl_iq_winrate_val.text() == "66.7%"
+    assert "+USD 320.00" in page._lbl_iq_pnl_val.text()
+
+    # Consolidated KPIs: total trades should reflect full sum 75 + 120 = 195 (not limited to 50!)
+    assert page._kpi_trades._lbl_value.text() == "195"
+    assert page._kpi_wins._lbl_value.text() == "130"
+    assert page._kpi_losses._lbl_value.text() == "65"
+    assert "+USD 470.00" in page._kpi_profit._lbl_value.text()

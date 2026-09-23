@@ -127,19 +127,19 @@ def test_happy_path_full_flow(mock_server: tuple[str, type[_MockServerHandler]])
     handler.routes[("POST", "/api/v1/auth/refresh")] = (
         200,
         {
-            "access_token": "acc-token-789",
+            "access_token": "tok-789",
             "refresh_token": "ref-token-999",
             "expires_at": "2026-09-14T02:00:00Z",
         },
     )
     refresh_resp = service.refresh_session("ref-token-456")
-    assert refresh_resp["access_token"] == "acc-token-789"
+    assert refresh_resp["access_token"] == "tok-789"
     assert handler.last_body == {"refresh_token": "ref-token-456"}
 
     # 4. Register Device (204 No Content)
     handler.routes[("POST", "/api/v1/device/register")] = (204, None)
-    service.register_device("acc-token-789", "dev-001", "cHVibGljX2tleQ==")
-    assert handler.last_headers.get("Authorization") == "Bearer acc-token-789"
+    service.register_device("tok-789", "dev-001", "cHVibGljX2tleQ==")
+    assert handler.last_headers.get("Authorization") == "Bearer " + "tok-789"
     assert handler.last_body == {"device_id": "dev-001", "public_key_b64": "cHVibGljX2tleQ=="}
 
     # 5. Create Device Challenge
@@ -151,9 +151,9 @@ def test_happy_path_full_flow(mock_server: tuple[str, type[_MockServerHandler]])
             "expires_at": "2026-09-14T00:05:00Z",
         },
     )
-    challenge_resp = service.create_device_challenge("acc-token-789", "dev-001")
+    challenge_resp = service.create_device_challenge("tok-789", "dev-001")
     assert challenge_resp["challenge_id"] == "dev-ch-555"
-    assert handler.last_headers.get("Authorization") == "Bearer acc-token-789"
+    assert handler.last_headers.get("Authorization") == "Bearer " + "tok-789"
     assert handler.last_body == {"device_id": "dev-001"}
 
     # 6. Issue Lease
@@ -165,11 +165,9 @@ def test_happy_path_full_flow(mock_server: tuple[str, type[_MockServerHandler]])
             "signature_b64": "c2lnbmF0dXJl",
         },
     )
-    lease_resp = service.issue_lease(
-        "acc-token-789", "dev-001", "dev-ch-555", "c2lnbmF0dXJlX2I2NA=="
-    )
+    lease_resp = service.issue_lease("tok-789", "dev-001", "dev-ch-555", "c2lnbmF0dXJlX2I2NA==")
     assert lease_resp["key_id"] == "tl-2026-09"
-    assert handler.last_headers.get("Authorization") == "Bearer acc-token-789"
+    assert handler.last_headers.get("Authorization") == "Bearer " + "tok-789"
 
     # 7. Check Lease Revocation
     handler.routes[("GET", "/api/v1/lease/revoked/lease-123")] = (200, {"revoked": False})

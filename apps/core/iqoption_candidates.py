@@ -8,7 +8,16 @@ from decimal import Decimal
 from typing import Literal
 
 from apps.core.families import is_within_trading_hours
-from apps.core.iqoption_risk_config import IQOPTION_RSI_STRATEGY_ID
+from apps.core.iqoption_risk_config import (
+    IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+    IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+    IQOPTION_HACK_CHINO_STRATEGY_ID,
+    IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+    IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+    IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+    IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+    IQOPTION_RSI_STRATEGY_ID,
+)
 from apps.core.manifest_catalog import (
     DynamicManifestCatalog,
     StrategyCatalogEntry,
@@ -17,7 +26,14 @@ from apps.core.manifest_catalog import (
 from packages.domain.models import Direction
 
 TIMEFRAMES = {"M1": 60, "M5": 300, "M15": 900}
+HACK_CHINO_LABEL = "Hack Chino · 5 Modelos Probabilísticos (M1 · Exp. 1m)"
 RSI_DEMO_LABEL = "RSI 30/70 (não validado · apenas Demo)"
+LIQUIDITY_GAP_LABEL = "Liquidity Gap · Varredura de Extremo (M1 · Exp. 2m)"
+PATTERN_REVERSAL_LABEL = "Pattern Reversal · Engolfo de 2 Velas (M1 · Exp. 1m)"
+EXTREME_REJECTION_LABEL = "Varredura e Rejeição de Extremo (M1 · Exp. 1m)"
+MICROTREND_SCALPER_LABEL = "Microtendência 3 Velas + RSI(5) (M1 · Exp. 1m)"
+HOUR_OF_DAY_LABEL = "Hour of Day · Probabilidade Horária (M1 · Exp. 1m)"
+BODY_GAP_FILL_LABEL = "Body Gap Fill · Separação ATR (M1 · Exp. 1m)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +42,23 @@ class Candidate:
     entry: StrategyCatalogEntry
     timeframe_seconds: int
     warmup_required: int
+
+
+def local_hack_chino_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Hack Chino probabilistic ensemble candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_HACK_CHINO_STRATEGY_ID,
+        family="local_hack_chino",
+        display_name_pt=HACK_CHINO_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="approved",
+        warmup_required=45,
+    )
 
 
 def local_rsi_entry(symbol: str) -> StrategyCatalogEntry:
@@ -42,6 +75,108 @@ def local_rsi_entry(symbol: str) -> StrategyCatalogEntry:
         validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
         status="demo_only",
         warmup_required=15,
+    )
+
+
+def local_liquidity_gap_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Liquidity Gap extreme sweep candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+        family="local_liquidity_gap",
+        display_name_pt=LIQUIDITY_GAP_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="demo_only",
+        warmup_required=2,
+    )
+
+
+def local_pattern_reversal_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Pattern Reversal engulfing candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+        family="local_pattern_reversal",
+        display_name_pt=PATTERN_REVERSAL_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="demo_only",
+        warmup_required=2,
+    )
+
+
+def local_extreme_rejection_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Extreme Rejection liquidity sweep candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+        family="local_extreme_rejection",
+        display_name_pt=EXTREME_REJECTION_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="approved",
+        warmup_required=35,
+    )
+
+
+def local_microtrend_scalper_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Microtrend Scalper 3-candle + RSI(5) candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+        family="local_microtrend_scalper",
+        display_name_pt=MICROTREND_SCALPER_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="approved",
+        warmup_required=35,
+    )
+
+
+def local_hour_of_day_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Hour of Day statistical candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+        family="local_hour_of_day",
+        display_name_pt=HOUR_OF_DAY_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="demo_only",
+        warmup_required=60,
+    )
+
+
+def local_body_gap_fill_entry(symbol: str) -> StrategyCatalogEntry:
+    """Explicit Body Gap Fill ATR separation candidate recipe."""
+    zero = Decimal(0)
+    return StrategyCatalogEntry(
+        key=IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+        family="local_body_gap_fill",
+        display_name_pt=BODY_GAP_FILL_LABEL,
+        asset=symbol,
+        timeframe="M1",
+        hours_utc=(0, 24),
+        params={},
+        validated=ValidatedStats(zero, zero, zero, zero, zero, 0, zero, zero),
+        status="demo_only",
+        warmup_required=16,
     )
 
 
@@ -66,13 +201,25 @@ def resolve_candidates(
     demo = account_type.upper() in {"DEMO", "PRACTICE"}
     if account_type.upper() not in {"DEMO", "PRACTICE", "REAL", "LIVE"}:
         return [], {active_strategy_key or "": "ACCOUNT_UNCONFIRMED"}
-    if mode == "SINGLE" and active_strategy_key == IQOPTION_RSI_STRATEGY_ID:
-        if not demo:
-            return [], {IQOPTION_RSI_STRATEGY_ID: "DEMO_ONLY"}
+
+    local_generators = {
+        IQOPTION_HACK_CHINO_STRATEGY_ID: (local_hack_chino_entry, 45),
+        IQOPTION_RSI_STRATEGY_ID: (local_rsi_entry, 15),
+        IQOPTION_LIQUIDITY_GAP_STRATEGY_ID: (local_liquidity_gap_entry, 2),
+        IQOPTION_PATTERN_REVERSAL_STRATEGY_ID: (local_pattern_reversal_entry, 2),
+        IQOPTION_EXTREME_REJECTION_STRATEGY_ID: (local_extreme_rejection_entry, 35),
+        IQOPTION_MICROTREND_SCALPER_STRATEGY_ID: (local_microtrend_scalper_entry, 35),
+        IQOPTION_HOUR_OF_DAY_STRATEGY_ID: (local_hour_of_day_entry, 60),
+        IQOPTION_BODY_GAP_FILL_STRATEGY_ID: (local_body_gap_fill_entry, 16),
+    }
+    if mode == "SINGLE" and active_strategy_key in local_generators:
+        gen_fn, warmup = local_generators[active_strategy_key]
+        entry = gen_fn(symbol)
+        if not demo and entry.status == "demo_only":
+            return [], {active_strategy_key: "DEMO_ONLY"}
         if not symbol or symbol == "AUTO":
-            return [], {IQOPTION_RSI_STRATEGY_ID: "ASSET_MISMATCH"}
-        entry = local_rsi_entry(symbol)
-        return [Candidate(entry.key, entry, 60, 15)], {}
+            return [], {active_strategy_key: "ASSET_MISMATCH"}
+        return [Candidate(entry.key, entry, 60, warmup)], {}
 
     active = {} if catalog is None else catalog.active_strategies
     keys = [active_strategy_key or ""] if mode == "SINGLE" else sorted(active)

@@ -147,6 +147,19 @@ class CoreRuntime:
             raise RuntimeError("Core runtime has not run reconciliation")
         return self._reconciliation_report
 
+    @property
+    def reconciliation_scheduler(self) -> ReconciliationScheduler | None:
+        return self._reconciliation_scheduler
+
+    @property
+    def reconciliation_coordinator(self) -> ReconciliationCoordinator | None:
+        return self._reconciliation_coordinator
+
+    def trigger_reconciliation(self, reason: str = "external") -> None:
+        scheduler = self._reconciliation_scheduler
+        if scheduler is not None:
+            scheduler.trigger(reason)
+
     def start(self) -> RecoveryReport:
         if self._writer is not None:
             return self.recovery_report

@@ -1,0 +1,26 @@
+app = "trading-lab-license-server"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/healthz"
+
+[env]
+  ENVIRONMENT = "production"
+  LICENSE_SIGNING_KEY_ID = "tl-2026-09"
+  MAIL_PROVIDER = "resend"
+  MAIL_FROM = "Trading Lab <acceso@tradinglab.app>"
+  SUPPORT_CONTACT_URL = "https://t.me/tradinglab_support"

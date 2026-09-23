@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -28,11 +29,11 @@ class IqOptionCandleOutcome(StrEnum):
     TIE = "TIE"
 
 
-def next_binary_expiry(value: datetime) -> datetime:
-    """Return the next M1 expiry for an entry admitted before second 30."""
+def next_binary_expiry(value: datetime, duration_minutes: int = 1) -> datetime:
+    """Return the next expiry for an entry admitted before second 30."""
 
     value = value.astimezone(UTC)
-    return value.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return value.replace(second=0, microsecond=0) + timedelta(minutes=max(1, duration_minutes))
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,7 @@ class IqOptionMartingaleCycle:
     recovery_pending: bool = False
     recovery_not_before_utc: datetime | None = None
     recovery_deadline_utc: datetime | None = None
+    last_entry_price: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.cycle_id or not self.strategy_id or not self.symbol or not self.last_order_id:
@@ -73,6 +75,8 @@ class IqOptionMartingaleCycle:
         if not 0 < self.last_stake_minor_units <= self.max_stake_minor_units:
             raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
         if self.cumulative_loss_minor_units < 0:
+            raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
+        if self.last_entry_price is not None and self.last_entry_price <= 0:
             raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
         self._require_utc(self.target_candle_close_utc)
         if (
@@ -118,6 +122,7 @@ class IqOptionMartingaleCycle:
         direction: Direction,
         order_id: str,
         target_candle_close_utc: datetime,
+        entry_price: Decimal | None = None,
     ) -> IqOptionMartingaleCycle:
         if not config.martingale_enabled:
             raise ValueError("IQOPTION_MARTINGALE_DISABLED")
@@ -136,6 +141,7 @@ class IqOptionMartingaleCycle:
             last_order_id=order_id,
             last_stake_minor_units=config.stake_minor_units,
             target_candle_close_utc=target_candle_close_utc.astimezone(UTC),
+            last_entry_price=entry_price,
         )
 
     def expected_stake_minor_units(self, config: IqOptionRiskConfig) -> int:
@@ -164,6 +170,7 @@ class IqOptionMartingaleCycle:
         *,
         stake_minor_units: int,
         target_candle_close_utc: datetime,
+        entry_price: Decimal | None = None,
     ) -> IqOptionMartingaleCycle:
         if not self.recovery_pending or self.step <= 0 or not order_id:
             raise ValueError("IQOPTION_MARTINGALE_RECOVERY_NOT_PENDING")
@@ -177,13 +184,20 @@ class IqOptionMartingaleCycle:
             recovery_pending=False,
             recovery_not_before_utc=None,
             recovery_deadline_utc=None,
+            last_entry_price=entry_price,
         )
 
     @staticmethod
-    def outcome_for_candle(direction: Direction, candle: MarketCandle) -> IqOptionCandleOutcome:
-        if candle.close == candle.open:
+    def outcome_for_candle(
+        direction: Direction,
+        candle: MarketCandle,
+        *,
+        entry_price: Decimal | None = None,
+    ) -> IqOptionCandleOutcome:
+        reference = candle.open if entry_price is None else entry_price
+        if candle.close == reference:
             return IqOptionCandleOutcome.TIE
-        moved_up = candle.close > candle.open
+        moved_up = candle.close > reference
         wins = moved_up if direction is Direction.CALL else not moved_up
         return IqOptionCandleOutcome.WIN if wins else IqOptionCandleOutcome.LOSS
 
@@ -204,7 +218,12 @@ class IqOptionMartingaleCycle:
         encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
-    def after_candle_close(self, candle: MarketCandle) -> IqOptionMartingaleCycle | None:
+    def after_candle_close(
+        self,
+        candle: MarketCandle,
+        *,
+        entry_price: Decimal | None = None,
+    ) -> IqOptionMartingaleCycle | None:
         if (
             candle.broker is not Broker.IQ_OPTION
             or candle.broker_symbol != self.symbol
@@ -215,7 +234,8 @@ class IqOptionMartingaleCycle:
             raise ValueError("IQOPTION_MARTINGALE_TARGET_CANDLE_INVALID")
         if self.technical_outcome is not IqOptionCandleOutcome.PENDING:
             return self
-        outcome = self.outcome_for_candle(self.direction, candle)
+        effective_entry = entry_price if entry_price is not None else self.last_entry_price
+        outcome = self.outcome_for_candle(self.direction, candle, entry_price=effective_entry)
         evidence_id = self.evidence_id_for_candle(candle)
         if outcome is not IqOptionCandleOutcome.LOSS or self.step >= self.max_steps:
             return None
@@ -263,6 +283,9 @@ class IqOptionMartingaleCycle:
                 if self.recovery_deadline_utc is None
                 else self.recovery_deadline_utc.isoformat()
             ),
+            "last_entry_price": (
+                str(self.last_entry_price) if self.last_entry_price is not None else None
+            ),
         }
 
     @classmethod
@@ -289,7 +312,10 @@ class IqOptionMartingaleCycle:
             "recovery_not_before_utc",
             "recovery_deadline_utc",
         }
-        if set(payload) != expected or payload.get("payload_version") != 2:
+        keys = set(payload)
+        if (keys != expected and keys != (expected | {"last_entry_price"})) or payload.get(
+            "payload_version"
+        ) != 2:
             raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
         integer_fields = {
             "payload_version",
@@ -329,6 +355,13 @@ class IqOptionMartingaleCycle:
                 raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
             return datetime.fromisoformat(value).astimezone(UTC)
 
+        raw_price = payload.get("last_entry_price")
+        entry_price: Decimal | None = None
+        if raw_price is not None:
+            if not isinstance(raw_price, str):
+                raise ValueError("IQOPTION_MARTINGALE_STATE_INVALID")
+            entry_price = Decimal(raw_price)
+
         return cls(
             cycle_id=str(payload["cycle_id"]),
             strategy_id=str(payload["strategy_id"]),
@@ -351,6 +384,7 @@ class IqOptionMartingaleCycle:
             recovery_pending=bool(payload["recovery_pending"]),
             recovery_not_before_utc=optional_datetime("recovery_not_before_utc"),
             recovery_deadline_utc=optional_datetime("recovery_deadline_utc"),
+            last_entry_price=entry_price,
         )
 
 

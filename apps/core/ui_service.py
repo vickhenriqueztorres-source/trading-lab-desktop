@@ -7,6 +7,7 @@ import inspect
 import secrets
 import socket
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -38,6 +39,8 @@ from packages.protocol import (
     ProtocolError,
     ProtocolErrorCode,
     UiAccountMode,
+    UiAuthActivateKeyAck,
+    UiAuthActivateKeyCommand,
     UiAuthSignOutAck,
     UiAuthSignOutCommand,
     UiAuthStartLoginAck,
@@ -68,6 +71,8 @@ from packages.protocol import (
     UiMultiStrategyMetrics,
     UiOperationalLogEntry,
     UiProjectionSnapshot,
+    UiResolveOrderAck,
+    UiResolveOrderCommand,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
     UiUpdateIqOptionRiskConfigCommand,
@@ -95,31 +100,42 @@ _RISK_LOCK_REASONS = {
 _RECONCILING_REASONS = {"HG_RECONCILIATION_REQUIRED"}
 _UI_LOG_FIELD_ALLOWLIST = frozenset(
     {
+        "amount_minor",
         "armed",
         "attempt",
         "broker",
         "component",
         "count",
         "cycle_id",
+        "direction",
         "duration_ms",
         "evidence",
         "generation",
         "latency_ms",
-        "amount_minor",
         "market",
         "message_type",
         "mode",
         "operation",
         "order_id",
+        "payout",
+        "payout_age_ms",
+        "payout_allowed",
+        "payout_min",
+        "phase",
         "process_id",
         "product",
+        "reason",
+        "reason_code",
         "scope",
+        "stage_rejected",
         "state",
         "status",
         "step",
         "strategy_id",
+        "strategy_key",
         "symbol",
         "target_close_utc",
+        "timeframe",
         "worker_type",
     }
 )
@@ -413,6 +429,18 @@ class CoreUiProjectionBuilder:
         self._iqoption_bot_reason = iqoption_bot_reason
         self._iqoption_asset_ranking = iqoption_asset_ranking
         self._iqoption_execution_metrics = iqoption_execution_metrics
+        self._cache_lock = threading.Lock()
+        self._cached_db_snapshot_mono = 0.0
+        self._db_cache_ttl_seconds = 1.5
+        self._cached_orders: tuple[OrderSummary, ...] = ()
+        self._cached_session_started_at: datetime | None = None
+        self._cached_pnl_by_currency: dict[str, int] = {}
+        self._cached_stats_by_broker: dict[str, dict[str, Any]] = {}
+        self._cached_iq_m_stats: dict[str, Any] = {}
+
+    def invalidate_db_cache(self) -> None:
+        with self._cache_lock:
+            self._cached_db_snapshot_mono = 0.0
 
     def trading_readiness(self) -> TradingReadinessSnapshot:
         gate = self._runtime.health_gate.get_snapshot()
@@ -492,10 +520,51 @@ class CoreUiProjectionBuilder:
 
     def snapshot(self) -> UiProjectionSnapshot:
         self._runtime.risk_ledger.refresh_digit_health_gate(self._runtime.health_gate)
-        session_started_at = self._runtime.reader.digit_test_session_started_at()
         gate_snapshot = self._runtime.health_gate.get_snapshot()
         global_gate = gate_snapshot.global_state
-        orders = tuple(self._orders(since_utc=session_started_at))
+
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cache_valid = self._cached_db_snapshot_mono > 0 and (
+                now_mono - self._cached_db_snapshot_mono < self._db_cache_ttl_seconds
+            )
+            if not cache_valid:
+                session_started_at = self._runtime.reader.digit_test_session_started_at()
+                deriv_orders = self._orders(since_utc=session_started_at)
+                iq_recent_orders = [
+                    o for o in self._orders(since_utc=None) if "IQ" in o.broker.upper()
+                ]
+                all_orders_map = {o.order_id: o for o in deriv_orders}
+                for o in iq_recent_orders:
+                    all_orders_map[o.order_id] = o
+                sorted_orders = sorted(
+                    all_orders_map.values(), key=lambda x: x.created_at_utc, reverse=True
+                )
+                orders = tuple(sorted_orders[:50])
+                day_started_at = datetime.now(UTC).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                pnl_by_currency = self._runtime.reader.daily_realized_pnl_by_currency(
+                    since_utc=max(day_started_at, session_started_at or day_started_at)
+                )
+                stats_by_broker = self._runtime.reader.broker_trading_statistics(
+                    since_utc=session_started_at
+                )
+                iq_m_stats = self._runtime.reader.iqoption_martingale_statistics()
+
+                self._cached_db_snapshot_mono = now_mono
+                self._cached_orders = orders
+                self._cached_session_started_at = session_started_at
+                self._cached_pnl_by_currency = pnl_by_currency
+                self._cached_stats_by_broker = stats_by_broker
+                self._cached_iq_m_stats = iq_m_stats
+            else:
+                orders = self._cached_orders
+                session_started_at = self._cached_session_started_at
+                pnl_by_currency = self._cached_pnl_by_currency
+                stats_by_broker = self._cached_stats_by_broker
+                iq_m_stats = self._cached_iq_m_stats
+
         safe_stop = self._runtime.safe_stop_active
         global_state = self._global_state(
             gate_open=global_gate.is_open,
@@ -503,10 +572,18 @@ class CoreUiProjectionBuilder:
             safe_stop=safe_stop,
             orders=orders,
         )
-        day_started_at = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        pnl_by_currency = self._runtime.reader.daily_realized_pnl_by_currency(
-            since_utc=max(day_started_at, session_started_at or day_started_at)
-        )
+        deriv_stats = stats_by_broker.get("DERIV", {})
+        if not iq_m_stats.get("total_cycles"):
+            iq_stats_flat = stats_by_broker.get("IQOPTION") or stats_by_broker.get("IQ_OPTION", {})
+            iq_trades = iq_stats_flat.get("total_trades", 0)
+            iq_wins = iq_stats_flat.get("wins", 0)
+            iq_losses = iq_stats_flat.get("losses", 0)
+            iq_net_profit = iq_stats_flat.get("net_profit_minor", 0)
+        else:
+            iq_trades = iq_m_stats.get("total_cycles", 0)
+            iq_wins = iq_m_stats.get("total_wins", 0)
+            iq_losses = iq_m_stats.get("losses_g2", 0)
+            iq_net_profit = iq_m_stats.get("net_profit_minor", 0)
         if len(pnl_by_currency) == 1:
             pnl_currency, pnl_minor = next(iter(pnl_by_currency.items()))
         else:
@@ -647,6 +724,10 @@ class CoreUiProjectionBuilder:
                 clock_latency_ms=(
                     None if deriv_clock is None else deriv_clock.round_trip_milliseconds
                 ),
+                total_trades=deriv_stats.get("total_trades", 0),
+                wins=deriv_stats.get("wins", 0),
+                losses=deriv_stats.get("losses", 0),
+                realized_pnl_minor_units=deriv_stats.get("net_profit_minor", 0),
             ),
             BrokerCardStatus(
                 broker="IQOPTION",
@@ -678,6 +759,10 @@ class CoreUiProjectionBuilder:
                     None if iq_balance_age is None else max(0, int(iq_balance_age))
                 ),
                 balance_retry_count=(None if retry_count is None else max(0, retry_count)),
+                total_trades=iq_trades,
+                wins=iq_wins,
+                losses=iq_losses,
+                realized_pnl_minor_units=iq_net_profit,
             ),
         ]
 
@@ -908,10 +993,16 @@ class CoreUiProjectionBuilder:
                 last_attempt = datetime.fromisoformat(str(last_attempt_raw))
                 retry_delay = min(900, 5 * (2 ** min(attempt_count, 16)))
                 next_due = last_attempt + timedelta(seconds=retry_delay)
+            raw_broker = str(row["broker"]).upper()
+            canonical_broker = (
+                "IQOPTION"
+                if "IQ" in raw_broker
+                else ("DERIV" if "DERIV" in raw_broker else str(row["broker"]))
+            )
             result.append(
                 OrderSummary(
                     order_id=str(row["order_id"]),
-                    broker=str(row["broker"]),
+                    broker=canonical_broker,
                     symbol=str(row["symbol"]),
                     direction=str(row["direction"]),
                     amount_minor_units=int(row["amount_minor"]),
@@ -991,6 +1082,7 @@ class CoreUiProjectionService:
         ) = None,
         iqoption_bot_control: Callable[[bool], tuple[bool, str]] | None = None,
         auth_supervisor: Any = None,
+        runtime: CoreRuntime | None = None,
         *,
         request_timeout: float = 2.0,
     ) -> None:
@@ -1015,6 +1107,17 @@ class CoreUiProjectionService:
         self._iqoption_risk_config_update = iqoption_risk_config_update
         self._iqoption_bot_control = iqoption_bot_control
         self._auth_supervisor = auth_supervisor
+        self._runtime = runtime
+        if self._runtime is None:
+            try:
+                import sys
+
+                frame = sys._getframe(1)
+                lifecycle = frame.f_locals.get("self")
+                if hasattr(lifecycle, "_runtime"):
+                    self._runtime = getattr(lifecycle, "_runtime", None)
+            except Exception:
+                pass
         if self._auth_supervisor is None:
             try:
                 import sys
@@ -1085,7 +1188,7 @@ class CoreUiProjectionService:
                 try:
                     self._validate_request(request)
                     response = self._dispatch_cached(request)
-                except (ProtocolError, RuntimeError, ValueError):
+                except Exception:
                     response = _error(request, ProtocolErrorCode.UI_IPC_INVALID_MESSAGE.value)
                 try:
                     transport.send(response)
@@ -1438,6 +1541,65 @@ class CoreUiProjectionService:
                         reason=getattr(exc, "code", getattr(exc, "reason_code", str(exc))),
                     )
             return _response(request, MessageType.UI_AUTH_SUBMIT_OTP_ACK, otp_ack.to_payload())
+        if request.message_type is MessageType.UI_AUTH_ACTIVATE_KEY_COMMAND:
+            auth_key_cmd = UiAuthActivateKeyCommand.from_payload(request.payload)
+            auth_sup = self._get_auth_supervisor()
+            if auth_sup is None:
+                activate_ack = UiAuthActivateKeyAck(
+                    ok=False, status="UNAVAILABLE", reason="AUTH_SERVICE_UNAVAILABLE"
+                )
+            else:
+                try:
+                    resp = auth_sup.activate_product_key(auth_key_cmd.product_key)
+                    auth_dec = auth_sup.authorization("DERIV", "strategy-test")
+                    user_preview = getattr(resp, "user_id_preview", "") or ""
+                    expiry = getattr(auth_dec, "expires_at", None)
+                    iso_fn = getattr(expiry, "isoformat", None)
+                    iso_res = iso_fn() if callable(iso_fn) else None
+                    expiry_str = iso_res if isinstance(iso_res, str) else None
+                    raw_reason = getattr(auth_dec, "reason", None)
+                    val_reason = getattr(raw_reason, "value", None)
+                    reason_val = (
+                        str(val_reason)
+                        if isinstance(val_reason, str)
+                        else str(raw_reason)
+                        if isinstance(raw_reason, str)
+                        else "OK"
+                    )
+                    raw_status = getattr(resp, "status", None)
+                    val_status = getattr(raw_status, "value", None)
+                    status_val = (
+                        str(val_status)
+                        if isinstance(val_status, str)
+                        else str(raw_status)
+                        if isinstance(raw_status, str)
+                        else "AUTHORIZED"
+                    )
+                    raw_dev_id = getattr(auth_sup.status(), "device_id", None)
+                    dev_id = str(raw_dev_id) if isinstance(raw_dev_id, str) else None
+                    activate_ack = UiAuthActivateKeyAck(
+                        ok=bool(getattr(auth_dec, "new_entries_allowed", True)),
+                        status=status_val,
+                        user_id_preview=user_preview,
+                        plan=(
+                            "PRO"
+                            if "REAL" in reason_val
+                            or getattr(auth_dec, "new_entries_allowed", False)
+                            else "PHASE0_PRACTICE"
+                        ),
+                        expires_at=expiry_str,
+                        device_id=dev_id,
+                        reason=reason_val,
+                    )
+                except Exception as exc:
+                    activate_ack = UiAuthActivateKeyAck(
+                        ok=False,
+                        status="ERROR",
+                        reason=getattr(exc, "code", getattr(exc, "reason_code", str(exc))),
+                    )
+            return _response(
+                request, MessageType.UI_AUTH_ACTIVATE_KEY_ACK, activate_ack.to_payload()
+            )
         if request.message_type is MessageType.UI_AUTH_STATUS_REQUEST:
             UiAuthStatusRequest.from_payload(request.payload)
             auth_sup = self._get_auth_supervisor()
@@ -1503,6 +1665,118 @@ class CoreUiProjectionService:
                 except Exception as exc:
                     signout_ack = UiAuthSignOutAck(ok=False, reason=str(exc))
             return _response(request, MessageType.UI_AUTH_SIGN_OUT_ACK, signout_ack.to_payload())
+        if request.message_type is MessageType.UI_RESOLVE_ORDER_COMMAND:
+            resolve_cmd = UiResolveOrderCommand.from_payload(request.payload)
+            if (
+                self._runtime is None
+                or getattr(self._runtime, "writer", None) is None
+                or getattr(self._runtime, "reader", None) is None
+            ):
+                resolve_ack = UiResolveOrderAck(
+                    accepted=False,
+                    order_id=resolve_cmd.order_id,
+                    new_state="UNKNOWN",
+                    reason_code="CORE_RUNTIME_UNAVAILABLE",
+                )
+                return _response(
+                    request,
+                    MessageType.UI_RESOLVE_ORDER_ACK,
+                    resolve_ack.to_payload(),
+                )
+
+            from apps.core.recovery_command import (
+                execute_confirm_not_executed,
+                execute_manual_settlement,
+            )
+
+            writer = self._runtime.writer
+            reader = self._runtime.reader
+
+            if resolve_cmd.action == "QUERY_AND_RECOVER":
+                reconciler = getattr(self._runtime, "reconciliation_coordinator", None)
+                scheduler = getattr(self._runtime, "reconciliation_scheduler", None)
+                res_success = False
+                res_state = "UNKNOWN"
+                res_err = None
+                if reconciler is not None:
+                    try:
+                        item = reconciler.reconcile_order(resolve_cmd.order_id)
+                        res_state = (
+                            item.final_state.value
+                            if hasattr(item.final_state, "value")
+                            else str(item.final_state)
+                        )
+                        res_success = item.outcome.name in (
+                            "RESOLVED",
+                            "IDEMPOTENT",
+                            "NOT_EXECUTED",
+                        )
+                        if not res_success:
+                            res_err = item.reason_code
+                    except Exception as exc:
+                        res_err = str(exc)
+                elif scheduler is not None:
+                    scheduler.trigger("ui_manual_query")
+                    res_success = True
+                    res_state = "RECONCILING"
+                else:
+                    res_err = "RECONCILIATION_UNAVAILABLE"
+
+                if self._runtime.risk_ledger is not None:
+                    self._runtime.risk_ledger.restore(
+                        reader.list_by_state("risk_reservations", "ACTIVE")
+                    )
+                if reconciler is not None and hasattr(reconciler, "recalculate_gates"):
+                    reconciler.recalculate_gates()
+                self._runtime.risk_ledger.refresh_digit_health_gate(self._runtime.health_gate)
+
+                resolve_ack = UiResolveOrderAck(
+                    accepted=res_success,
+                    order_id=resolve_cmd.order_id,
+                    new_state=res_state,
+                    reason_code=res_err,
+                )
+                return _response(
+                    request,
+                    MessageType.UI_RESOLVE_ORDER_ACK,
+                    resolve_ack.to_payload(),
+                )
+
+            elif resolve_cmd.action == "SETTLE":
+                res = execute_manual_settlement(
+                    writer,
+                    reader,
+                    order_id=resolve_cmd.order_id,
+                    broker_order_id=resolve_cmd.broker_order_id or "MANUAL_CONFIRMED",
+                    realized_pnl_minor=resolve_cmd.realized_pnl_minor_units,
+                    operator=resolve_cmd.operator,
+                    reason=resolve_cmd.reason,
+                )
+            else:
+                res = execute_confirm_not_executed(
+                    writer,
+                    reader,
+                    order_id=resolve_cmd.order_id,
+                    operator=resolve_cmd.operator,
+                    reason=resolve_cmd.reason,
+                )
+
+            if self._runtime.risk_ledger is not None:
+                self._runtime.risk_ledger.restore(
+                    reader.list_by_state("risk_reservations", "ACTIVE")
+                )
+            reconciler = getattr(self._runtime, "reconciliation_coordinator", None)
+            if reconciler is not None and hasattr(reconciler, "recalculate_gates"):
+                reconciler.recalculate_gates()
+            self._runtime.risk_ledger.refresh_digit_health_gate(self._runtime.health_gate)
+
+            resolve_ack = UiResolveOrderAck(
+                accepted=res.get("success", False),
+                order_id=resolve_cmd.order_id,
+                new_state=res.get("resolved_state", "UNKNOWN"),
+                reason_code=res.get("error"),
+            )
+            return _response(request, MessageType.UI_RESOLVE_ORDER_ACK, resolve_ack.to_payload())
         raise ProtocolError(
             ProtocolErrorCode.UI_IPC_INVALID_MESSAGE, "UI message type is unsupported"
         )

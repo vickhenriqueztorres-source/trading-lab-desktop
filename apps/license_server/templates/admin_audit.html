@@ -1,0 +1,65 @@
+{% extends "admin_base.html" %}
+
+{% block title %}Auditoria Global &bull; Trading Lab Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <!-- Breadcrumb -->
+  <div class="flex items-center space-x-2 text-xs text-slate-400">
+    <a href="/admin" class="hover:text-cyan-400 transition">Painel</a>
+    <span>/</span>
+    <span class="text-slate-200 font-semibold">Auditoria Global</span>
+  </div>
+
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div>
+        <h1 class="text-xl font-bold text-white">Trilha de Auditoria Global</h1>
+        <p class="text-xs text-slate-400 mt-0.5">Últimos 200 eventos de segurança e alterações de licenças registrados no sistema.</p>
+      </div>
+      <span class="text-xs font-mono bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400">
+        Total: {{ audit_logs | length }} eventos
+      </span>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-950/70 border-b border-slate-800 uppercase tracking-wider text-slate-500">
+          <tr>
+            <th class="px-4 py-3">Data / Hora (UTC)</th>
+            <th class="px-4 py-3">Autor</th>
+            <th class="px-4 py-3">Cliente</th>
+            <th class="px-4 py-3">Ação</th>
+            <th class="px-4 py-3">Detalhes</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/60 font-mono">
+          {% for a in audit_logs %}
+            <tr class="hover:bg-slate-800/40 transition">
+              <td class="px-4 py-3 text-slate-400 whitespace-nowrap">{{ a.created_at_formatted }}</td>
+              <td class="px-4 py-3 text-slate-300 whitespace-nowrap font-sans">{{ a.actor }}</td>
+              <td class="px-4 py-3 whitespace-nowrap font-sans">
+                {% if a.customer_id %}
+                  <a href="/admin/customers/{{ a.customer_id }}" class="text-cyan-400 hover:underline">
+                    {{ a.customer_email or a.customer_id }}
+                  </a>
+                {% else %}
+                  <span class="text-slate-600">—</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 font-bold text-emerald-400 whitespace-nowrap">{{ a.action }}</td>
+              <td class="px-4 py-3 text-slate-400 break-all max-w-lg font-mono">{{ a.details_json }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="5" class="px-4 py-12 text-center text-slate-500 font-sans text-sm">
+                Nenhum evento registrado no log de auditoria.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

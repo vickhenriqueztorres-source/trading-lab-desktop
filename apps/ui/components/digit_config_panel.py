@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from apps.ui.i18n import t
@@ -86,52 +86,59 @@ class DigitConfigPanelWidget(QFrame):
         self._martingale_max_stake_minor_units = 5000
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 10, 14, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(14, 8, 14, 8)
+        root.setSpacing(6)
+
+        # 1. Heading: Title + Disclaimer on left, Auto-select on right
         heading = QHBoxLayout()
         heading.setSpacing(12)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
         self.title = QLabel()
         self.title.setObjectName("Title")
-        heading.addWidget(self.title)
+        self.title.setStyleSheet("font-size: 13px; font-weight: 800; color: #FFFFFF;")
+        title_box.addWidget(self.title)
+
+        self.disclaimer = QLabel()
+        self.disclaimer.setWordWrap(True)
+        self.disclaimer.setObjectName("GuidanceText")
+        self.disclaimer.setStyleSheet("font-size: 11px; color: #64748B;")
+        title_box.addWidget(self.disclaimer)
+        heading.addLayout(title_box, 1)
 
         self.auto_symbol_input = QCheckBox()
         self.auto_symbol_input.setChecked(True)
         self.auto_symbol_input.toggled.connect(self._auto_symbol_changed)
-
-        self.disclaimer = QLabel()
-        self.disclaimer.setWordWrap(True)
-        self.disclaimer.setMinimumWidth(0)
-        self.disclaimer.setSizePolicy(
-            QSizePolicy.Policy.Ignored,
-            QSizePolicy.Policy.Preferred,
-        )
-        self.disclaimer.setObjectName("GuidanceText")
-        heading.addWidget(self.disclaimer, 1)
         heading.addWidget(self.auto_symbol_input)
         root.addLayout(heading)
 
+        # 2. Strategy Selector Row
         strategy_row = QHBoxLayout()
-        strategy_row.setSpacing(12)
+        strategy_row.setSpacing(10)
         self.selection_mode_input = QComboBox()
+        self.selection_mode_input.setMinimumWidth(195)
         self.selection_mode_input.addItem(t("strategy.mode_single"), "single")
         self.selection_mode_input.addItem(t("strategy.mode_multi"), "multi")
         self.selection_mode_input.addItem(t("strategy.mode_stress"), "stress")
         self.selection_mode_input.currentIndexChanged.connect(self._selection_mode_changed)
         strategy_row.addWidget(self.selection_mode_input)
+
         self.stress_mode_input = QCheckBox(t("strategy.stress_checkbox"))
         self.stress_mode_input.setChecked(False)
         self.stress_mode_input.setToolTip(t("strategy.stress_tooltip"))
         self.stress_mode_input.toggled.connect(self._stress_mode_changed)
+        self.stress_mode_input.setVisible(False)
         strategy_row.addWidget(self.stress_mode_input)
+
         self._strategy_inputs: dict[str, QCheckBox] = {}
         for strategy_id, display_label in (
-            ("tail-probability-edge", "Over / Under"),
-            ("selective-differs-edge", "Digit Differs"),
-            ("parity-regime-edge", "Par / Ímpar"),
-            (_DIFFERS_SESSION_ID, "Sessão Differs"),
+            ("tail-probability-edge", "Quantum Prime"),
+            ("selective-differs-edge", "Nexus Alpha"),
+            ("parity-regime-edge", "Titan Vector"),
+            (_DIFFERS_SESSION_ID, "Horizon Shield"),
         ):
             checkbox = QCheckBox(display_label)
-            checkbox.setChecked(True)
+            checkbox.setChecked(strategy_id == self._active_strategy_id)
             checkbox.toggled.connect(
                 lambda checked, selected=strategy_id: self._strategy_checkbox_changed(
                     selected, checked
@@ -142,10 +149,32 @@ class DigitConfigPanelWidget(QFrame):
         strategy_row.addStretch()
         root.addLayout(strategy_row)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(8)
-        root.addLayout(grid)
+        self._dirty_banner = QLabel()
+        self._dirty_banner.setObjectName("DirtyBanner")
+        self._dirty_banner.setStyleSheet(
+            "background-color: rgba(245, 158, 11, 0.12); "
+            "border: 1px solid rgba(245, 158, 11, 0.40); "
+            "color: #F59E0B; "
+            "border-radius: 4px; "
+            "padding: 4px 8px; "
+            "font-size: 11px; "
+            "font-weight: 600;"
+        )
+        self._dirty_banner.setVisible(False)
+        root.addWidget(self._dirty_banner)
+
+        # 3. Form Layout: Clean rows with dedicated field containers to eliminate layout collapse
+        def _make_field(lbl: QLabel, input_widget: QWidget) -> QWidget:
+            box = QWidget()
+            box.setFixedHeight(50)
+            box_layout = QVBoxLayout(box)
+            box_layout.setContentsMargins(0, 0, 0, 0)
+            box_layout.setSpacing(2)
+            lbl.setFixedHeight(14)
+            box_layout.addWidget(lbl)
+            input_widget.setFixedHeight(34)
+            box_layout.addWidget(input_widget)
+            return box
 
         validator = QRegularExpressionValidator(_MONEY_PATTERN, self)
         self.stake_input = QLineEdit("1.00")
@@ -190,75 +219,101 @@ class DigitConfigPanelWidget(QFrame):
         self.confidence_slider.setSingleStep(5)
         self.confidence_slider.setPageStep(10)
         self.confidence_slider.setValue(925)
+        self.confidence_slider.setFixedHeight(24)
         self.confidence_slider.setToolTip(t("risk.confidence_tip"))
         self.confidence_slider.valueChanged.connect(self._confidence_changed)
         self.confidence_value = QLabel("92.5 %")
         self.confidence_value.setObjectName("ValueMono")
+        self.confidence_value.setStyleSheet("font-size: 12px; font-weight: 800; color: #00E5FF;")
 
         self._labels = [QLabel() for _ in range(7)]
         for label in self._labels:
-            label.setWordWrap(True)
-            label.setMinimumWidth(0)
-        confidence_row = QGridLayout()
-        confidence_row.addWidget(self.confidence_slider, 0, 0)
-        confidence_row.addWidget(self.confidence_value, 0, 1)
-        fields = (
-            (self._labels[5], self.symbol_input, 0, 0),
-            (self._labels[0], self.stake_input, 0, 1),
-            (self._labels[1], self.stop_loss_input, 0, 2),
-            (self._labels[2], self.take_profit_input, 0, 3),
-            (self._labels[3], self.max_losses_input, 1, 0),
-            (self._labels[4], self.cooldown_input, 1, 1),
-        )
-        for label, widget, row, column in fields:
-            field_box = QVBoxLayout()
-            field_box.setSpacing(3)
-            field_box.addWidget(label)
-            field_box.addWidget(widget)
-            grid.addLayout(field_box, row, column)
-        confidence = QVBoxLayout()
-        confidence.setSpacing(3)
-        confidence.addWidget(self._labels[6])
-        confidence.addLayout(confidence_row)
-        grid.addLayout(confidence, 1, 2, 1, 2)
-        for column in range(4):
-            grid.setColumnStretch(column, 1)
+            label.setObjectName("MetricCaption")
+            label.setStyleSheet(
+                "font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase;"
+            )
+            label.setWordWrap(False)
 
+        conf_box = QWidget()
+        conf_box.setFixedHeight(50)
+        conf_box_layout = QVBoxLayout(conf_box)
+        conf_box_layout.setContentsMargins(0, 0, 0, 0)
+        conf_box_layout.setSpacing(2)
+        self._labels[6].setFixedHeight(14)
+        conf_box_layout.addWidget(self._labels[6])
+        confidence_input_row = QHBoxLayout()
+        confidence_input_row.setSpacing(8)
+        confidence_input_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        confidence_input_row.addWidget(self.confidence_slider, 1)
+        confidence_input_row.addWidget(self.confidence_value)
+        c_wrapper = QWidget()
+        c_wrapper.setFixedHeight(34)
+        c_wrapper.setLayout(confidence_input_row)
+        conf_box_layout.addWidget(c_wrapper)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(14)
+        row1.addWidget(_make_field(self._labels[5], self.symbol_input), 1)
+        row1.addWidget(_make_field(self._labels[0], self.stake_input), 1)
+        row1.addWidget(_make_field(self._labels[1], self.stop_loss_input), 1)
+        row1.addWidget(_make_field(self._labels[2], self.take_profit_input), 1)
+        root.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(14)
+        row2.addWidget(_make_field(self._labels[3], self.max_losses_input), 1)
+        row2.addWidget(_make_field(self._labels[4], self.cooldown_input), 1)
+        row2.addWidget(conf_box, 2)
+        root.addLayout(row2)
+
+        # 4. Martingale Settings Frame
         martingale = QFrame()
         martingale.setObjectName("RiskSummary")
-        martingale_grid = QGridLayout(martingale)
-        martingale_grid.setContentsMargins(12, 8, 12, 8)
-        martingale_grid.setHorizontalSpacing(12)
+        martingale_layout = QHBoxLayout(martingale)
+        martingale_layout.setContentsMargins(12, 6, 12, 6)
+        martingale_layout.setSpacing(16)
+
         self.martingale_enabled_input = QCheckBox()
-        self.martingale_enabled_input.setMinimumWidth(0)
+        self.martingale_enabled_input.setMinimumWidth(125)
         self.martingale_enabled_input.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
         self.martingale_enabled_input.setToolTip(t("MARTINGALE_ENABLED_LABEL"))
         self.martingale_enabled_input.toggled.connect(self._martingale_changed)
-        martingale_grid.addWidget(self.martingale_enabled_input, 0, 0)
+        martingale_layout.addWidget(self.martingale_enabled_input)
+
+        self._martingale_warning = QLabel()
+        self._martingale_warning.setObjectName("MartingaleRiskWarning")
+        self._martingale_warning.setStyleSheet(
+            "background-color: rgba(239, 68, 68, 0.15); "
+            "border: 1px solid rgba(239, 68, 68, 0.40); "
+            "color: #EF4444; "
+            "border-radius: 4px; "
+            "padding: 2px 6px; "
+            "font-size: 10px; "
+            "font-weight: 700;"
+        )
+        self._martingale_warning.setVisible(False)
+        martingale_layout.addWidget(self._martingale_warning)
 
         self.martingale_multiplier_input = QComboBox()
-        self.martingale_multiplier_input.addItem("Automático pela cotação Deriv", "2.00")
+        self.martingale_multiplier_input.addItem(t("MARTINGALE_AUTO_OPTION"), "2.00")
         self.martingale_multiplier_input.setEnabled(False)
+        self.martingale_multiplier_input.setMinimumHeight(34)
         self.martingale_multiplier_input.currentIndexChanged.connect(self._mark_dirty_and_validate)
 
         self._martingale_labels = [QLabel()]
-        for label in self._martingale_labels:
-            label.setWordWrap(True)
-            label.setMinimumWidth(0)
-            label.setSizePolicy(
-                QSizePolicy.Policy.Ignored,
-                QSizePolicy.Policy.Preferred,
-            )
-        multiplier_box = QVBoxLayout()
-        multiplier_box.setSpacing(2)
+        self._martingale_labels[0].setObjectName("MetricCaption")
+        self._martingale_labels[0].setStyleSheet(
+            "font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase;"
+        )
+
+        multiplier_box = QHBoxLayout()
+        multiplier_box.setSpacing(8)
         multiplier_box.addWidget(self._martingale_labels[0])
-        multiplier_box.addWidget(self.martingale_multiplier_input)
-        martingale_grid.addLayout(multiplier_box, 0, 1)
-        martingale_grid.setColumnStretch(0, 1)
-        martingale_grid.setColumnStretch(1, 1)
+        multiplier_box.addWidget(self.martingale_multiplier_input, 1)
+        martingale_layout.addLayout(multiplier_box, 1)
         root.addWidget(martingale)
 
         self.risk_projection = QLabel()
@@ -274,34 +329,28 @@ class DigitConfigPanelWidget(QFrame):
             self.cooldown_status,
         ):
             projection_label.setWordWrap(True)
-            projection_label.setMinimumWidth(0)
-            projection_label.setSizePolicy(
-                QSizePolicy.Policy.Ignored,
-                QSizePolicy.Policy.Preferred,
-            )
+            projection_label.setStyleSheet("font-size: 11px; color: #64748B;")
 
         self.validation_status = QLabel()
         self.validation_status.setWordWrap(True)
-        self.validation_status.setMinimumWidth(0)
-        self.validation_status.setSizePolicy(
-            QSizePolicy.Policy.Ignored,
-            QSizePolicy.Policy.Preferred,
-        )
+        self.validation_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #10B981;")
 
         self.apply_button = QPushButton()
         self.apply_button.setObjectName("PrimaryButton")
+        self.apply_button.setFixedHeight(34)
         self.apply_button.clicked.connect(self._apply)
         self.reset_session_button = QPushButton()
         self.reset_session_button.setObjectName("SecondaryButton")
+        self.reset_session_button.setFixedHeight(34)
         self.reset_session_button.clicked.connect(self.test_session_reset_requested.emit)
         footer = QHBoxLayout()
         footer.setSpacing(14)
         projection = QVBoxLayout()
-        projection.setSpacing(2)
+        projection.setSpacing(3)
         projection.addWidget(self.risk_projection)
         projection.addWidget(self.martingale_projection)
         projection.addWidget(self.cooldown_status)
-        footer.addLayout(projection, 1)
+        footer.addLayout(projection, 2)
         footer.addWidget(self.validation_status, 1)
         footer.addWidget(self.reset_session_button)
         footer.addWidget(self.apply_button)
@@ -312,6 +361,8 @@ class DigitConfigPanelWidget(QFrame):
         self.symbol_input.setEnabled(not self.auto_symbol_input.isChecked())
         self._martingale_changed()
         self._dirty = False
+        self._dirty_banner.setVisible(False)
+        self.apply_button.setStyleSheet("")
         self._validate()
 
     def current_config(self) -> UiDigitRiskConfig | None:
@@ -385,8 +436,11 @@ class DigitConfigPanelWidget(QFrame):
         )
         if multiplier_index >= 0:
             self.martingale_multiplier_input.setCurrentIndex(multiplier_index)
-        self._loading = False
         self._martingale_changed()
+        self._loading = False
+        self._dirty = False
+        self._dirty_banner.setVisible(False)
+        self.apply_button.setStyleSheet("")
         self._validate()
 
     def set_active_strategy(self, strategy_id: str, *, apply: bool = False) -> None:
@@ -402,11 +456,18 @@ class DigitConfigPanelWidget(QFrame):
         ):
             return
         self._active_strategy_id = strategy_id
-        self._mark_dirty_and_validate()
+        if self.selection_mode_input.currentData() == "single":
+            self._loading = True
+            for item_id, checkbox in self._strategy_inputs.items():
+                checkbox.setChecked(item_id == self._active_strategy_id)
+            self._loading = False
         if apply:
+            self._mark_dirty_and_validate()
             config = self.current_config()
             if config is not None:
                 self.config_apply_requested.emit(config)
+        else:
+            self._validate()
 
     def set_cooldown_remaining(self, seconds: int) -> None:
         self.cooldown_status.setText(
@@ -501,6 +562,8 @@ class DigitConfigPanelWidget(QFrame):
         )
         if accepted:
             self._dirty = False
+            self._dirty_banner.setVisible(False)
+            self.apply_button.setStyleSheet("")
             original = t("APPLY_CONFIG_BTN")
             self.apply_button.setText("✓ " + t("DIGIT_CONFIG_APPLIED"))
             QTimer.singleShot(1400, lambda: self.apply_button.setText(original))
@@ -508,6 +571,8 @@ class DigitConfigPanelWidget(QFrame):
     def retranslate(self) -> None:
         self.title.setText(t("DIGIT_STRATEGY_TITLE"))
         self.disclaimer.setText(t("DIGIT_CONFIDENCE_DISCLAIMER"))
+        self._dirty_banner.setText(t("risk.dirty_warning"))
+        self._martingale_warning.setText(t("risk.martingale_warning"))
         keys = (
             "STAKE_LABEL",
             "STOP_LOSS_LABEL",
@@ -527,6 +592,8 @@ class DigitConfigPanelWidget(QFrame):
             strict=True,
         ):
             label.setText(t(key))
+        if self.martingale_multiplier_input.count() > 0:
+            self.martingale_multiplier_input.setItemText(0, t("MARTINGALE_AUTO_OPTION"))
         self.apply_button.setText(t("APPLY_CONFIG_BTN"))
         self.reset_session_button.setText(t("RESET_DEMO_SESSION_BTN"))
 
@@ -558,8 +625,13 @@ class DigitConfigPanelWidget(QFrame):
         self._mark_dirty_and_validate()
 
     def _mark_dirty_and_validate(self) -> None:
-        if not self._loading:
-            self._dirty = True
+        if self._loading:
+            return
+        self._dirty = True
+        self._dirty_banner.setVisible(True)
+        self.apply_button.setStyleSheet(
+            "background-color: #00E5FF; color: #000000; font-weight: 800;"
+        )
         self._validate()
 
     def _auto_symbol_changed(self, enabled: bool) -> None:
@@ -570,6 +642,7 @@ class DigitConfigPanelWidget(QFrame):
     def _martingale_changed(self) -> None:
         enabled = self.martingale_enabled_input.isChecked()
         self.martingale_multiplier_input.setEnabled(False)
+        self._martingale_warning.setVisible(enabled)
         if enabled:
             minimum_losses = self._martingale_max_steps + 1
             if self.max_losses_input.value() < minimum_losses:

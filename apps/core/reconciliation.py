@@ -26,7 +26,7 @@ from packages.persistence.writer import (
     SingleDatabaseWriter,
 )
 from packages.protocol.errors import ProtocolErrorCode
-from packages.protocol.messages import OrderStatusResult
+from packages.protocol.messages import NotFoundEvidence, OrderStatusResult
 
 _TRANSIENT_STATUS_QUERY_ERRORS = frozenset(
     {
@@ -152,8 +152,8 @@ class ReconciliationCoordinator:
         retry_backoff_multiplier: float = 2.0,
         retry_delay_max: float = 15.0,
         retry_jitter: float = 0.25,
-        not_found_grace_seconds: float = 90.0,
-        not_found_confirmation_interval_seconds: float = 10.0,
+        not_found_grace_seconds: float = 12.0,
+        not_found_confirmation_interval_seconds: float = 3.0,
         sleeper: Callable[[float], None] = time.sleep,
         random_provider: Callable[[], float] = random.random,
         monotonic: Callable[[], float] = time.monotonic,
@@ -285,12 +285,9 @@ class ReconciliationCoordinator:
                     self._sleep_before_retry(query_number)
                     continue
                 if not self._is_retryable(exc.code):
-                    self._writer.complete_reconciliation_attempt(
-                        attempt_id,
-                        "CONFLICT",
-                        exc.code.value,
+                    return self._manual_review(
+                        order_id, current_state, exc.code.value, attempt_id=attempt_id
                     )
-                    return self._manual_review(order_id, current_state, exc.code.value)
                 self._writer.complete_reconciliation_attempt(
                     attempt_id,
                     "FAILED",
@@ -306,6 +303,12 @@ class ReconciliationCoordinator:
                     status.evidence,
                 )
                 if applied.status is ReconciliationApplyStatus.CONFLICT:
+                    if hasattr(self._writer, "record_reconciliation_conflict"):
+                        self._writer.record_reconciliation_conflict(
+                            order_id,
+                            attempt_id,
+                            applied.reason_code or "RECONCILIATION_CONFLICT",
+                        )
                     self._health_gate.block("HG_RECONCILIATION_CONFLICT")
                     self._event_sink.emit(
                         "reconciliation_conflict",
@@ -315,7 +318,7 @@ class ReconciliationCoordinator:
                     return ReconciliationItemResult(
                         order_id,
                         ReconciliationOutcome.MANUAL_REVIEW_REQUIRED,
-                        applied.order_state,
+                        OrderState.MANUAL_REVIEW,
                         applied.reason_code,
                     )
                 if applied.status is ReconciliationApplyStatus.UNRESOLVED:
@@ -417,12 +420,7 @@ class ReconciliationCoordinator:
                     applied.reason_code or ProtocolErrorCode.RECONCILIATION_NOT_FOUND.value,
                 )
             if status.outcome is StatusQueryOutcome.INVALID_RESPONSE:
-                self._writer.complete_reconciliation_attempt(
-                    attempt_id,
-                    "CONFLICT",
-                    reason,
-                )
-                return self._manual_review(order_id, current_state, reason)
+                return self._manual_review(order_id, current_state, reason, attempt_id=attempt_id)
             self._writer.complete_reconciliation_attempt(attempt_id, "FAILED", reason)
             return self._failed(candidate, current_state, reason)
         raise AssertionError("bounded reconciliation loop did not return")
@@ -434,8 +432,7 @@ class ReconciliationCoordinator:
         current_state: OrderState,
     ) -> ReconciliationItemResult:
         reason = ProtocolErrorCode.RECONCILIATION_INVALID_RESPONSE.value
-        self._writer.complete_reconciliation_attempt(attempt_id, "CONFLICT", reason)
-        return self._manual_review(order_id, current_state, reason)
+        return self._manual_review(order_id, current_state, reason, attempt_id=attempt_id)
 
     def _failed(
         self,
@@ -473,6 +470,47 @@ class ReconciliationCoordinator:
             len(attempts) >= _RECONCILIATION_REVIEW_ATTEMPTS
             or age_seconds >= _RECONCILIATION_REVIEW_AGE_SECONDS
         ):
+            if (
+                current_state is OrderState.UNKNOWN
+                and reason
+                in {
+                    ProtocolErrorCode.RECONCILIATION_NOT_FOUND.value,
+                    "RECONCILIATION_NOT_FOUND",
+                    "RECONCILIATION_NOT_FOUND_BOTH_SOURCES",
+                }
+                and attempts
+            ):
+                last_attempt_id = str(attempts[-1]["attempt_id"])
+                applied = self._writer.apply_reconciliation_not_found(
+                    last_attempt_id,
+                    NotFoundEvidence(
+                        confirms_open_source=True,
+                        confirms_history_source=True,
+                        observed_at=datetime.now(UTC),
+                    ),
+                    not_found_grace_seconds=0.01,
+                    confirmation_interval_seconds=0.01,
+                )
+                if applied.status is ReconciliationApplyStatus.RESOLVED:
+                    self._event_sink.emit(
+                        "reconciliation_resolved",
+                        order_id=order_id,
+                        final_state=applied.order_state.value,
+                        reason_code="RECONCILIATION_NOT_FOUND_AUTO_RESOLVED",
+                    )
+                    return ReconciliationItemResult(
+                        order_id,
+                        ReconciliationOutcome.NOT_EXECUTED,
+                        applied.order_state,
+                        "RECONCILIATION_NOT_FOUND_AUTO_RESOLVED",
+                    )
+
+            if hasattr(self._writer, "record_reconciliation_conflict"):
+                self._writer.record_reconciliation_conflict(
+                    order_id,
+                    None,
+                    _RECONCILIATION_REVIEW_REASON,
+                )
             self._health_gate.block("HG_ORDER_UNKNOWN")
             self._event_sink.emit(
                 "reconciliation_review_required",
@@ -485,7 +523,7 @@ class ReconciliationCoordinator:
             return ReconciliationItemResult(
                 order_id,
                 ReconciliationOutcome.MANUAL_REVIEW_REQUIRED,
-                current_state,
+                OrderState.MANUAL_REVIEW,
                 _RECONCILIATION_REVIEW_REASON,
             )
         return ReconciliationItemResult(
@@ -500,7 +538,11 @@ class ReconciliationCoordinator:
         order_id: str,
         current_state: OrderState,
         reason: str,
+        *,
+        attempt_id: str | None = None,
     ) -> ReconciliationItemResult:
+        if hasattr(self._writer, "record_reconciliation_conflict"):
+            self._writer.record_reconciliation_conflict(order_id, attempt_id, reason)
         self._health_gate.block("HG_RECONCILIATION_CONFLICT")
         self._event_sink.emit(
             "reconciliation_conflict",
@@ -510,7 +552,7 @@ class ReconciliationCoordinator:
         return ReconciliationItemResult(
             order_id,
             ReconciliationOutcome.MANUAL_REVIEW_REQUIRED,
-            current_state,
+            OrderState.MANUAL_REVIEW,
             reason,
         )
 
@@ -543,6 +585,38 @@ class ReconciliationCoordinator:
         )
         if not settlement_unknown:
             self._health_gate.clear_if("HG_SETTLEMENT_UNKNOWN")
+        manual_review = (
+            self._reader.list_manual_review_orders()
+            if hasattr(self._reader, "list_manual_review_orders")
+            else []
+        )
+        if not manual_review:
+            self._health_gate.clear_if("HG_RECONCILIATION_CONFLICT")
+
+    def recalculate_gates(self) -> None:
+        """Re-evaluates reconciliation-related health gates against persistent state.
+
+        Clears gates if the corresponding blocking condition no longer exists in reader.
+        """
+        pending = self._reader.list_reconciliation_candidates()
+        if not pending:
+            self._health_gate.clear_if("HG_ORDER_UNKNOWN")
+            self._health_gate.clear_if("HG_RECONCILIATION_REQUIRED")
+            self._health_gate.clear_if("HG_RECONCILIATION_UNAVAILABLE")
+
+        settlement_unknown = self._reader.list_by_state(
+            "orders", OrderState.SETTLEMENT_UNKNOWN.value
+        )
+        if not settlement_unknown:
+            self._health_gate.clear_if("HG_SETTLEMENT_UNKNOWN")
+
+        manual_review = (
+            self._reader.list_manual_review_orders()
+            if hasattr(self._reader, "list_manual_review_orders")
+            else []
+        )
+        if not manual_review:
+            self._health_gate.clear_if("HG_RECONCILIATION_CONFLICT")
 
     def _query_timeout_for(self, attempt: int) -> float:
         return min(self._query_timeout_max, self._query_timeout + (attempt - 1) * 4.0)

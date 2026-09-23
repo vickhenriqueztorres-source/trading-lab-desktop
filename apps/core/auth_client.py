@@ -11,6 +11,8 @@ from uuid import uuid4
 from packages.identity import OtpCode
 from packages.protocol import (
     PROTOCOL_VERSION,
+    AuthActivateKeyRequest,
+    AuthActivateKeyResponse,
     AuthCheckAuthorizationRequest,
     AuthCheckAuthorizationResponse,
     AuthHandshakeRequest,
@@ -150,6 +152,14 @@ class AuthAgentIpcClient:
             ).to_payload(),
         )
         return AuthSubmitOtpResponse.from_payload(response.payload)
+
+    def activate_product_key(self, product_key: str) -> AuthActivateKeyResponse:
+        response = self._round_trip(
+            MessageType.AUTH_ACTIVATE_KEY_REQUEST,
+            MessageType.AUTH_ACTIVATE_KEY_RESPONSE,
+            AuthActivateKeyRequest(SecretValue.from_text(product_key)).to_payload(),
+        )
+        return AuthActivateKeyResponse.from_payload(response.payload)
 
     def check_authorization(
         self,

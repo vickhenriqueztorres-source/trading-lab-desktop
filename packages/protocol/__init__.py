@@ -1,4 +1,6 @@
 from packages.protocol.auth_messages import (
+    AuthActivateKeyRequest,
+    AuthActivateKeyResponse,
     AuthCheckAuthorizationRequest,
     AuthCheckAuthorizationResponse,
     AuthHandshakeRequest,
@@ -44,6 +46,8 @@ from packages.protocol.ui_messages import (
     HealthGateStatus,
     OrderSummary,
     UiAccountMode,
+    UiAuthActivateKeyAck,
+    UiAuthActivateKeyCommand,
     UiAuthSignOutAck,
     UiAuthSignOutCommand,
     UiAuthStartLoginAck,
@@ -75,6 +79,8 @@ from packages.protocol.ui_messages import (
     UiMultiStrategyMetrics,
     UiOperationalLogEntry,
     UiProjectionSnapshot,
+    UiResolveOrderAck,
+    UiResolveOrderCommand,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
     UiUpdateIqOptionRiskConfigCommand,
@@ -82,6 +88,8 @@ from packages.protocol.ui_messages import (
 from packages.protocol.version import MAX_FRAME_SIZE, PROTOCOL_VERSION
 
 __all__ = [
+    "AuthActivateKeyRequest",
+    "AuthActivateKeyResponse",
     "AuthCheckAuthorizationRequest",
     "AuthCheckAuthorizationResponse",
     "AuthHandshakeRequest",
@@ -115,6 +123,8 @@ __all__ = [
     "ProtocolError",
     "ProtocolErrorCode",
     "UiAccountMode",
+    "UiAuthActivateKeyAck",
+    "UiAuthActivateKeyCommand",
     "UiAuthSignOutAck",
     "UiAuthSignOutCommand",
     "UiAuthStartLoginAck",
@@ -146,6 +156,8 @@ __all__ = [
     "UiMultiStrategyMetrics",
     "UiOperationalLogEntry",
     "UiProjectionSnapshot",
+    "UiResolveOrderAck",
+    "UiResolveOrderCommand",
     "UiUpdateDigitRiskConfigAck",
     "UiUpdateDigitRiskConfigCommand",
     "UiUpdateIqOptionRiskConfigCommand",

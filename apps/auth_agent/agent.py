@@ -131,6 +131,30 @@ class AuthAgent:
         )
         return decision
 
+    def activate_product_key(self, key_str: str) -> AuthorizationDecision:
+        from packages.licensing.product_key import decode_product_key
+
+        try:
+            signed = decode_product_key(key_str)
+            claims = self._verifier.verify(signed)
+            self._device.load_or_create()
+        except Exception:
+            self._transition(AuthAgentState.BLOCKED, AuthorizationReason.LEASE_INVALID.value)
+            return self._blocked(AuthorizationReason.LEASE_INVALID)
+
+        self._user_id = claims.user_id
+        self._signed_lease = signed
+        self._vault.store(_USER_ID_KEY, SecretValue.from_text(claims.user_id))
+        self._vault.store(_LEASE_KEY, SecretValue(signed.to_bytes()))
+        decision = self.authorization("DERIV", "strategy-test")
+        next_state = (
+            AuthAgentState.OFFLINE_AUTHORIZED
+            if decision.new_entries_allowed
+            else AuthAgentState.BLOCKED
+        )
+        self._transition(next_state, decision.reason.value)
+        return decision
+
     def restore(self) -> AuthorizationDecision:
         stored_user = self._vault.load(_USER_ID_KEY)
         stored_lease = self._vault.load(_LEASE_KEY)

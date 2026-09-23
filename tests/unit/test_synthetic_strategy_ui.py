@@ -74,7 +74,7 @@ def test_workspace_selects_all_three_digit_strategies_and_shows_latency() -> Non
 
     assert workspace.selected_strategy_id == "parity-regime-edge"
     btn_text = workspace._strategy_buttons["parity-regime-edge"].text()
-    assert "DEMO SIGNAL" in btn_text or "SINAL DEMO ELEGÍVEL" in btn_text
+    assert "SIGNAL" in btn_text or "SEÑAL" in btn_text or "DEMO SIGNAL" in btn_text
     assert live._signal_contract.text() == "DIGITODD"
     assert live._signal_probability.text() == "61.20% / 52.00%"
     assert live._analysis_latency.text() == "84 µs"

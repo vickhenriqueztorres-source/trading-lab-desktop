@@ -41,7 +41,18 @@ from apps.core.iqoption_connection_safety import (
     IQOptionMessageBudget,
     assert_safe_stop_caller,
 )
-from apps.core.iqoption_risk_config import IqOptionRiskConfig, IqOptionRiskConfigStore
+from apps.core.iqoption_risk_config import (
+    IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+    IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+    IQOPTION_HACK_CHINO_STRATEGY_ID,
+    IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+    IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+    IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+    IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+    IQOPTION_RSI_STRATEGY_ID,
+    IqOptionRiskConfig,
+    IqOptionRiskConfigStore,
+)
 from apps.core.live_monitor import LiveMonitor
 from apps.core.manifest_catalog import DynamicManifestCatalog
 from apps.core.manifest_client import (
@@ -497,6 +508,7 @@ class CoreLifecycleService:
                     iqoption_login_status=self._iqoption_login_ui_status,
                     iqoption_risk_config_update=self.update_iqoption_risk_config,
                     iqoption_bot_control=self.control_iqoption_bot,
+                    runtime=runtime,
                 )
                 ui_service.start()
                 self._ui_service = ui_service
@@ -912,6 +924,8 @@ class CoreLifecycleService:
             "IQOPTION_BOT_DISARMED",
             persist_operator_intent=not preserve_operator_intent,
         )
+        if not preserve_operator_intent and self._iqoption_auto_trader is not None:
+            self._iqoption_auto_trader.reset_market_analyses()
         self._safe_stop = True
         # Lifecycle READY means the Core/UI control plane is available. Trading
         # authority is represented independently by _safe_stop/HealthGate.
@@ -986,6 +1000,16 @@ class CoreLifecycleService:
 
     def _request_ui_shutdown(self) -> None:
         self._ui_shutdown_requested = True
+        self._stop_iqoption_execution(
+            StopReason.USER_COMMAND,
+            "IQOPTION_BOT_DISARMED",
+            persist_operator_intent=True,
+        )
+        if self._iqoption_auto_trader is not None:
+            self._iqoption_auto_trader.reset_market_analyses()
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.stop_new_entries()
 
     def connect_deriv_selected_account(self) -> tuple[bool, str]:
         with self._deriv_switch_lock:
@@ -1286,7 +1310,18 @@ class CoreLifecycleService:
         with self._iqoption_switch_lock:
             if self._iqoption_bot_armed:
                 return False, "IQOPTION_BOT_MUST_BE_DISARMED"
-            if config.symbol != "AUTO" and config.strategy_id != "iqoption-rsi-demo":
+            local_strategies = {
+                IQOPTION_HACK_CHINO_STRATEGY_ID,
+                IQOPTION_RSI_STRATEGY_ID,
+                "iqoption-rsi-demo",
+                IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+                IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+                IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+                IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+                IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+                IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+            }
+            if config.symbol != "AUTO" and config.strategy_id not in local_strategies:
                 info = self._manifest_catalog.active_strategies.get(config.active_strategy_key)
                 if info is None:
                     return False, "NO_CANDIDATE"
@@ -1324,7 +1359,10 @@ class CoreLifecycleService:
                 self._stop_iqoption_execution(
                     StopReason.USER_COMMAND,
                     "IQOPTION_BOT_DISARMED",
+                    persist_operator_intent=True,
                 )
+                if self._iqoption_auto_trader is not None:
+                    self._iqoption_auto_trader.reset_market_analyses()
                 return True, self._iqoption_bot_reason
             supervisor = self._iqoption
             balance = self._iqoption_balance

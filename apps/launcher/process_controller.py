@@ -137,9 +137,9 @@ class SubprocessCoreController:
                 raise RuntimeError("CORE_NOT_HEALTHY_FOR_UI")
             self._start_ui(ui_port, ui_token)
             return self._with_ui(status)
-        except (OSError, RuntimeError, ValueError, CoreLifecycleIpcError):
+        except (OSError, RuntimeError, ValueError, CoreLifecycleIpcError) as exc:
             self.terminate(0.5)
-            raise RuntimeError("CORE_PROCESS_START_FAILED") from None
+            raise RuntimeError(f"CORE_PROCESS_START_FAILED ({exc})") from None
 
     def status(self) -> CoreLifecycleStatusResponse:
         return self._with_ui(self._require_client().status())

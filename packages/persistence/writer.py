@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 from packages.domain.models import (
     BrokerEvent,
@@ -130,7 +131,7 @@ ALLOWED_TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
             OrderState.SETTLEMENT_UNKNOWN,
         }
     ),
-    OrderState.SETTLEMENT_UNKNOWN: frozenset({OrderState.RECONCILING, OrderState.MANUAL_REVIEW}),
+    OrderState.SETTLEMENT_UNKNOWN: frozenset({OrderState.RECONCILING}),
     OrderState.MANUAL_REVIEW: frozenset({OrderState.RECONCILING}),
     OrderState.SETTLED: frozenset(),
     OrderState.REJECTED: frozenset(),
@@ -1963,6 +1964,22 @@ class SingleDatabaseWriter:
         )
         for actual, expected, reason in comparisons:
             if actual != expected:
+                if (
+                    reason == "ACCOUNT_CONFLICT"
+                    and str(row["broker"]).upper() == "IQ_OPTION"
+                    and (
+                        (str(actual).isdigit() and str(expected).upper().startswith("IQOPTION_"))
+                        or (str(expected).isdigit() and str(actual).upper().startswith("IQOPTION_"))
+                        or {str(actual).upper(), str(expected).upper()}
+                        <= {
+                            "IQOPTION_PRACTICE",
+                            "PRACTICE_ACCOUNT",
+                            "DEMO",
+                            "PRACTICE",
+                        }
+                    )
+                ):
+                    continue
                 return reason
         if (
             row["broker_order_id"] is not None
@@ -2022,6 +2039,365 @@ class SingleDatabaseWriter:
         ).rowcount
         if changed != 1:
             raise PersistenceError("reconciliation attempt is not STARTED")
+
+    def record_reconciliation_conflict(
+        self,
+        order_id: str,
+        attempt_id: str | None,
+        reason_code: str,
+        details: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Atomically transition an order with conflicting evidence to MANUAL_REVIEW.
+
+        Maintains risk reservation active until audited manual operator resolution.
+        """
+        recorded_at = now or utc_now()
+
+        def operation(connection: sqlite3.Connection) -> None:
+            row = connection.execute(
+                "SELECT intent_id, state, version FROM orders WHERE order_id = ?",
+                (order_id,),
+            ).fetchone()
+            if row is None:
+                raise PersistenceError(f"order {order_id} not found")
+
+            current_state = OrderState(str(row["state"]))
+            intent_id = str(row["intent_id"])
+
+            if current_state.is_terminal:
+                return
+
+            if current_state is not OrderState.MANUAL_REVIEW:
+                if current_state in {OrderState.ACCEPTED, OrderState.OPEN}:
+                    self._transition_order(
+                        connection, intent_id, OrderState.SETTLEMENT_UNKNOWN, recorded_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.RECONCILING, recorded_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, recorded_at
+                    )
+                elif current_state in {OrderState.UNKNOWN, OrderState.SETTLEMENT_UNKNOWN}:
+                    self._transition_order(
+                        connection, intent_id, OrderState.RECONCILING, recorded_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, recorded_at
+                    )
+                elif current_state is OrderState.RECONCILING:
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, recorded_at
+                    )
+
+            connection.execute(
+                """
+                UPDATE orders
+                SET version = version + 1,
+                    resolution_source = 'RECONCILIATION_CONFLICT',
+                    updated_at = ?
+                WHERE order_id = ?
+                """,
+                (recorded_at.isoformat(), order_id),
+            )
+
+            if attempt_id is not None:
+                connection.execute(
+                    """
+                    UPDATE reconciliation_attempts
+                    SET completed_at = ?, result = 'CONFLICT', reason_code = ?
+                    WHERE attempt_id = ? AND result = 'STARTED'
+                    """,
+                    (recorded_at.isoformat(), reason_code, attempt_id),
+                )
+
+        self._transaction(operation)
+
+    def resolve_with_broker_evidence(
+        self,
+        *,
+        order_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        broker_order_id: str,
+        realized_pnl_minor: int,
+        operator_id: str,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Audited operator resolution confirming execution and settlement.
+
+        Applies external broker evidence to transition an order to SETTLED.
+        """
+        resolved_at = now or utc_now()
+
+        def operation(connection: sqlite3.Connection) -> bool:
+            existing_idemp = connection.execute(
+                """
+                SELECT order_id, manual_resolution_id, broker_order_id,
+                       realized_pnl_minor, manual_resolution_operator, state
+                FROM orders WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing_idemp is not None:
+                if existing_idemp["order_id"] != order_id:
+                    raise PersistenceError("IQOPTION_RESOLUTION_ALREADY_APPLIED")
+                if (
+                    str(existing_idemp["state"]) != OrderState.SETTLED.value
+                    or (
+                        broker_order_id
+                        and str(existing_idemp["broker_order_id"]) != str(broker_order_id)
+                    )
+                    or existing_idemp["realized_pnl_minor"] != realized_pnl_minor
+                    or str(existing_idemp["manual_resolution_operator"]) != str(operator_id)
+                ):
+                    raise PersistenceError("IQOPTION_RESOLUTION_PAYLOAD_MISMATCH")
+                return True
+
+            row = connection.execute(
+                """
+                SELECT intent_id, state, version, broker, account_id, broker_order_id
+                FROM orders WHERE order_id = ?
+                """,
+                (order_id,),
+            ).fetchone()
+            if row is None:
+                raise PersistenceError(f"order {order_id} not found")
+
+            current_version = int(row["version"])
+            if current_version != expected_version:
+                raise PersistenceError("IQOPTION_MANUAL_REVIEW_STALE_VERSION")
+
+            current_state = OrderState(str(row["state"]))
+            if current_state.is_terminal:
+                raise PersistenceError(f"order {order_id} is already terminal ({current_state})")
+
+            intent_id = str(row["intent_id"])
+            resolution_id = str(uuid4())
+            effective_broker_order_id = (
+                broker_order_id or row["broker_order_id"] or "MANUAL_CONFIRMED"
+            )
+
+            if current_state is not OrderState.MANUAL_REVIEW:
+                if current_state in {OrderState.ACCEPTED, OrderState.OPEN}:
+                    self._transition_order(
+                        connection, intent_id, OrderState.SETTLEMENT_UNKNOWN, resolved_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.RECONCILING, resolved_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, resolved_at
+                    )
+                elif current_state in {OrderState.UNKNOWN, OrderState.SETTLEMENT_UNKNOWN}:
+                    self._transition_order(
+                        connection, intent_id, OrderState.RECONCILING, resolved_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, resolved_at
+                    )
+                elif current_state is OrderState.RECONCILING:
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, resolved_at
+                    )
+
+            self._transition_order(connection, intent_id, OrderState.RECONCILING, resolved_at)
+            self._transition_order(
+                connection,
+                intent_id,
+                OrderState.SETTLED,
+                resolved_at,
+                broker_order_id=effective_broker_order_id,
+                realized_pnl_minor=realized_pnl_minor,
+            )
+
+            connection.execute(
+                """
+                UPDATE orders
+                SET version = version + 1,
+                    idempotency_key = ?,
+                    manual_resolution_id = ?,
+                    manual_resolution_operator = ?,
+                    manual_resolution_reason = ?,
+                    manual_resolution_at = ?,
+                    resolution_source = 'MANUAL_OPERATOR',
+                    resolved_at = ?,
+                    updated_at = ?
+                WHERE order_id = ?
+                """,
+                (
+                    idempotency_key,
+                    resolution_id,
+                    operator_id,
+                    reason,
+                    resolved_at.isoformat(),
+                    resolved_at.isoformat(),
+                    resolved_at.isoformat(),
+                    order_id,
+                ),
+            )
+
+            connection.execute(
+                """
+                UPDATE outbox_messages
+                SET state = ?, state_reason = ?, dispatched_at = COALESCE(dispatched_at, ?)
+                WHERE intent_id = ? AND state = ?
+                """,
+                (
+                    OutboxState.RECONCILED.value,
+                    "RECONCILED_MANUAL_SETTLED",
+                    resolved_at.isoformat(),
+                    intent_id,
+                    OutboxState.AMBIGUOUS.value,
+                ),
+            )
+
+            self._release_for_intent(
+                connection,
+                intent_id,
+                resolved_at,
+                reason="MANUAL_RESOLUTION_SETTLED",
+                evidence=resolution_id,
+            )
+            return True
+
+        return bool(self._transaction(operation))
+
+    def confirm_not_executed(
+        self,
+        *,
+        order_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        operator_id: str,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Audited operator resolution confirming order was never executed on broker."""
+        resolved_at = now or utc_now()
+
+        def operation(connection: sqlite3.Connection) -> bool:
+            existing_idemp = connection.execute(
+                """
+                SELECT order_id, manual_resolution_id, manual_resolution_operator, state
+                FROM orders WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing_idemp is not None:
+                if existing_idemp["order_id"] != order_id:
+                    raise PersistenceError("IQOPTION_RESOLUTION_ALREADY_APPLIED")
+                if str(existing_idemp["state"]) != OrderState.REJECTED.value or str(
+                    existing_idemp["manual_resolution_operator"]
+                ) != str(operator_id):
+                    raise PersistenceError("IQOPTION_RESOLUTION_PAYLOAD_MISMATCH")
+                return True
+
+            row = connection.execute(
+                """
+                SELECT intent_id, state, version, broker, account_id
+                FROM orders WHERE order_id = ?
+                """,
+                (order_id,),
+            ).fetchone()
+            if row is None:
+                raise PersistenceError(f"order {order_id} not found")
+
+            current_version = int(row["version"])
+            if current_version != expected_version:
+                raise PersistenceError("IQOPTION_MANUAL_REVIEW_STALE_VERSION")
+
+            current_state = OrderState(str(row["state"]))
+            if current_state.is_terminal:
+                raise PersistenceError(f"order {order_id} is already terminal ({current_state})")
+
+            intent_id = str(row["intent_id"])
+            resolution_id = str(uuid4())
+
+            if current_state is not OrderState.MANUAL_REVIEW:
+                if current_state in {OrderState.ACCEPTED, OrderState.OPEN}:
+                    self._transition_order(
+                        connection, intent_id, OrderState.SETTLEMENT_UNKNOWN, resolved_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.RECONCILING, resolved_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, resolved_at
+                    )
+                elif current_state in {OrderState.UNKNOWN, OrderState.SETTLEMENT_UNKNOWN}:
+                    self._transition_order(
+                        connection, intent_id, OrderState.RECONCILING, resolved_at
+                    )
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, resolved_at
+                    )
+                elif current_state is OrderState.RECONCILING:
+                    self._transition_order(
+                        connection, intent_id, OrderState.MANUAL_REVIEW, resolved_at
+                    )
+
+            self._transition_order(connection, intent_id, OrderState.RECONCILING, resolved_at)
+            self._transition_order(
+                connection,
+                intent_id,
+                OrderState.REJECTED,
+                resolved_at,
+            )
+
+            connection.execute(
+                """
+                UPDATE orders
+                SET version = version + 1,
+                    idempotency_key = ?,
+                    manual_resolution_id = ?,
+                    manual_resolution_operator = ?,
+                    manual_resolution_reason = ?,
+                    manual_resolution_at = ?,
+                    resolution_source = 'MANUAL_NOT_EXECUTED',
+                    resolved_at = ?,
+                    updated_at = ?
+                WHERE order_id = ?
+                """,
+                (
+                    idempotency_key,
+                    resolution_id,
+                    operator_id,
+                    reason,
+                    resolved_at.isoformat(),
+                    resolved_at.isoformat(),
+                    resolved_at.isoformat(),
+                    order_id,
+                ),
+            )
+
+            connection.execute(
+                """
+                UPDATE outbox_messages
+                SET state = ?, state_reason = ?, dispatched_at = COALESCE(dispatched_at, ?)
+                WHERE intent_id = ? AND state = ?
+                """,
+                (
+                    OutboxState.RECONCILED.value,
+                    "RECONCILED_MANUAL_REJECTED",
+                    resolved_at.isoformat(),
+                    intent_id,
+                    OutboxState.AMBIGUOUS.value,
+                ),
+            )
+
+            self._release_for_intent(
+                connection,
+                intent_id,
+                resolved_at,
+                reason="MANUAL_RESOLUTION_NOT_EXECUTED",
+                evidence=resolution_id,
+            )
+            return True
+
+        return bool(self._transaction(operation))
 
     def release_reservation(self, reservation_id: str) -> None:
         released_at = utc_now()

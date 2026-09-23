@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: trading-lab-license-server
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
+    healthCheckPath: /healthz
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: LICENSE_SIGNING_KEY_PEM
+        sync: false
+      - key: LICENSE_SIGNING_KEY_ID
+        value: tl-2026-09
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        sync: false
+      - key: MAIL_PROVIDER
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        value: Trading Lab <acceso@tradinglab.app>
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: SUPPORT_CONTACT_URL
+        value: https://t.me/tradinglab_support
+      - key: RENEW_URL
+        sync: false
+      - key: DOWNLOAD_URL
+        sync: false

@@ -60,45 +60,55 @@ class BrokerCardWidget(QFrame):
         layout.addWidget(self._lbl_clock)
 
     def update_card(self, status: BrokerCardStatus) -> None:
-        self._last_status = status
-        if status.is_connected:
-            self._lbl_status.setText(f"● {t('broker.connected')}")
-            self._lbl_status.setStyleSheet(
-                f"color: {ACCENT_GREEN}; font-weight: bold; font-size: 11px; "
-                "background: rgba(0, 245, 155, 0.1); "
-                "border: 1px solid rgba(0, 245, 155, 0.3); "
-                "border-radius: 4px; padding: 2px 6px;"
-            )
-        else:
-            self._lbl_status.setText(f"○ {t('broker.disconnected')}")
-            self._lbl_status.setStyleSheet(
-                f"color: {ACCENT_RED}; font-weight: bold; font-size: 11px; "
-                "background: rgba(255, 51, 102, 0.1); "
-                "border: 1px solid rgba(255, 51, 102, 0.3); "
-                "border-radius: 4px; padding: 2px 6px;"
-            )
+        if self._last_status is None or status.is_connected != self._last_status.is_connected:
+            if status.is_connected:
+                self._lbl_status.setText(f"● {t('broker.connected')}")
+                self._lbl_status.setStyleSheet(
+                    f"color: {ACCENT_GREEN}; font-weight: bold; font-size: 11px; "
+                    "background: rgba(0, 245, 155, 0.1); "
+                    "border: 1px solid rgba(0, 245, 155, 0.3); "
+                    "border-radius: 4px; padding: 2px 6px;"
+                )
+            else:
+                self._lbl_status.setText(f"○ {t('broker.disconnected')}")
+                self._lbl_status.setStyleSheet(
+                    f"color: {ACCENT_RED}; font-weight: bold; font-size: 11px; "
+                    "background: rgba(255, 51, 102, 0.1); "
+                    "border: 1px solid rgba(255, 51, 102, 0.3); "
+                    "border-radius: 4px; padding: 2px 6px;"
+                )
 
         mode = t(f"mode.{status.account_mode.value}")
         if mode.startswith("mode."):
             mode = status.account_mode.value
-        self._lbl_detail.setText(f"{mode} | {status.connection_label}")
+        detail_text = f"{mode} | {status.connection_label}"
+        if self._lbl_detail.text() != detail_text:
+            self._lbl_detail.setText(detail_text)
 
         if status.balance_minor_units is not None and status.currency is not None:
-            self._lbl_balance.setText(
-                format_minor_units(status.balance_minor_units, status.currency)
-            )
+            new_bal = format_minor_units(status.balance_minor_units, status.currency)
         else:
-            self._lbl_balance.setText(t("broker.unavailable"))
+            new_bal = t("broker.unavailable")
+        if self._lbl_balance.text() != new_bal:
+            self._lbl_balance.setText(new_bal)
 
-        if status.clock_synced:
-            lat_str = (
-                f" ({status.clock_latency_ms} ms)" if status.clock_latency_ms is not None else ""
-            )
-            self._lbl_clock.setText(f"⏱️ {t('broker.clock_synced')}{lat_str}")
-            self._lbl_clock.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
-        else:
-            self._lbl_clock.setText(f"⏱️ {t('broker.clock_untrusted')}")
-            self._lbl_clock.setStyleSheet(f"color: {ACCENT_RED}; font-size: 11px;")
+        if (
+            self._last_status is None
+            or status.clock_synced != self._last_status.clock_synced
+            or status.clock_latency_ms != self._last_status.clock_latency_ms
+        ):
+            if status.clock_synced:
+                lat_str = (
+                    f" ({status.clock_latency_ms} ms)"
+                    if status.clock_latency_ms is not None
+                    else ""
+                )
+                self._lbl_clock.setText(f"⏱️ {t('broker.clock_synced')}{lat_str}")
+                self._lbl_clock.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+            else:
+                self._lbl_clock.setText(f"⏱️ {t('broker.clock_untrusted')}")
+                self._lbl_clock.setStyleSheet(f"color: {ACCENT_RED}; font-size: 11px;")
+        self._last_status = status
 
     def retranslate(self) -> None:
         self._lbl_balance_title.setText(t("broker.balance"))

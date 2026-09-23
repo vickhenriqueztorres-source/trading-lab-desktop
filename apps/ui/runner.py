@@ -67,14 +67,19 @@ def main() -> int:
         else:
             from PySide6.QtWidgets import QApplication
 
+            from apps.ui.components import NoScrollConfigFilter
+
             app = QApplication.instance() or QApplication(sys.argv)
+            app.installEventFilter(NoScrollConfigFilter(app))
 
             try:
                 auth_resp = controller.auth_status()
             except Exception:
                 auth_resp = None
 
-            is_authorized = auth_resp is not None and auth_resp.status == "AUTHORIZED"
+            is_authorized = auth_resp is not None and (
+                auth_resp.authorized or auth_resp.status in ("AUTHORIZED", "OFFLINE_AUTHORIZED")
+            )
             if not is_authorized:
                 from apps.ui.auth import LoginWindow
 

@@ -473,3 +473,37 @@ def test_ui_protocol_accepts_legacy_payload_with_martingale_off() -> None:
 
     assert restored.martingale_enabled is False
     assert restored.martingale_max_steps == 1
+
+
+def test_martingale_cycle_closes_immediately_when_order_settles_as_win() -> None:
+    config = _config(steps=2)
+    now = datetime(2026, 9, 10, 12, 1, 5, tzinfo=UTC)
+    runtime = _Runtime()
+    runtime.reader = _Reader({"state": OrderState.SETTLED.value, "realized_pnl_minor": 83})
+    client = _Client()
+    trader = IqOptionAutoTrader(
+        supervisor_provider=lambda: SimpleNamespace(client=client),
+        runtime_provider=lambda: runtime,  # type: ignore[arg-type]
+        risk_config_provider=lambda: config,
+        operator_armed=lambda: True,
+        utc_clock=lambda: now,
+        monotonic=lambda: 100.0,
+    )
+    base = _cycle(config)
+    pending = base.after_candle_close(
+        _candle(base.target_candle_close_utc, outcome=IqOptionCandleOutcome.LOSS)
+    )
+    assert pending is not None
+    trader._martingale_cycle = pending
+
+    handled = trader._handle_martingale_cycle(
+        supervisor=SimpleNamespace(client=client),  # type: ignore[arg-type]
+        runtime=runtime,  # type: ignore[arg-type]
+        risk_config=config,
+        now_utc=now,
+    )
+
+    assert handled is True
+    assert runtime.requests == []
+    assert trader._martingale_cycle is None
+    assert trader.status_reason == "IQOPTION_MARTINGALE_PREVIOUS_ORDER_WON"

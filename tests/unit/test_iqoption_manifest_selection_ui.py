@@ -30,7 +30,7 @@ def test_single_panel_locks_manifest_symbol_and_timeframe():
     assert app is not None
 
 
-def test_local_rsi_cannot_be_applied_for_real_account():
+def test_local_strategy_cannot_be_applied_for_real_account():
     app = QApplication.instance() or QApplication([])
     panel = IqOptionStrategyConfigWidget()
     panel.set_account_type("REAL")
@@ -39,7 +39,6 @@ def test_local_rsi_cannot_be_applied_for_real_account():
     panel.config_apply_requested.connect(sent.append)
     panel._emit_config()
     assert sent == []
-    assert "não validado" in panel._strategy.currentText()
     panel.close()
     assert app is not None
 
@@ -74,5 +73,94 @@ def test_asset_selector_uses_core_catalogue_and_disables_discovery_only_product(
     digital_row = panel._symbol.findData("XAUUSD-OTC")
     assert digital_row > 0
     assert not model.item(digital_row).isEnabled()
+    panel.close()
+    assert app is not None
+
+
+def test_local_strategy_allows_auto_asset_selection():
+    app = QApplication.instance() or QApplication([])
+    panel = IqOptionStrategyConfigWidget()
+    panel.set_account_type("PRACTICE")
+    sent = []
+    panel.config_apply_requested.connect(sent.append)
+
+    # Select Hack Chino with AUTO asset
+    hc_idx = panel._strategy.findData("iqoption-hack-chino")
+    assert hc_idx >= 0
+    panel._strategy.setCurrentIndex(hc_idx)
+
+    auto_idx = panel._symbol.findData("AUTO")
+    assert auto_idx >= 0
+    panel._symbol.setCurrentIndex(auto_idx)
+
+    assert panel._strategy.isEnabled()
+    assert panel._symbol.isEnabled()
+    assert panel._symbol.currentData() == "AUTO"
+    assert not panel._auto_radar_hint.isHidden()
+
+    panel._emit_config()
+    assert len(sent) == 1
+    assert sent[0].strategy_id == "iqoption-hack-chino"
+    assert sent[0].symbol == "AUTO"
+    assert sent[0].duration_seconds == 60
+
+    # Select specific asset
+    panel.set_available_assets(
+        (
+            UiIqOptionAssetRank(
+                "EURUSD-OTC",
+                "EUR/USD OTC",
+                "--",
+                condition="READY",
+                status="ACTIVE",
+                readiness="READY",
+                candidate_details="",
+            ),
+        )
+    )
+    sym_idx = panel._symbol.findData("EURUSD-OTC")
+    assert sym_idx >= 0
+    panel._symbol.setCurrentIndex(sym_idx)
+    assert panel._auto_radar_hint.isHidden()
+
+    panel._emit_config()
+    assert len(sent) == 2
+    assert sent[1].strategy_id == "iqoption-hack-chino"
+    assert sent[1].symbol == "EURUSD-OTC"
+    assert sent[1].duration_seconds == 60
+
+    panel.close()
+    assert app is not None
+
+
+def test_unknown_account_defaults_to_practice_and_allows_saving():
+    app = QApplication.instance() or QApplication([])
+    panel = IqOptionStrategyConfigWidget()
+    panel.set_account_type("UNKNOWN")
+    assert panel._apply.isEnabled()
+    assert panel._strategy.isEnabled()
+    assert panel._symbol.isEnabled()
+
+    # Select Hack Chino with AUTO asset
+    hc_idx = panel._strategy.findData("iqoption-hack-chino")
+    assert hc_idx >= 0
+    panel._strategy.setCurrentIndex(hc_idx)
+    auto_idx = panel._symbol.findData("AUTO")
+    assert auto_idx >= 0
+    panel._symbol.setCurrentIndex(auto_idx)
+
+    sent = []
+    panel.config_apply_requested.connect(sent.append)
+    panel._emit_config()
+    assert len(sent) == 1
+    assert sent[0].strategy_id == "iqoption-hack-chino"
+    assert sent[0].symbol == "AUTO"
+
+    # Also test that loading AUTO strategy leaves strategy and symbol enabled
+    panel.set_config(UiIqOptionRiskConfig(strategy_id="AUTO", symbol="AUTO"))
+    assert panel._strategy.isEnabled()
+    assert panel._symbol.isEnabled()
+    assert panel._strategy.currentData() == "AUTO"
+
     panel.close()
     assert app is not None

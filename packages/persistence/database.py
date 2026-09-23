@@ -115,4 +115,6 @@ def open_reader_connection(path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     connection.execute("PRAGMA query_only = ON")
+    connection.execute("PRAGMA mmap_size = 268435456")
+    connection.execute("PRAGMA cache_size = -8000")
     return connection

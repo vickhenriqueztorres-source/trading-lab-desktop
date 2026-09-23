@@ -1144,62 +1144,64 @@ class DerivDigitAutoTrader:
     @staticmethod
     def _reason_description(reason: str, symbol: str | None, rearm_notice: bool) -> str:
         descriptions = {
-            "BOT_WAITING_FOR_LIVE_DERIV": "Aguardando conexão autenticada com a conta Demo.",
-            "BOT_DERIV_ACCOUNT_NOT_CONNECTED": "Aguardando conexão autenticada com a conta Demo.",
+            "BOT_WAITING_FOR_LIVE_DERIV": "Esperando conexión autenticada con la cuenta Demo.",
+            "BOT_DERIV_ACCOUNT_NOT_CONNECTED": "Esperando conexión autenticada con la cuenta Demo.",
             "BOT_WAITING_FOR_NEW_TICK": (
-                "Aguardando um novo tick e um sinal posterior ao acionamento."
+                "Esperando un nuevo tick y una señal posterior a la activación."
             ),
             "BOT_WAITING_FOR_STRATEGY_SIGNAL": (
-                "Aguardando um sinal válido da estratégia selecionada."
+                "Esperando una señal válida de la estrategia seleccionada."
             ),
             "BOT_NO_STRATEGY_SELECTED": (
-                "Nenhuma estratégia está habilitada; a análise shadow continua visível."
+                "Ninguna estrategia está habilitada; el análisis shadow continúa visible."
             ),
             "BOT_STRESS_MODE_REQUIRES_DEMO": (
-                "O modo estresse com várias estratégias está disponível somente na conta Demo."
+                "El modo estrés con varias estrategias solo está disponible en la cuenta Demo."
             ),
-            "BOT_WARMING_UP_TICKS": "Aquecendo a amostra de mercado antes de avaliar entradas.",
+            "BOT_WARMING_UP_TICKS": "Calentando la muestra de mercado antes de evaluar entradas.",
             "BOT_ORDER_IN_FLIGHT": (
-                "Há uma operação em andamento; nenhuma nova entrada será enviada."
+                "Hay una operación en curso; ninguna nueva entrada será enviada."
             ),
             "BOT_ORDER_STATE_UNAVAILABLE": (
-                "Estado das operações indisponível; novas entradas estão bloqueadas por segurança."
+                "Estado de las operaciones no disponible; nuevas entradas bloqueadas por seguridad."
             ),
             "BOT_PERFORMANCE_CACHE_UNAVAILABLE": (
-                "Histórico de desempenho indisponível; avaliação bloqueada por segurança."
+                "Historial de rendimiento no disponible; evaluación bloqueada por seguridad."
             ),
             "BOT_PERFORMANCE_COOLDOWN": (
-                "Estratégia em pausa de desempenho por até 10 minutos após resultado "
-                "líquido negativo nas últimas operações. A retomada é automática."
+                "Estrategia en pausa de rendimiento por hasta 10 minutos tras resultado "
+                "neto negativo en las últimas operaciones. La reanudación es automática."
             ),
             "BOT_RISK_COOLDOWN_ACTIVE": (
-                "Pausa de segurança após a sequência de perdas. A contagem é atualizada "
-                "a cada tick e a análise volta automaticamente quando o prazo termina."
+                "Pausa de seguridad tras racha de pérdidas. El conteo se actualiza "
+                "a cada tick y el análisis vuelve automáticamente al terminar el plazo."
             ),
             "BOT_MARTINGALE_PIN_RELEASED": (
-                "O pino de recuperação expirou; a sequência foi encerrada e a seleção "
-                "normal voltou."
+                "El anclaje de recuperación expiró; la secuencia concluyó y volvió la "
+                "selección normal."
             ),
             "BOT_NO_POSITIVE_NET_EDGE": (
-                "O filtro de qualidade não encontrou vantagem estatística suficiente."
+                "El filtro de calidad no encontró ventaja estadística suficiente."
             ),
-            "BOT_OPERATOR_NOT_ARMED": "Bot pausado. Use Ligar Bot para iniciar uma nova rodada.",
+            "BOT_OPERATOR_NOT_ARMED": (
+                "Bot en pausa. Usa Encender Bot para iniciar una nueva ronda."
+            ),
             "BOT_DISABLED_OR_HEALTH_BLOCKED": (
-                "Entrada bloqueada pelos controles de segurança do sistema."
+                "Entrada bloqueada por los controles de seguridad del sistema."
             ),
-            "BOT_ORDER_SUBMITTED": "Ordem Demo enviada; aguardando eventos da operação.",
-            "SESSION_NO_FRESH_PROPOSAL": "Aguardando cotação atualizada da corretora.",
+            "BOT_ORDER_SUBMITTED": "Orden Demo enviada; esperando eventos de la operación.",
+            "SESSION_NO_FRESH_PROPOSAL": "Esperando cotización actualizada del broker.",
             "SESSION_PAYOUT_BELOW_FLOOR": (
-                "Payout atual abaixo do mínimo configurado para esta sessão."
+                "Payout actual por debajo del mínimo configurado para esta sesión."
             ),
             "SESSION_MARTINGALE_NOT_SUPPORTED": (
-                "Esta estratégia de sessão não usa Martingale nesta fase."
+                "Esta estrategia de sesión no usa Martingale en esta fase."
             ),
         }
         if reason == "BOT_MARTINGALE_ASSET_PINNED":
-            base = f"Recuperação Martingale aguardando sinal no ativo {symbol or 'fixado'}."
+            base = f"Recuperación Martingale esperando señal en el activo {symbol or 'fijado'}."
         else:
-            base = descriptions.get(reason, "Aguardando a próxima condição operacional válida.")
+            base = descriptions.get(reason, "Esperando la próxima condición operativa válida.")
         if rearm_notice:
-            return f"{base} O rearme reiniciou a espera e descartou sinais anteriores."
+            return f"{base} El rearme reinició la espera y descartó señales anteriores."
         return base

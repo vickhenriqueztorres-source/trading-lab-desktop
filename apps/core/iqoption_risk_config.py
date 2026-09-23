@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -13,10 +14,18 @@ from packages.portfolio_allocation.martingale import (
 )
 
 IQOPTION_RSI_STRATEGY_ID = "iqoption-rsi-demo"
+IQOPTION_HACK_CHINO_STRATEGY_ID = "iqoption-hack-chino"
+IQOPTION_LIQUIDITY_GAP_STRATEGY_ID = "iqoption-liquidity-gap"
+IQOPTION_PATTERN_REVERSAL_STRATEGY_ID = "iqoption-pattern-reversal"
+IQOPTION_EXTREME_REJECTION_STRATEGY_ID = "iqoption-extreme-rejection"
+IQOPTION_MICROTREND_SCALPER_STRATEGY_ID = "iqoption-microtrend-scalper"
+IQOPTION_HOUR_OF_DAY_STRATEGY_ID = "iqoption-hour-of-day"
+IQOPTION_BODY_GAP_FILL_STRATEGY_ID = "iqoption-body-gap-fill"
 IQOPTION_MIN_STAKE_MINOR_UNITS = 100
 IQOPTION_ALLOWED_SYMBOLS = frozenset(
     {
         "AUTO",
+        # Forex (Regular & OTC)
         "EURUSD-OTC",
         "EURUSD",
         "GBPUSD-OTC",
@@ -37,6 +46,40 @@ IQOPTION_ALLOWED_SYMBOLS = frozenset(
         "USDCAD",
         "USDCHF-OTC",
         "USDCHF",
+        "EURGBP-OTC",
+        "EURGBP",
+        "GBPNZD-OTC",
+        "GBPNZD",
+        "GBPAUD-OTC",
+        "GBPAUD",
+        "EURCAD-OTC",
+        "EURCAD",
+        "EURAUD-OTC",
+        "EURAUD",
+        "AUDNZD-OTC",
+        "AUDNZD",
+        "AUDCHF-OTC",
+        "AUDCHF",
+        "CADCHF-OTC",
+        "CADCHF",
+        "CADJPY-OTC",
+        "CADJPY",
+        "CHFJPY-OTC",
+        "CHFJPY",
+        "EURNZD-OTC",
+        "EURNZD",
+        "EURCHF-OTC",
+        "EURCHF",
+        "GBPCAD-OTC",
+        "GBPCAD",
+        "GBPCHF-OTC",
+        "GBPCHF",
+        "NZDCAD-OTC",
+        "NZDCAD",
+        "NZDCHF-OTC",
+        "NZDCHF",
+        "NZDJPY-OTC",
+        "NZDJPY",
     }
 )
 
@@ -71,14 +114,28 @@ class IqOptionRiskConfig:
         if not self.strategy_id or len(self.strategy_id) > 128:
             raise ValueError("IQOPTION_STRATEGY_UNSUPPORTED")
         if self.strategy_id not in {
+            IQOPTION_HACK_CHINO_STRATEGY_ID,
             IQOPTION_RSI_STRATEGY_ID,
+            IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+            IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+            IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+            IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+            IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+            IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
             "AUTO",
         } and not self.strategy_id.startswith(("f1:", "f2:", "f3:", "f4:", "f5:")):
             raise ValueError("IQOPTION_STRATEGY_UNSUPPORTED")
-        if self.symbol not in IQOPTION_ALLOWED_SYMBOLS:
+        clean_symbol = str(self.symbol or "").strip().upper()
+        if not clean_symbol or len(clean_symbol) > 32:
+            raise ValueError("IQOPTION_SYMBOL_UNSUPPORTED")
+        if (
+            self.symbol != "AUTO"
+            and self.symbol not in IQOPTION_ALLOWED_SYMBOLS
+            and not re.match(r"^[A-Z0-9_\-\.\/:]+$", clean_symbol)
+        ):
             raise ValueError("IQOPTION_SYMBOL_UNSUPPORTED")
         # Deprecated input: manifest routing owns candle TF, not this saved hint.
-        if self.timeframe_seconds not in {60, 300, 900} or self.duration_seconds != 60:
+        if self.timeframe_seconds not in {60, 300, 900} or self.duration_seconds not in {60, 120}:
             raise ValueError("IQOPTION_RSI_INTERVAL_UNSUPPORTED")
         if (
             type(self.stake_minor_units) is not int

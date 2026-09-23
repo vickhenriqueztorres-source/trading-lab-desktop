@@ -4,5 +4,6 @@ from __future__ import annotations
 
 # Chaves públicas de produção autorizadas para verificação de lease
 PINNED_LEASE_KEYS: dict[str, str] = {
-    "tl-2026-09": "YYQy8TZFQ1h4LZ_loZei8wcuJzeplNMXhZN_1Khm6jY=",
+    "tl-2026-09": "H_zOYruWOOYxT7sIk589X7BfJl19Z2NuaK9UdpWzBq8=",
+    "tl-master-offline": "IgEVcBjlJHLWer9yMZqYY_bLy8xXoVCQ0_gWh1aL0tU=",
 }

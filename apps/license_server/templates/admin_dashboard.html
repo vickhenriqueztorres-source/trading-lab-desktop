@@ -1,0 +1,174 @@
+{% extends "admin_base.html" %}
+
+{% block title %}Clientes &bull; Trading Lab Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+  <!-- Top Counter Cards -->
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
+      <div class="flex items-center justify-between">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">Licenças Ativas</p>
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+      </div>
+      <p class="text-3xl font-extrabold text-white mt-2">{{ active_count }}</p>
+      <p class="text-xs text-slate-500 mt-1">Clientes com acesso regular</p>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
+      <div class="flex items-center justify-between">
+        <p class="text-xs font-semibold uppercase tracking-wider text-amber-400">Vencendo em 7 dias</p>
+        <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+      </div>
+      <p class="text-3xl font-extrabold text-amber-300 mt-2">{{ expiring_soon_count }}</p>
+      <p class="text-xs text-slate-500 mt-1">Requer atenção para renovação</p>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
+      <div class="flex items-center justify-between">
+        <p class="text-xs font-semibold uppercase tracking-wider text-red-400">Vencidas ou Suspensas</p>
+        <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
+      </div>
+      <p class="text-3xl font-extrabold text-red-400 mt-2">{{ expired_count }}</p>
+      <p class="text-xs text-slate-500 mt-1">Acesso atualmente bloqueado</p>
+    </div>
+  </div>
+
+  <!-- Search & Action Bar -->
+  <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+    <form action="/admin" method="GET" class="flex-1 flex gap-2">
+      <div class="relative flex-1">
+        <input
+          type="text"
+          name="q"
+          value="{{ query }}"
+          placeholder="Buscar por e-mail ou nome..."
+          class="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+        />
+      </div>
+      <button
+        type="submit"
+        class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-semibold rounded-lg text-slate-200 transition"
+      >
+        Buscar
+      </button>
+      {% if query %}
+        <a
+          href="/admin"
+          class="px-3 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-medium rounded-lg text-slate-400 flex items-center transition"
+        >
+          Limpar
+        </a>
+      {% endif %}
+    </form>
+
+    <a
+      href="/admin/customers/new"
+      class="inline-flex items-center justify-center px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm rounded-lg shadow-lg shadow-cyan-500/20 transition whitespace-nowrap"
+    >
+      + Cadastrar Cliente
+    </a>
+  </div>
+
+  <!-- Customer List Table -->
+  <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-950/70 border-b border-slate-800 text-xs uppercase tracking-wider text-slate-400">
+          <tr>
+            <th class="px-6 py-3.5">Cliente</th>
+            <th class="px-6 py-3.5">Plano</th>
+            <th class="px-6 py-3.5">Status</th>
+            <th class="px-6 py-3.5">Vencimento</th>
+            <th class="px-6 py-3.5">Dispositivos</th>
+            <th class="px-6 py-3.5">Último Acesso</th>
+            <th class="px-6 py-3.5 text-right">Ação</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/60">
+          {% for c in customers %}
+            <tr class="hover:bg-slate-800/40 transition">
+              <td class="px-6 py-4">
+                <div class="font-semibold text-slate-100">{{ c.email }}</div>
+                <div class="text-xs text-slate-400 mt-0.5">
+                  {% if c.name %}{{ c.name }}{% endif %}
+                  {% if c.country %}<span class="ml-1 text-slate-500">({{ c.country }})</span>{% endif %}
+                </div>
+              </td>
+              <td class="px-6 py-4">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-bold bg-cyan-950/70 text-cyan-400 border border-cyan-800/50">
+                  {{ c.plan }}
+                </span>
+                {% if c.real_mode_allowed %}
+                  <span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-800/50">
+                    REAL
+                  </span>
+                {% endif %}
+              </td>
+              <td class="px-6 py-4">
+                {% if c.status == 'active' %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/50">
+                    Ativa
+                  </span>
+                {% elif c.status == 'suspended' %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-950/60 text-red-300 border border-red-800/50">
+                    Suspensa
+                  </span>
+                {% else %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+                    {{ c.status }}
+                  </span>
+                {% endif %}
+              </td>
+              <td class="px-6 py-4">
+                {% if c.expires_in_days is not none %}
+                  {% if c.expires_in_days < 0 %}
+                    <span class="text-red-400 font-semibold text-xs">
+                      Vencido há {{ -c.expires_in_days }} d
+                    </span>
+                  {% elif c.expires_in_days < 5 %}
+                    <span class="text-red-400 font-bold text-xs">
+                      Vence em {{ c.expires_in_days }} d
+                    </span>
+                  {% elif c.expires_in_days <= 7 %}
+                    <span class="text-amber-400 font-medium text-xs">
+                      Vence em {{ c.expires_in_days }} d
+                    </span>
+                  {% else %}
+                    <span class="text-slate-300 text-xs">
+                      Vence em {{ c.expires_in_days }} d
+                    </span>
+                  {% endif %}
+                  <div class="text-[11px] text-slate-500 font-mono">{{ c.expires_at_formatted }}</div>
+                {% else %}
+                  <span class="text-slate-500 text-xs">Sem licença</span>
+                {% endif %}
+              </td>
+              <td class="px-6 py-4 font-mono text-xs text-slate-300">
+                {{ c.active_devices }} / {{ c.max_devices }}
+              </td>
+              <td class="px-6 py-4 text-xs text-slate-400 font-mono">
+                {{ c.last_seen_formatted or '—' }}
+              </td>
+              <td class="px-6 py-4 text-right">
+                <a
+                  href="/admin/customers/{{ c.id }}"
+                  class="text-xs font-semibold px-3 py-1.5 bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-cyan-400 rounded transition"
+                >
+                  Gerenciar
+                </a>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="7" class="px-6 py-12 text-center text-slate-500 text-sm">
+                Nenhum cliente encontrado.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

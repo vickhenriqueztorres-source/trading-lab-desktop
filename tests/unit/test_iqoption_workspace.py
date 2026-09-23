@@ -10,7 +10,12 @@ from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
 from apps.ui.components.iqoption_strategy_panel import IqOptionStrategyConfigWidget
 from apps.ui.components.iqoption_workspace import IqOptionWorkspaceWidget
 from apps.ui.components.workspaces import BrokerWorkspaceWidget
-from packages.protocol import BrokerCardStatus, UiAccountMode, UiBalanceQuality
+from packages.protocol import (
+    BrokerCardStatus,
+    UiAccountMode,
+    UiBalanceQuality,
+    UiIqOptionRiskConfig,
+)
 
 
 def test_iqoption_workspace_exposes_protected_practice_access() -> None:
@@ -94,8 +99,55 @@ def test_iqoption_rsi_and_risk_controls_are_visible() -> None:
     buttons = {button.text() for button in panel.findChildren(QPushButton)}
     combo_text = {combo.currentText() for combo in panel.findChildren(QComboBox)}
 
-    assert any("RSI" in item for item in combo_text)
+    assert any(
+        term in item
+        for item in combo_text
+        for term in (
+            "Hack Chino",
+            "Liquidity Gap",
+            "Pattern Reversal",
+            "Microtrend Scalper",
+            "AUTO",
+        )
+    )
     assert any("IQ Option" in item for item in buttons)
+    assert application is not None
+
+
+def test_iqoption_strategy_summary_displays_selected_bot() -> None:
+    application = QApplication.instance() or QApplication([])
+    workspace = IqOptionWorkspaceWidget()
+
+    # Default / Pattern Reversal
+    workspace.update_iqoption_risk(
+        UiIqOptionRiskConfig(strategy_id="iqoption-pattern-reversal", symbol="AUTO")
+    )
+    assert "Pattern Reversal" in workspace.strategy_summary._info_title.text()
+    assert "Pattern Reversal" in workspace.strategy_summary._mode_pill.text()
+    assert "Pattern Reversal" in workspace._automation_detail.text()
+
+    # Liquidity Gap
+    workspace.update_iqoption_risk(
+        UiIqOptionRiskConfig(strategy_id="iqoption-liquidity-gap", symbol="AUTO")
+    )
+    assert "Liquidity Gap" in workspace.strategy_summary._info_title.text()
+    assert "Liquidity Gap" in workspace.strategy_summary._mode_pill.text()
+    assert "Liquidity Gap" in workspace._automation_detail.text()
+
+    # Microtrend Scalper
+    workspace.update_iqoption_risk(
+        UiIqOptionRiskConfig(strategy_id="iqoption-microtrend-scalper", symbol="EURUSD-OTC")
+    )
+    assert "Microtrend Scalper" in workspace.strategy_summary._info_title.text()
+    assert "Microtrend Scalper" in workspace.strategy_summary._mode_pill.text()
+    assert "EURUSD-OTC" in workspace._automation_detail.text()
+
+    # AUTO
+    workspace.update_iqoption_risk(UiIqOptionRiskConfig(strategy_id="AUTO", symbol="AUTO"))
+    assert "Radar Multi-Ativos" in workspace.strategy_summary._info_title.text()
+    assert "RADAR MULTI-ATIVOS" in workspace.strategy_summary._mode_pill.text()
+    assert "Radar Multi-Ativos" in workspace._automation_detail.text()
+
     assert application is not None
 
 

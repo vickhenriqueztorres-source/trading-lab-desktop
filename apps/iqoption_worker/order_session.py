@@ -10,7 +10,10 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from apps.iqoption_worker.schema import IQOptionErrorCategory, IQOptionWorkerError
-from packages.brokers.iqoption.community_read_only import IQOptionExternalError
+from packages.brokers.iqoption.community_read_only import (
+    ActiveIdentityResolver,
+    IQOptionExternalError,
+)
 from packages.brokers.iqoption.result_parser import (
     IQOPTION_EVENT_NAME_KEY,
     IQOptionResultError,
@@ -71,6 +74,7 @@ class IQOptionOrderSession:
         *,
         account_id: str = "PRACTICE_ACCOUNT",
         practice_mode: bool = True,
+        identity_resolver: ActiveIdentityResolver | None = None,
     ) -> None:
         if not practice_mode:
             raise IQOptionWorkerError(
@@ -81,6 +85,7 @@ class IQOptionOrderSession:
         self._transport = transport
         self._account_id = account_id
         self.practice_mode = practice_mode
+        self._identity_resolver = identity_resolver or ActiveIdentityResolver()
         self._lock = threading.Lock()
         self._tracked: dict[str, TrackedIQOptionOrder] = {}  # keyed by str(broker_order_id)
         self._tracked_by_ref: dict[str, TrackedIQOptionOrder] = {}  # keyed by order_id
@@ -226,9 +231,46 @@ class IQOptionOrderSession:
             tracked = self._tracked.get(contract_id) or self._tracked_by_ref.get(client_order_id)
             if tracked is None:
                 return None
+            if contract_id and contract_id not in ("None", "0"):
+                tracked.broker_order_id = contract_id
+                self._tracked[contract_id] = tracked
 
         if result_source is None:
             return None
+
+        # Identity checks against tracked order to prevent cross-contamination
+        raw_active = (
+            msg.get("active_canonical")
+            or msg.get("active")
+            or msg.get("active_id")
+            or msg.get("symbol")
+        )
+        if raw_active is not None:
+            canonical_active = self._identity_resolver.resolve(
+                raw_active,
+                expected_symbol=tracked.symbol,
+            )
+            if canonical_active is not None:
+                if canonical_active.symbol != tracked.symbol.strip().upper():
+                    return None
+            else:
+                raw_s = str(raw_active).strip().upper()
+                if not raw_s.isdigit() and raw_s != tracked.symbol.strip().upper():
+                    return None
+
+        raw_dir = msg.get("direction") or msg.get("dir")
+        if raw_dir is not None:
+            d_str = str(raw_dir).strip().upper()
+            if d_str not in {tracked.direction.value.upper(), tracked.direction.name.upper()}:
+                return None
+
+        raw_balance = msg.get("user_balance_id") or msg.get("balance_id") or msg.get("account_id")
+        if raw_balance is not None:
+            t_acc = str(tracked.account_id).strip()
+            c_acc = str(raw_balance).strip()
+            if t_acc.isdigit() and c_acc.isdigit() and t_acc != c_acc:
+                return None
+
         try:
             financial_result = parse_iqoption_financial_result(
                 msg,

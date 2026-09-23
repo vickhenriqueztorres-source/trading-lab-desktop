@@ -101,6 +101,169 @@ IQOPTION_ACTIVE_IDS: dict[str, int] = {
     "USDCAD": 100,
 }
 
+IQOPTION_CRYPTO_NON_BINARY: frozenset[str] = frozenset(
+    {
+        "BTCUSD",
+        "ETHUSD",
+        "XRPUSD",
+        "SOLUSD",
+        "DOGEUSD",
+        "LTCUSD",
+        "BCHUSD",
+        "EOSUSD",
+        "TRXUSD",
+        "XLMUSD",
+        "DSHUSD",
+        "BTGUSD",
+        "ZECUSD",
+        "ETCUSD",
+        # Precious metals and commodities without 1m turbo candles
+        "XAUUSD",
+        "XAGUSD",
+        "XPDUSD",
+        "XPTUSD",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalActive:
+    symbol: str
+    broker_symbol: str
+    active_id: int
+    product_kind: str
+    catalog_generation: int
+    resolution_source: str
+    resolved_at: datetime
+
+
+class ActiveIdentityResolver:
+    """Bidirectional active identity resolver tied to the session catalog generation."""
+
+    def __init__(
+        self,
+        active_ids: Mapping[str, int] | None = None,
+        generation: int = 1,
+        fallback_map: Mapping[str, int] | None = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._generation = generation
+        self._symbol_to_id: dict[str, int] = {k.upper(): v for k, v in (active_ids or {}).items()}
+        self._id_to_symbol: dict[int, str] = {v: k for k, v in self._symbol_to_id.items()}
+        self._fallback = {k.upper(): v for k, v in (fallback_map or IQOPTION_ACTIVE_IDS).items()}
+        self._fallback_rev: dict[int, str] = {v: k for k, v in self._fallback.items()}
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def update_catalog(self, active_ids: Mapping[str, int], generation: int) -> None:
+        with self._lock:
+            self._generation = generation
+            self._symbol_to_id = {k.upper(): v for k, v in active_ids.items()}
+            self._id_to_symbol = {v: k for k, v in self._symbol_to_id.items()}
+
+    def get_active_id(self, symbol: str) -> int | None:
+        with self._lock:
+            sym = symbol.strip().upper()
+            active_id = self._symbol_to_id.get(sym)
+            if active_id is not None:
+                return active_id
+            return self._fallback.get(sym)
+
+    def get_symbol(self, active_id: int | str) -> str | None:
+        try:
+            aid = int(str(active_id).strip())
+        except (ValueError, TypeError):
+            return None
+        with self._lock:
+            sym = self._id_to_symbol.get(aid)
+            if sym is not None:
+                return sym
+            return self._fallback_rev.get(aid)
+
+    def resolve(
+        self,
+        raw_active: object,
+        *,
+        expected_symbol: str | None = None,
+        product_kind: str = "turbo",
+    ) -> CanonicalActive | None:
+        if raw_active is None or isinstance(raw_active, bool):
+            return None
+        resolved_at = datetime.now(UTC)
+        raw_str = str(raw_active).strip().upper()
+        if not raw_str:
+            return None
+
+        # Case 1: raw_active is numeric active_id
+        if raw_str.isdigit():
+            aid = int(raw_str)
+            # Active catalog of current generation takes strict precedence
+            with self._lock:
+                sym = self._id_to_symbol.get(aid)
+            if sym is not None:
+                source = (
+                    "EXPECTED_SYMBOL_MATCH"
+                    if expected_symbol and expected_symbol.strip().upper() == sym
+                    else "CATALOG_ACTIVE_ID"
+                )
+                return CanonicalActive(
+                    symbol=sym,
+                    broker_symbol=raw_str,
+                    active_id=aid,
+                    product_kind=product_kind,
+                    catalog_generation=self.generation,
+                    resolution_source=source,
+                    resolved_at=resolved_at,
+                )
+            # Fallback only when aid is not present in active catalog
+            fallback_sym = self._fallback_rev.get(aid)
+            if fallback_sym is not None:
+                source = (
+                    "EXPECTED_SYMBOL_MATCH"
+                    if expected_symbol and expected_symbol.strip().upper() == fallback_sym
+                    else "FALLBACK_ACTIVE_ID"
+                )
+                return CanonicalActive(
+                    symbol=fallback_sym,
+                    broker_symbol=raw_str,
+                    active_id=aid,
+                    product_kind=product_kind,
+                    catalog_generation=self.generation,
+                    resolution_source=source,
+                    resolved_at=resolved_at,
+                )
+            return None
+
+        # Case 2: raw_active is a symbol string (e.g. "EURUSD" or "EURUSD-OTC" or "SPX/GOLD")
+        aid = self.get_active_id(raw_str)
+        if aid is not None:
+            return CanonicalActive(
+                symbol=raw_str,
+                broker_symbol=raw_str,
+                active_id=aid,
+                product_kind=product_kind,
+                catalog_generation=self.generation,
+                resolution_source="CATALOG_SYMBOL",
+                resolved_at=resolved_at,
+            )
+
+        # Case 3: If expected_symbol matches raw_str directly even if not in active map
+        if expected_symbol and raw_str == expected_symbol.strip().upper():
+            return CanonicalActive(
+                symbol=raw_str,
+                broker_symbol=raw_str,
+                active_id=0,
+                product_kind=product_kind,
+                catalog_generation=self.generation,
+                resolution_source="SYMBOL_NAME_MATCH",
+                resolved_at=resolved_at,
+            )
+
+        return None
+
 
 class IQOptionAccountMode(StrEnum):
     PRACTICE = "practice"
@@ -266,10 +429,12 @@ class IQOptionCommunityReadOnlySession:
         allow_http_login: bool = True,
         on_ssid_ready: Callable[[SecretValue], None] | None = None,
         on_ssid_invalid: Callable[[], None] | None = None,
+        allow_real_trading: bool = False,
     ) -> None:
         self._email = email
         self._password = password
         self._account_mode = account_mode
+        self._allow_real_trading = allow_real_trading
         self._login = login
         self._websocket_factory = websocket_factory
         self._monotonic = monotonic
@@ -339,8 +504,13 @@ class IQOptionCommunityReadOnlySession:
         self._active_ids = dict(IQOPTION_ACTIVE_IDS)
         self._catalog_refreshed = False
         self._catalog_generation = 0
+        self._identity_resolver = ActiveIdentityResolver(self._active_ids, generation=0)
         self._digital_catalog_response: dict[str, Any] | None = None
         self._digital_catalog_retry_after_mono = 0.0
+
+    @property
+    def identity_resolver(self) -> ActiveIdentityResolver:
+        return self._identity_resolver
 
     @property
     def is_connected(self) -> bool:
@@ -451,6 +621,8 @@ class IQOptionCommunityReadOnlySession:
             self._last_rx_monotonic = float("-inf")
             self._active_ids = dict(IQOPTION_ACTIVE_IDS)
             self._catalog_refreshed = False
+            self._catalog_generation += 1
+            self._identity_resolver.update_catalog(self._active_ids, self._catalog_generation)
             self._digital_catalog_response = None
             self._digital_catalog_retry_after_mono = 0.0
         websocket = self._websocket_factory()
@@ -733,12 +905,12 @@ class IQOptionCommunityReadOnlySession:
         timeframe_seconds: int = 60,
         count: int = 20,
         end_epoch: int | None = None,
-        timeout: float = 5.0,
+        timeout: float = 3.0,
     ) -> tuple[MarketCandle, ...]:
         """Fetch closed broker candles through the authenticated WebSocket."""
 
-        if self._account_mode is not IQOptionAccountMode.PRACTICE:
-            raise IQOptionExternalError("IQOPTION_REAL_MARKET_EXECUTION_FORBIDDEN")
+        if self._account_mode not in {IQOptionAccountMode.PRACTICE, IQOptionAccountMode.REAL}:
+            raise IQOptionExternalError("IQOPTION_ACCOUNT_UNSUPPORTED")
         if timeframe_seconds not in {60, 300, 600, 900}:
             raise IQOptionExternalError("IQOPTION_TIMEFRAME_UNSUPPORTED")
         # History sizing belongs to the active strategy's warm-up contract.
@@ -815,25 +987,45 @@ class IQOptionCommunityReadOnlySession:
         Community API get-initialization-data v3, turbo.option.profit.commission.
         W = (100 - commission) / 100. Never substitute a historic settlement.
         """
-        if self._account_mode is not IQOptionAccountMode.PRACTICE:
-            raise IQOptionExternalError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
+        if self._account_mode not in {IQOptionAccountMode.PRACTICE, IQOptionAccountMode.REAL}:
+            raise IQOptionExternalError("IQOPTION_ACCOUNT_UNSUPPORTED")
         if duration_minutes != 1:
             raise IQOptionExternalError("IQOPTION_OPERATION_UNSUPPORTED")
         response = self._request_initialization(timeout)
         try:
-            actives = response["msg"]["turbo"]["actives"]
-            if not isinstance(actives, Mapping):
+            msg = response.get("msg") if isinstance(response, Mapping) else None
+            if not isinstance(msg, Mapping):
                 raise ValueError("invalid catalogue")
-            matches = [
-                (str(active_id), active)
-                for active_id, active in actives.items()
-                if isinstance(active, Mapping)
-                and self._catalog_symbol(active.get("name")) == symbol.upper()
-            ]
+            raw_turbo = msg.get("turbo")
+            raw_binary = msg.get("binary")
+            actives_turbo = raw_turbo.get("actives") if isinstance(raw_turbo, Mapping) else None
+            actives_binary = raw_binary.get("actives") if isinstance(raw_binary, Mapping) else None
+            if not isinstance(actives_turbo, Mapping) and not isinstance(actives_binary, Mapping):
+                raise ValueError("invalid catalogue")
+
+            matches: list[tuple[str, Mapping[str, Any]]] = []
+            for candidate_actives in (actives_turbo, actives_binary):
+                if not isinstance(candidate_actives, Mapping):
+                    continue
+                candidate_matches = [
+                    (str(active_id), active)
+                    for active_id, active in candidate_actives.items()
+                    if isinstance(active, Mapping)
+                    and self._catalog_symbol(active.get("name")) == symbol.upper()
+                ]
+                if candidate_matches:
+                    matches = candidate_matches
+                    break
+
             if not matches:
                 with self._lock:
                     previous_id = self._active_ids.get(symbol.upper())
-                if previous_id is not None and str(previous_id) in actives:
+                all_actives: dict[str, Any] = {}
+                if isinstance(actives_turbo, Mapping):
+                    all_actives.update(actives_turbo)
+                if isinstance(actives_binary, Mapping):
+                    all_actives.update(actives_binary)
+                if previous_id is not None and str(previous_id) in all_actives:
                     raise ValueError("catalogue id no longer matches exact asset")
                 raise IQOptionExternalError("IQOPTION_ACTIVE_UNAVAILABLE")
             if len(matches) != 1:
@@ -842,13 +1034,17 @@ class IQOptionCommunityReadOnlySession:
             active_id = int(raw_active_id)
             with self._lock:
                 self._active_ids[symbol.upper()] = active_id
-            if active["enabled"] is False:
+            if active.get("enabled") is False:
                 raise IQOptionExternalError("IQOPTION_ACTIVE_UNAVAILABLE")
-            if active["is_suspended"] is True:
+            if active.get("is_suspended") is True:
                 raise IQOptionExternalError("IQOPTION_ACTIVE_SUSPENDED")
-            if active["enabled"] is not True or active["is_suspended"] is not False:
+            if active.get("enabled") is not True or active.get("is_suspended") is not False:
                 raise ValueError("invalid availability flags")
-            commission = Decimal(str(active["option"]["profit"]["commission"]))
+            option = active.get("option")
+            profit = option.get("profit") if isinstance(option, Mapping) else active.get("profit")
+            if not isinstance(profit, Mapping):
+                raise ValueError("invalid profit mapping")
+            commission = Decimal(str(profit["commission"]))
             if not commission.is_finite() or not 0 <= commission < 100:
                 raise ValueError("invalid commission")
             return (Decimal(100) - commission) / Decimal(100)
@@ -901,10 +1097,14 @@ class IQOptionCommunityReadOnlySession:
         instruments.sort(key=lambda item: (item.broker_symbol, item.product.value, item.broker_id))
         active_ids: dict[str, int] = {}
         for item in instruments:
-            if item.product is not BrokerInstrumentProduct.TURBO:
+            if item.product not in {BrokerInstrumentProduct.TURBO, BrokerInstrumentProduct.BINARY}:
                 continue
             try:
-                active_ids[item.broker_symbol] = int(item.broker_id)
+                if (
+                    item.broker_symbol not in active_ids
+                    or item.product is BrokerInstrumentProduct.TURBO
+                ):
+                    active_ids[item.broker_symbol] = int(item.broker_id)
             except ValueError:
                 continue
         with self._lock:
@@ -912,6 +1112,7 @@ class IQOptionCommunityReadOnlySession:
             self._catalog_refreshed = True
             self._catalog_generation += 1
             generation = self._catalog_generation
+            self._identity_resolver.update_catalog(active_ids, generation=generation)
         return BrokerInstrumentCatalog(
             generation=generation,
             observed_at_utc=datetime.now(UTC),
@@ -951,14 +1152,36 @@ class IQOptionCommunityReadOnlySession:
                     availability = BrokerInstrumentAvailability.DISABLED
                 elif suspended:
                     availability = BrokerInstrumentAvailability.SUSPENDED
+                elif symbol.removesuffix("-OTC") in IQOPTION_CRYPTO_NON_BINARY:
+                    availability = BrokerInstrumentAvailability.DISABLED
                 else:
                     availability = BrokerInstrumentAvailability.OPEN
+                    # Binary options on IQ Option require an active profit configuration
+                    # to be genuinely tradable (commission in [0, 100)).
+                    option = raw_active.get("option")
+                    profit = (
+                        option.get("profit")
+                        if isinstance(option, Mapping)
+                        else raw_active.get("profit")
+                    )
+                    commission = (
+                        profit.get("commission") if isinstance(profit, Mapping) else None
+                    )
+                    if commission is not None:
+                        try:
+                            comm_dec = Decimal(str(commission))
+                            if not (comm_dec.is_finite() and 0 <= comm_dec < 100):
+                                availability = BrokerInstrumentAvailability.DISABLED
+                        except Exception:
+                            availability = BrokerInstrumentAvailability.DISABLED
                 turbo = product is BrokerInstrumentProduct.TURBO
-                executable = (
-                    turbo
-                    and availability is BrokerInstrumentAvailability.OPEN
-                    and self._account_mode is IQOptionAccountMode.PRACTICE
-                )
+                is_open = availability is BrokerInstrumentAvailability.OPEN
+                valid_account = self._account_mode in {
+                    IQOptionAccountMode.PRACTICE,
+                    IQOptionAccountMode.REAL,
+                }
+                analyzable = turbo or is_open
+                executable = is_open and valid_account
                 parsed.append(
                     BrokerInstrument(
                         broker=Broker.IQ_OPTION,
@@ -968,9 +1191,9 @@ class IQOptionCommunityReadOnlySession:
                         product=product,
                         market_kind=self._market_kind(symbol),
                         availability=availability,
-                        duration_seconds=(60,) if turbo else (),
+                        duration_seconds=(60,) if (turbo or is_open) else (),
                         detectable=True,
-                        analyzable=turbo,
+                        analyzable=analyzable,
                         quotable=executable,
                         executable=executable,
                     )
@@ -1042,7 +1265,10 @@ class IQOptionCommunityReadOnlySession:
     def _catalog_symbol(raw_name: object) -> str | None:
         if not isinstance(raw_name, str) or not raw_name.strip():
             return None
-        return raw_name.rsplit(".", 1)[-1].strip().upper()
+        symbol = raw_name.rsplit(".", 1)[-1].strip().upper()
+        if symbol.endswith("-OP"):
+            return symbol.removesuffix("-OP")
+        return symbol
 
     @staticmethod
     def _market_kind(symbol: str) -> BrokerMarketKind:
@@ -1065,7 +1291,13 @@ class IQOptionCommunityReadOnlySession:
     ) -> dict[str, Any]:
         """Practice transport used by the isolated order/reconciliation sessions."""
 
-        if self._account_mode is not IQOptionAccountMode.PRACTICE:
+        if self._account_mode not in {IQOptionAccountMode.PRACTICE, IQOptionAccountMode.REAL}:
+            raise IQOptionExternalError("IQOPTION_ACCOUNT_UNSUPPORTED")
+        if (
+            name == "buy"
+            and self._account_mode is IQOptionAccountMode.REAL
+            and not self._allow_real_trading
+        ):
             raise IQOptionExternalError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
         if name == "buy":
             return self._buy_binary_option(msg, timeout=timeout)
@@ -1939,6 +2171,11 @@ class IQOptionCommunityReadOnlySession:
         matched = self._find_exact_contract(raw, str(option_id), "")
         if matched is None:
             return {"isSuccessful": False, "message": "Option not found"}
+        if "active" in matched:
+            canonical = self._identity_resolver.resolve(matched["active"])
+            if canonical is not None:
+                matched["active_canonical"] = canonical.symbol
+                matched["active_id"] = canonical.active_id
         return {"isSuccessful": True, "result": matched}
 
     @classmethod
@@ -1976,7 +2213,14 @@ class IQOptionCommunityReadOnlySession:
         ref_matches = bool(wanted_client_ref) and item_ref == wanted_client_ref
         if id_matches or ref_matches:
             normalized = dict(raw)
-            normalized["id"] = exact_id if exact_id is not None else wanted_id
+            if exact_id is not None:
+                normalized["id"] = exact_id
+            elif wanted_id:
+                normalized["id"] = wanted_id
+            else:
+                first_cand = next((c for c in candidate_ids if c is not None and str(c)), None)
+                if first_cand is not None:
+                    normalized["id"] = str(first_cand)
             if history_container is not None:
                 normalized[IQOPTION_HISTORY_CONTAINER_KEY] = history_container
             return normalized
@@ -2347,6 +2591,8 @@ class IQOptionCommunityReadOnlySession:
 
 
 __all__ = [
+    "ActiveIdentityResolver",
+    "CanonicalActive",
     "IQOptionAccountMode",
     "IQOptionCommunityReadOnlySession",
     "IQOptionConnectionSnapshot",

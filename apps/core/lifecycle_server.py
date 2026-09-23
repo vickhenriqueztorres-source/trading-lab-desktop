@@ -217,9 +217,10 @@ class CoreLifecycleServer:
             )
         if request.message_type is MessageType.CORE_SAFE_STOP_REQUEST:
             require_empty_payload(request.payload)
+            preserve_intent = not bool(getattr(self._service, "ui_shutdown_requested", False))
             self._service.safe_stop(
                 caller=StopReason.USER_COMMAND,
-                preserve_operator_intent=True,
+                preserve_operator_intent=preserve_intent,
             )
             return _response(request, MessageType.CORE_SAFE_STOP_ACK, {})
         if request.message_type is MessageType.CORE_DRAIN_REQUEST:

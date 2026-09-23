@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -18,11 +21,12 @@ from PySide6.QtWidgets import (
 
 from apps.ui.components.iqoption_asset_radar import IqOptionAssetRadarWidget
 from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummaryWidget
+from apps.ui.components.manual_review_panel import ManualReviewPanel
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.components.safe_stop_button import SafeStopButton
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import t
-from apps.ui.theme import ACCENT_AMBER, ACCENT_CYAN, ACCENT_GREEN
+from apps.ui.theme import ACCENT_AMBER, ACCENT_GREEN
 from packages.protocol.ui_messages import (
     BrokerCardStatus,
     OrderSummary,
@@ -41,6 +45,7 @@ def _mode_text(mode: UiAccountMode) -> str:
 
 def iqoption_bot_reason_text(reason: str) -> str:
     messages = {
+        "IQOPTION_BOT_READY_FOR_CAPABILITY_CHECK": t("iq.reason.ready_for_capability_check"),
         "MD_CLOCK_UNTRUSTED": t("iq.reason.clock_untrusted"),
         "TRANSPORT_DOWN": t("iq.reason.transport_down"),
         "IQOPTION_BALANCE_STALE": t("iq.reason.balance_stale"),
@@ -65,6 +70,7 @@ class IqOptionWorkspaceWidget(QWidget):
 
     iqoption_login_requested = Signal()
     safe_stop_requested = Signal()
+    iqoption_bot_toggle_requested = Signal()
 
     @property
     def tabs(self) -> QTabWidget:
@@ -88,19 +94,15 @@ class IqOptionWorkspaceWidget(QWidget):
         root.setContentsMargins(18, 14, 18, 14)
         root.setSpacing(12)
 
-        # Page Header (Title + Subtitle)
-        header = QVBoxLayout()
-        header.setSpacing(4)
+        # Page Header (Title + Subtitle) - hidden to maximize vertical space
         self._page_title = QLabel(t("page.iqoption"))
         self._page_title.setObjectName("sectionTitle")
-        self._page_title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        header.addWidget(self._page_title)
+        self._page_title.setVisible(False)
         self._page_subtitle = QLabel(t("page.iqoption_subtitle"))
         self._page_subtitle.setObjectName("hint")
-        header.addWidget(self._page_subtitle)
-        root.addLayout(header)
+        self._page_subtitle.setVisible(False)
 
-        # Card 1: Connection & Account Header
+        # Card 1: Connection & Account Header (Compact 54px Status Toolbar)
         root.addWidget(self._build_account_header())
 
         # Main Workspace Tabs
@@ -117,6 +119,9 @@ class IqOptionWorkspaceWidget(QWidget):
         self._configuration_layout.setSpacing(12)
         self._configuration_page = self._build_config_page()
         self._tabs.addTab(self._configuration_page, "⚙️ " + t("tabs.configuration"))
+        self._config_widget: Any | None = None
+        self._previous_tab_index: int = 0
+        self._tabs.currentChanged.connect(self._on_tab_changed)
 
         root.addWidget(self._tabs, 1)
         self.retranslate()
@@ -124,99 +129,136 @@ class IqOptionWorkspaceWidget(QWidget):
     def _build_account_header(self) -> QFrame:
         frame = QFrame()
         frame.setObjectName("DerivHero")
-        outer = QVBoxLayout(frame)
-        outer.setContentsMargins(18, 12, 18, 12)
-        outer.setSpacing(8)
+        frame.setFixedHeight(54)
+        bar = QHBoxLayout(frame)
+        bar.setContentsMargins(16, 8, 16, 8)
+        bar.setSpacing(12)
+        bar.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        card_title_row = QHBoxLayout()
-        card_title_row.setSpacing(8)
-        self._card_conn_title = QLabel(t("card.connection"))
-        self._card_conn_title.setObjectName("sectionTitle")
-        self._card_conn_title.setStyleSheet("font-size: 14px; font-weight: 600;")
-        card_title_row.addWidget(self._card_conn_title)
-        self._card_conn_hint = QLabel(t("card.connection_hint"))
-        self._card_conn_hint.setObjectName("hint")
-        card_title_row.addWidget(self._card_conn_hint)
-        card_title_row.addStretch()
-        outer.addLayout(card_title_row)
-
-        layout = QHBoxLayout()
-        layout.setSpacing(14)
-
-        # Title / Description
-        identity = QVBoxLayout()
-        identity.setSpacing(2)
-        self._eyebrow = QLabel(t("iq.workspace.hero_title"))
-        self._eyebrow.setObjectName("Eyebrow")
-        identity.addWidget(self._eyebrow)
-
-        self._title = QLabel(t("iq.workspace.hero_subtitle"))
-        self._title.setObjectName("HeroTitle")
-        identity.addWidget(self._title)
-
-        self._description = QLabel(t("iq.workspace.hero_desc"))
-        self._description.setWordWrap(True)
-        self._description.setObjectName("Subtitle")
-        identity.addWidget(self._description)
-        layout.addLayout(identity, 3)
-
-        # Connection Pill
+        # 1. Connection status pill & Clock latency
+        conn_box = QHBoxLayout()
+        conn_box.setSpacing(6)
+        conn_box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self._connection_pill = QLabel()
         self._connection_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._connection_pill.setObjectName("StatusPillOnline")
-        layout.addWidget(self._connection_pill)
-
-        # Account Mode
-        account = QVBoxLayout()
-        account.setSpacing(3)
-        self._account_caption = QLabel(t("deriv.hub.account"))
-        self._account_caption.setObjectName("Subtitle")
-        account.addWidget(self._account_caption)
-        self._account_mode = QLabel("—")
-        self._account_mode.setObjectName("ValueMono")
-        account.addWidget(self._account_mode)
+        self._connection_pill.setMinimumWidth(105)
+        self._connection_pill.setFixedHeight(24)
+        conn_box.addWidget(self._connection_pill)
         self._clock_status = QLabel("—")
         self._clock_status.setObjectName("Subtitle")
-        account.addWidget(self._clock_status)
-        layout.addLayout(account, 2)
+        self._clock_status.setStyleSheet("font-size: 11px; color: #64748B;")
+        conn_box.addWidget(self._clock_status)
+        bar.addLayout(conn_box)
 
-        # Balance Section
-        balance = QVBoxLayout()
-        balance.setSpacing(3)
-        self._balance_caption = QLabel(t("broker.balance"))
+        # Divider 1
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setStyleSheet("color: #334155;")
+        bar.addWidget(sep1)
+
+        # 2. Account Mode Pill
+        self._account_mode = QLabel("—")
+        self._account_mode.setObjectName("ValueMono")
+        self._account_mode.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._account_mode.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #F59E0B; "
+            "background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); "
+            "border-radius: 4px; padding: 2px 8px;"
+        )
+        bar.addWidget(self._account_mode)
+
+        # Divider 2
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet("color: #334155;")
+        bar.addWidget(sep2)
+
+        # 3. Balance Section
+        bal_box = QHBoxLayout()
+        bal_box.setSpacing(6)
+        bal_box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self._balance_caption = QLabel(t("broker.balance") + ":")
         self._balance_caption.setObjectName("Subtitle")
-        balance.addWidget(self._balance_caption)
+        self._balance_caption.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #64748B; text-transform: uppercase;"
+        )
+        bal_box.addWidget(self._balance_caption)
         self._balance_value = QLabel("—")
         self._balance_value.setObjectName("ValueMono")
-        self._balance_value.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 16px;")
-        balance.addWidget(self._balance_value)
+        self._balance_value.setStyleSheet(
+            f"color: {ACCENT_GREEN}; font-size: 15px; font-weight: 800;"
+        )
+        bal_box.addWidget(self._balance_value)
         self._balance_freshness = QLabel(t("iq.balance.awaiting"))
         self._balance_freshness.setObjectName("Subtitle")
-        balance.addWidget(self._balance_freshness)
-        layout.addLayout(balance, 2)
+        self._balance_freshness.setStyleSheet("font-size: 10px; color: #64748B;")
+        bal_box.addWidget(self._balance_freshness)
+        bar.addLayout(bal_box)
 
-        # Bot Automation Pill & Reason
-        bot_box = QVBoxLayout()
-        bot_box.setSpacing(3)
+        # Divider 3
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.Shape.VLine)
+        sep3.setStyleSheet("color: #334155;")
+        bar.addWidget(sep3)
+
+        # 4. Automation Pill & Detail
+        auto_box = QHBoxLayout()
+        auto_box.setSpacing(8)
+        auto_box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self._automation_pill = QLabel(t("iq.status.active"))
         self._automation_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._automation_pill.setObjectName("StatusPillOnline")
-        bot_box.addWidget(self._automation_pill)
+        self._automation_pill.setMinimumWidth(130)
+        self._automation_pill.setFixedHeight(26)
+        auto_box.addWidget(self._automation_pill)
+
+        self._btn_bot_toggle = QPushButton(t("btn.bot.light_start"))
+        self._btn_bot_toggle.setObjectName("LightBotToggle")
+        self._btn_bot_toggle.setFixedHeight(26)
+        self._btn_bot_toggle.setStyleSheet(
+            "QPushButton { background: rgba(31, 181, 122, 0.12); color: #1FB57A; "
+            "border: 1px solid #1FB57A; border-radius: 4px; padding: 2px 10px; "
+            "font-size: 11px; font-weight: 700; } "
+            "QPushButton:hover { background: rgba(31, 181, 122, 0.25); }"
+        )
+        self._btn_bot_toggle.clicked.connect(self.iqoption_bot_toggle_requested.emit)
+        auto_box.addWidget(self._btn_bot_toggle)
 
         self._automation_detail = QLabel(t("iq.workspace.auto_scan_desc"))
         self._automation_detail.setObjectName("Subtitle")
-        self._automation_detail.setWordWrap(True)
-        self._automation_detail.setStyleSheet(f"color: {ACCENT_CYAN}; font-size: 11px;")
-        bot_box.addWidget(self._automation_detail)
-        layout.addLayout(bot_box, 3)
+        self._automation_detail.setStyleSheet("font-size: 11px; color: #94A3B8;")
+        auto_box.addWidget(self._automation_detail)
+        bar.addLayout(auto_box)
 
-        # SafeStop button
+        bar.addStretch(1)
+
+        # 5. Safe Stop Button
         self._safe_stop_button = SafeStopButton()
         self._safe_stop_button.setObjectName("danger")
+        self._safe_stop_button.setFixedHeight(30)
+        self._safe_stop_button.setText(t("btn.safe_stop_short"))
+        self._safe_stop_button.setToolTip(t("btn.safe_stop"))
+        self._safe_stop_button.setStyleSheet(
+            "font-size: 10px; font-weight: 700; padding: 2px 10px;"
+        )
         self._safe_stop_button.safe_stop_triggered.connect(self.safe_stop_requested.emit)
-        layout.addWidget(self._safe_stop_button)
+        bar.addWidget(self._safe_stop_button)
 
-        outer.addLayout(layout)
+        # Kept for compatibility / headless checks (hidden)
+        self._card_conn_title = QLabel(t("card.connection"))
+        self._card_conn_title.setVisible(False)
+        self._card_conn_hint = QLabel(t("card.connection_hint"))
+        self._card_conn_hint.setVisible(False)
+        self._eyebrow = QLabel(t("iq.workspace.hero_title"))
+        self._eyebrow.setVisible(False)
+        self._title = QLabel(t("iq.workspace.hero_subtitle"))
+        self._title.setVisible(False)
+        self._description = QLabel(t("iq.workspace.hero_desc"))
+        self._description.setVisible(False)
+        self._account_caption = QLabel(t("deriv.hub.account"))
+        self._account_caption.setVisible(False)
+
         return frame
 
     def _build_live_page(self) -> QScrollArea:
@@ -249,7 +291,11 @@ class IqOptionWorkspaceWidget(QWidget):
         self.asset_radar = IqOptionAssetRadarWidget()
         layout.addWidget(self.asset_radar)
 
-        # 3. Orders Table
+        # 3. Manual Review Panel (appears when orders require manual review)
+        self.manual_review_panel = ManualReviewPanel()
+        layout.addWidget(self.manual_review_panel)
+
+        # 4. Orders Table
         self._orders_header = QLabel(t("orders.title") + " · IQ OPTION")
         self._orders_header.setObjectName("Title")
         layout.addWidget(self._orders_header)
@@ -284,9 +330,9 @@ class IqOptionWorkspaceWidget(QWidget):
         self._config_content_layout.addLayout(risk_header)
 
         # Login / Account Selector Box
-        login_box = QFrame()
-        login_box.setObjectName("Surface")
-        l_layout = QVBoxLayout(login_box)
+        self._login_box = QFrame()
+        self._login_box.setObjectName("Surface")
+        l_layout = QVBoxLayout(self._login_box)
         l_layout.setContentsMargins(16, 14, 16, 14)
         l_layout.setSpacing(10)
 
@@ -309,15 +355,59 @@ class IqOptionWorkspaceWidget(QWidget):
         self._iqoption_login_status.setObjectName("Subtitle")
         l_layout.addWidget(self._iqoption_login_status)
 
-        self._config_content_layout.addWidget(login_box)
+        self._config_content_layout.addWidget(self._login_box)
         self._config_content_layout.addStretch()
 
         scroll.setWidget(content)
         return scroll
 
     def add_configuration_widget(self, widget: QWidget) -> None:
+        self._config_widget = widget
+        if hasattr(widget, "dirty_state_changed"):
+            widget.dirty_state_changed.connect(self._on_config_dirty_changed)
         stretch_index = self._config_content_layout.count() - 1
         self._config_content_layout.insertWidget(stretch_index, widget)
+
+    def _on_config_dirty_changed(self, is_dirty: bool) -> None:
+        if is_dirty:
+            self._tabs.setTabText(1, "⚙️ " + t("tabs.configuration") + t("iq.risk.tab_pending"))
+            self._tabs.tabBar().setTabTextColor(1, QColor("#F59E0B"))
+        else:
+            self._tabs.setTabText(1, "⚙️ " + t("tabs.configuration"))
+            self._tabs.tabBar().setTabTextColor(1, QColor("#94A3B8"))
+
+    def _on_tab_changed(self, new_index: int) -> None:
+        if (
+            self._previous_tab_index == 1
+            and new_index != 1
+            and self._config_widget is not None
+            and hasattr(self._config_widget, "has_unsaved_changes")
+            and self._config_widget.has_unsaved_changes()
+        ):
+            msg = QMessageBox(self)
+            msg.setWindowTitle(t("iq.risk.dialog_title"))
+            msg.setText(t("iq.risk.dialog_message"))
+            msg.setIcon(QMessageBox.Icon.Warning)
+            btn_save = msg.addButton(t("iq.risk.dialog_save"), QMessageBox.ButtonRole.AcceptRole)
+            btn_discard = msg.addButton(
+                t("iq.risk.dialog_discard"), QMessageBox.ButtonRole.DestructiveRole
+            )
+            msg.addButton(t("iq.risk.dialog_cancel"), QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(btn_save)
+            msg.exec()
+            clicked = msg.clickedButton()
+            if clicked == btn_save:
+                if hasattr(self._config_widget, "save_changes"):
+                    self._config_widget.save_changes()
+            elif clicked == btn_discard:
+                if hasattr(self._config_widget, "discard_unsaved_changes"):
+                    self._config_widget.discard_unsaved_changes()
+            else:
+                self._tabs.blockSignals(True)
+                self._tabs.setCurrentIndex(1)
+                self._tabs.blockSignals(False)
+                return
+        self._previous_tab_index = self._tabs.currentIndex()
 
     def update_status(self, status: BrokerCardStatus) -> None:
         if status.broker != self.broker_key:
@@ -325,9 +415,11 @@ class IqOptionWorkspaceWidget(QWidget):
         self._last_status = status
 
         if status.is_connected:
+            self._login_box.setVisible(False)
             self._connection_pill.setText(f"● {t('broker.connected')}")
             self._connection_pill.setObjectName("StatusPillOnline")
         else:
+            self._login_box.setVisible(True)
             self._connection_pill.setText(f"○ {t('broker.disconnected')}")
             self._connection_pill.setObjectName("StatusPillOffline")
             if not self._iqoption_login_status.text():
@@ -419,6 +511,24 @@ class IqOptionWorkspaceWidget(QWidget):
 
         self._automation_pill.style().unpolish(self._automation_pill)
         self._automation_pill.style().polish(self._automation_pill)
+
+        if hasattr(self, "_btn_bot_toggle"):
+            if armed:
+                self._btn_bot_toggle.setText(t("btn.bot.light_stop"))
+                self._btn_bot_toggle.setStyleSheet(
+                    "QPushButton { background: rgba(229, 72, 77, 0.12); color: #E5484D; "
+                    "border: 1px solid #E5484D; border-radius: 4px; padding: 2px 10px; "
+                    "font-size: 11px; font-weight: 700; } "
+                    "QPushButton:hover { background: rgba(229, 72, 77, 0.25); }"
+                )
+            else:
+                self._btn_bot_toggle.setText(t("btn.bot.light_start"))
+                self._btn_bot_toggle.setStyleSheet(
+                    "QPushButton { background: rgba(31, 181, 122, 0.12); color: #1FB57A; "
+                    "border: 1px solid #1FB57A; border-radius: 4px; padding: 2px 10px; "
+                    "font-size: 11px; font-weight: 700; } "
+                    "QPushButton:hover { background: rgba(31, 181, 122, 0.25); }"
+                )
         display_reason = (
             reason if reason == "IQOPTION_BOT_ARMED_REVIEW_REQUIRED" else entry_blocker or reason
         )
@@ -433,9 +543,13 @@ class IqOptionWorkspaceWidget(QWidget):
         elif market_reason == "IQOPTION_ACTIVE_UNAVAILABLE":
             self._automation_detail.setText(t("iq.reason.asset_unavailable"))
 
+    def set_controller(self, controller: Any) -> None:
+        self.manual_review_panel.set_controller(controller)
+
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
         filtered = tuple(item for item in orders if "IQ" in item.broker.upper())
         self.orders.update_orders(filtered)
+        self.manual_review_panel.update_orders(filtered)
         if self.strategy_summary is not None:
             self.strategy_summary.update_orders(filtered)
 
@@ -446,6 +560,21 @@ class IqOptionWorkspaceWidget(QWidget):
     def update_iqoption_risk(self, config: UiIqOptionRiskConfig | None) -> None:
         if self.strategy_summary is not None:
             self.strategy_summary.update_config(config)
+        if config is not None and hasattr(self, "_automation_detail"):
+            names = {
+                "iqoption-hack-chino": "Hack Chino (5 Modelos)",
+                "iqoption-liquidity-gap": "HFT Liquidity Gap (2m)",
+                "iqoption-pattern-reversal": "HFT Pattern Reversal (1m)",
+                "iqoption-extreme-rejection": "Varredura e Rejeição de Extremo (1m)",
+                "iqoption-microtrend-scalper": "Microtrend Scalper · 3 Velas (1m)",
+                "AUTO": "Radar Multi-Ativos (AUTO)",
+            }
+            name = names.get(config.strategy_id, config.strategy_id)
+            asset_str = "Todos os Ativos (AUTO)" if config.symbol == "AUTO" else config.symbol
+            stake_str = f"USD {config.stake_minor_units / 100:.2f}"
+            self._automation_detail.setText(
+                f"Bot Ativo: {name} · Mercado: {asset_str} · Entrada: {stake_str}"
+            )
 
     def update_iqoption_metrics(self, metrics: UiIqOptionExecutionMetrics | None) -> None:
         if self.strategy_summary is not None:
@@ -504,13 +633,20 @@ class IqOptionWorkspaceWidget(QWidget):
         self._balance_caption.setText(t("broker.balance"))
         self._orders_header.setText(t("orders.title") + " · IQ OPTION")
         self._tabs.setTabText(0, "📊 " + t("tabs.status"))
-        self._tabs.setTabText(1, "⚙️ " + t("tabs.configuration"))
+        dirty = False
+        if self._config_widget is not None and hasattr(self._config_widget, "has_unsaved_changes"):
+            dirty = self._config_widget.has_unsaved_changes()
+        self._on_config_dirty_changed(dirty)
         self._safe_stop_button.retranslate()
+        self._safe_stop_button.setText(t("btn.safe_stop_short"))
+        self._safe_stop_button.setToolTip(t("btn.safe_stop"))
         if self._iqoption_login_button is not None:
             self._iqoption_login_button.setText("🔑 " + t("iq_option.login.button"))
         if self._iqoption_login_status is not None and not self._iqoption_login_status.text():
             self._iqoption_login_status.setText(t("iq_option.login.status"))
         self.orders.retranslate()
+        if self.asset_radar is not None:
+            self.asset_radar.retranslate()
 
 
 __all__ = ["IqOptionWorkspaceWidget"]

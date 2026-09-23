@@ -23,7 +23,6 @@ from apps.iqoption_connection_worker.server import IQOptionReadOnlyWorkerServer
 from packages.brokers.iqoption.community_read_only import (
     IQOptionAccountMode,
     IQOptionCommunityReadOnlySession,
-    IQOptionExternalError,
 )
 from packages.domain.models import (
     Broker,
@@ -119,7 +118,7 @@ def test_hostile_payout_is_fail_closed(value):
         ("session", "IQOPTION_PAYOUT_STALE"),
         ("time", "IQOPTION_PAYOUT_STALE"),
         ("removed", "STRATEGY_NOT_FOUND"),
-        ("real", "IQOPTION_REAL_ACCOUNT_FORBIDDEN"),
+        ("unconfirmed", "ACCOUNT_TYPE_UNCONFIRMED"),
         ("expiry", "MANIFEST_EXPIRED"),
     ],
 )
@@ -134,8 +133,8 @@ def test_rechecks_at_core_boundary(change, reason):
         clock[0] += timedelta(seconds=9)
     elif change == "removed":
         cat.apply_manifest({"strategies": []})
-    elif change == "real":
-        trader._account_type_provider = lambda: "REAL"
+    elif change == "unconfirmed":
+        trader._account_type_provider = lambda: "UNCONFIRMED"
     else:
         cat.apply_manifest({"strategies": [entry()], "expires_at": int(NOW.timestamp())})
     with pytest.raises(RuntimeError, match=reason):
@@ -542,11 +541,6 @@ def test_payout_adapter_only_reads_exact_turbo_asset(mode, monkeypatch):
         }
 
     monkeypatch.setattr(session, "_request_initialization", request)
-    if mode is IQOptionAccountMode.REAL:
-        with pytest.raises(IQOptionExternalError, match="REAL_ACCOUNT_FORBIDDEN"):
-            session.get_binary_payout("EURUSD-OTC")
-        assert calls == []
-    else:
-        assert session.get_binary_payout("EURUSD-OTC") == Decimal("0.85")
-        assert len(calls) == 1
-        assert calls[0] == 2.0
+    assert session.get_binary_payout("EURUSD-OTC") == Decimal("0.85")
+    assert len(calls) == 1
+    assert calls[0] == 2.0

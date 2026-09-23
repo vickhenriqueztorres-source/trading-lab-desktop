@@ -69,15 +69,20 @@ class IQOptionAdapter(BrokerPort):
             result = self._client.connect()
         except Exception as exc:  # SDK exceptions are intentionally translated here.
             raise self._map_error(exc) from exc
-        if isinstance(result, dict) and result.get("account_type") == "real":
-            raise SessionExpiredError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
+        if isinstance(result, dict) and result.get("account_type") not in (
+            "real",
+            "practice",
+            "demo",
+            None,
+        ):
+            raise SessionExpiredError("IQOPTION_ACCOUNT_UNSUPPORTED")
         self._connected = True
         self._authenticated = True
 
     def disconnect(self) -> None:
         try:
             self._client.disconnect()
-        except Exception as exc:
+        except Exception as exc:  # SDK exceptions are intentionally translated here.
             raise self._map_error(exc) from exc
         finally:
             self._connected = False
@@ -102,8 +107,6 @@ class IQOptionAdapter(BrokerPort):
         return self._request("positions")
 
     def submit_order(self, intent: OrderIntent) -> ExecutionResult:
-        if not self._practice_only and not self._force_execution:
-            raise UnsupportedCapabilityError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
         try:
             buy_attr = getattr(self._client, "buy", None)
             if buy_attr is not None and callable(buy_attr):

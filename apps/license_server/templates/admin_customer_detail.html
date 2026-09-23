@@ -1,0 +1,264 @@
+{% extends "admin_base.html" %}
+
+{% block title %}{{ customer.email }} &bull; Trading Lab Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <!-- Breadcrumb -->
+  <div class="flex items-center space-x-2 text-xs text-slate-400">
+    <a href="/admin" class="hover:text-cyan-400 transition">Clientes</a>
+    <span>/</span>
+    <span class="text-slate-200 font-semibold">{{ customer.email }}</span>
+  </div>
+
+  <!-- Header Banner -->
+  <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+    <div>
+      <div class="flex items-center space-x-3">
+        <h1 class="text-2xl font-bold text-white">{{ customer.email }}</h1>
+        {% if license and license.status == 'active' %}
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-800">
+            Ativo
+          </span>
+        {% elif license and license.status == 'suspended' %}
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-950/80 text-red-300 border border-red-800">
+            Suspenso
+          </span>
+        {% else %}
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+            Sem licença ativa
+          </span>
+        {% endif %}
+      </div>
+      <p class="text-xs text-slate-400 mt-1">
+        ID: <span class="font-mono text-slate-300 select-all">{{ customer.id }}</span>
+        {% if customer.name %}&bull; Nome: <span class="text-slate-300">{{ customer.name }}</span>{% endif %}
+        {% if customer.country %}&bull; País: <span class="text-slate-300">{{ customer.country }}</span>{% endif %}
+      </p>
+    </div>
+
+    <!-- Quick Operations -->
+    <div class="flex flex-wrap gap-2">
+      <!-- Renovar +30d -->
+      <form action="/admin/customers/{{ customer.id }}/renew" method="POST" onsubmit="return confirm('Confirmar renovação de +30 dias para este cliente?')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg transition shadow">
+          + Renovar 30 dias
+        </button>
+      </form>
+
+      <!-- Alternar Real Mode -->
+      <form action="/admin/customers/{{ customer.id }}/toggle-real-mode" method="POST" onsubmit="return confirm('Alterar permissão de Modo Real? Leases existentes serão revogados.')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if license and license.real_mode_allowed %}
+          <button type="submit" class="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs rounded-lg transition">
+            Bloquear Modo Real
+          </button>
+        {% else %}
+          <button type="submit" class="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs rounded-lg transition">
+            Permitir Modo Real
+          </button>
+        {% endif %}
+      </form>
+
+      <!-- Suspender / Reativar -->
+      {% if license and license.status == 'active' %}
+        <form action="/admin/customers/{{ customer.id }}/suspend" method="POST" onsubmit="return confirm('ATENÇÃO: Suspender o acesso do cliente revogará todos os tokens de sessão e leases emitidos imediatamente. Continuar?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="px-3.5 py-2 bg-red-800 hover:bg-red-700 text-red-100 font-semibold text-xs rounded-lg transition">
+            Suspender Acesso
+          </button>
+        </form>
+      {% elif license and license.status == 'suspended' %}
+        <form action="/admin/customers/{{ customer.id }}/reactivate" method="POST" onsubmit="return confirm('Reativar o acesso da licença deste cliente?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="px-3.5 py-2 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 font-semibold text-xs rounded-lg transition">
+            Reativar Acesso
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 2-Column Info Grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- License Card -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-cyan-400">Detalhes da Licença</h2>
+      {% if license %}
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+          <div>
+            <dt class="text-slate-500 uppercase">Plano</dt>
+            <dd class="font-bold text-white text-sm mt-0.5">{{ license.plan }}</dd>
+          </div>
+          <div>
+            <dt class="text-slate-500 uppercase">Modo Real</dt>
+            <dd class="font-semibold mt-0.5">
+              {% if license.real_mode_allowed %}
+                <span class="text-emerald-400">Liberado (Real + Demo)</span>
+              {% else %}
+                <span class="text-slate-400">Apenas Demo/Practice</span>
+              {% endif %}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-500 uppercase">Início</dt>
+            <dd class="font-mono text-slate-300 mt-0.5">{{ license.starts_at_formatted }}</dd>
+          </div>
+          <div>
+            <dt class="text-slate-500 uppercase">Expiração</dt>
+            <dd class="font-mono mt-0.5 font-bold {% if license.is_expired or license.days_left < 5 %}text-red-400{% else %}text-slate-200{% endif %}">
+              {{ license.expires_at_formatted }}
+              <span class="text-[11px] block font-normal text-slate-400">
+                {% if license.is_expired %}
+                  (Vencido há {{ -license.days_left }} dias)
+                {% else %}
+                  (Resta {{ license.days_left }} dias)
+                {% endif %}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-500 uppercase">Corretoras</dt>
+            <dd class="text-slate-300 mt-0.5">{{ license.broker_access | join(', ') }}</dd>
+          </div>
+          <div>
+            <dt class="text-slate-500 uppercase">Pacotes de Estratégias</dt>
+            <dd class="text-slate-300 mt-0.5">{{ license.strategy_packs | join(', ') }}</dd>
+          </div>
+        </dl>
+      {% else %}
+        <p class="text-xs text-slate-500">Nenhuma licença vinculada a este cliente.</p>
+      {% endif %}
+    </div>
+
+    <!-- Client & OTP Info -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-cyan-400">Diagnóstico e Acesso</h2>
+      <dl class="space-y-3 text-xs">
+        <div>
+          <dt class="text-slate-500 uppercase">Último Código OTP</dt>
+          <dd class="font-medium text-slate-200 mt-0.5">
+            {{ last_otp_text }}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-slate-500 uppercase">Cadastro do Cliente</dt>
+          <dd class="font-mono text-slate-300 mt-0.5">{{ customer.created_at_formatted }}</dd>
+        </div>
+        <div>
+          <dt class="text-slate-500 uppercase">Observações Internas</dt>
+          <dd class="text-slate-300 mt-0.5 whitespace-pre-wrap bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+            {{ customer.notes or 'Nenhuma observação registrada.' }}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+
+  <!-- Devices Section -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-cyan-400">Dispositivos Autorizados</h2>
+      <span class="text-xs text-slate-400 font-mono">Limite: {{ devices | selectattr("revoked", "false") | list | length }} / {{ license.max_devices if license else 1 }}</span>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-950/70 border-b border-slate-800 uppercase tracking-wider text-slate-500">
+          <tr>
+            <th class="px-4 py-2.5">Device ID</th>
+            <th class="px-4 py-2.5">Chave Pública (Ed25519)</th>
+            <th class="px-4 py-2.5">Status</th>
+            <th class="px-4 py-2.5">Último Acesso</th>
+            <th class="px-4 py-2.5">Registrado em</th>
+            <th class="px-4 py-2.5 text-right">Ação</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/60 font-mono">
+          {% for d in devices %}
+            <tr class="hover:bg-slate-800/40 transition">
+              <td class="px-4 py-3 text-slate-200 font-bold">{{ d.device_id }}</td>
+              <td class="px-4 py-3 text-slate-400 truncate max-w-[180px]" title="{{ d.public_key_b64 }}">
+                {{ d.public_key_b64[:16] }}...
+              </td>
+              <td class="px-4 py-3 font-sans">
+                {% if not d.revoked %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/50">
+                    Ativo
+                  </span>
+                {% else %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-950/60 text-red-300 border border-red-800/50">
+                    Revogado / Liberado
+                  </span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 text-slate-400">{{ d.last_seen_formatted }}</td>
+              <td class="px-4 py-3 text-slate-500">{{ d.created_at_formatted }}</td>
+              <td class="px-4 py-3 text-right font-sans">
+                {% if not d.revoked %}
+                  <form
+                    action="/admin/customers/{{ customer.id }}/devices/{{ d.device_id }}/release"
+                    method="POST"
+                    class="inline"
+                    onsubmit="return confirm('Liberar este dispositivo? Isso revogará o dispositivo e seus leases, permitindo que o cliente registre um novo computador.')"
+                  >
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button
+                      type="submit"
+                      class="px-2.5 py-1 bg-slate-800 hover:bg-red-900/60 text-red-300 border border-slate-700 hover:border-red-700 text-xs rounded transition"
+                    >
+                      Liberar Dispositivo
+                    </button>
+                  </form>
+                {% else %}
+                  <span class="text-slate-600 text-xs">—</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6" class="px-4 py-6 text-center text-slate-500 font-sans">
+                Nenhum dispositivo registrado ainda pelo cliente.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Audit Trail (Last 50) -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+    <h2 class="text-sm font-bold uppercase tracking-wider text-cyan-400">Histórico de Auditoria do Cliente (Últimos 50)</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-950/70 border-b border-slate-800 uppercase tracking-wider text-slate-500">
+          <tr>
+            <th class="px-4 py-2.5">Data / Hora (UTC)</th>
+            <th class="px-4 py-2.5">Autor</th>
+            <th class="px-4 py-2.5">Ação</th>
+            <th class="px-4 py-2.5">Detalhes</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/60 font-mono">
+          {% for a in audit_logs %}
+            <tr class="hover:bg-slate-800/40 transition">
+              <td class="px-4 py-2.5 text-slate-400 whitespace-nowrap">{{ a.created_at_formatted }}</td>
+              <td class="px-4 py-2.5 text-slate-300 whitespace-nowrap">{{ a.actor }}</td>
+              <td class="px-4 py-2.5 font-bold text-cyan-300 whitespace-nowrap">{{ a.action }}</td>
+              <td class="px-4 py-2.5 text-slate-400 break-all max-w-md">{{ a.details_json }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="4" class="px-4 py-6 text-center text-slate-500 font-sans">
+                Nenhum evento registrado no histórico deste cliente.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

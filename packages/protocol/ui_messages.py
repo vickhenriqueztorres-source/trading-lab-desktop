@@ -178,8 +178,8 @@ class UiIqOptionRiskConfig:
     def __post_init__(self) -> None:
         if not self.strategy_id or len(self.strategy_id) > 128 or not self.symbol.strip():
             raise ValueError("IQ Option strategy selection is invalid")
-        if self.timeframe_seconds not in {60, 300, 900} or self.duration_seconds != 60:
-            raise ValueError("IQ Option RSI interval is invalid")
+        if self.timeframe_seconds not in {60, 300, 900} or self.duration_seconds not in {60, 120}:
+            raise ValueError("IQ Option interval or duration is invalid")
         if type(self.stake_minor_units) is not int or not 100 <= self.stake_minor_units <= 10_000:
             raise ValueError("IQ Option stake is invalid")
         for value in (self.daily_stop_loss_minor_units, self.daily_take_profit_minor_units):
@@ -496,6 +496,10 @@ class BrokerCardStatus:
     balance_quality: UiBalanceQuality | None = None
     balance_age_seconds: int | None = None
     balance_retry_count: int | None = None
+    total_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    realized_pnl_minor_units: int = 0
 
     def __post_init__(self) -> None:
         if not self.broker or len(self.broker) > 32:
@@ -538,6 +542,15 @@ class BrokerCardStatus:
             and self.balance_quality is not UiBalanceQuality.UNAVAILABLE
         ):
             raise ValueError("broker balance quality requires a balance")
+        for attr, label in (
+            (self.total_trades, "total trades"),
+            (self.wins, "wins"),
+            (self.losses, "losses"),
+        ):
+            if type(attr) is not int or attr < 0:
+                raise ValueError(f"broker {label} must be a non-negative integer")
+        if type(self.realized_pnl_minor_units) is not int:
+            raise TypeError("broker realized P&L must use integer minor units")
 
     def to_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -549,6 +562,10 @@ class BrokerCardStatus:
             "connection_label": self.connection_label,
             "currency": self.currency,
             "is_connected": self.is_connected,
+            "total_trades": self.total_trades,
+            "wins": self.wins,
+            "losses": self.losses,
+            "realized_pnl_minor_units": self.realized_pnl_minor_units,
         }
         if self.balance_observed_at_utc is not None:
             payload["balance_observed_at_utc"] = self.balance_observed_at_utc.isoformat()
@@ -580,6 +597,10 @@ class BrokerCardStatus:
             "balance_quality",
             "balance_age_seconds",
             "balance_retry_count",
+            "total_trades",
+            "wins",
+            "losses",
+            "realized_pnl_minor_units",
         }
         if not required.issubset(payload) or not set(payload).issubset(required | optional):
             raise _invalid()
@@ -592,6 +613,10 @@ class BrokerCardStatus:
         age = payload.get("balance_age_seconds")
         retries = payload.get("balance_retry_count")
         observed_raw = payload.get("balance_observed_at_utc")
+        total_trades = payload.get("total_trades", 0)
+        wins = payload.get("wins", 0)
+        losses = payload.get("losses", 0)
+        realized_pnl = payload.get("realized_pnl_minor_units", 0)
         if (
             not isinstance(connected, bool)
             or not isinstance(clock, bool)
@@ -602,6 +627,10 @@ class BrokerCardStatus:
             or (age is not None and type(age) is not int)
             or (retries is not None and type(retries) is not int)
             or (observed_raw is not None and not isinstance(observed_raw, str))
+            or type(total_trades) is not int
+            or type(wins) is not int
+            or type(losses) is not int
+            or type(realized_pnl) is not int
         ):
             raise _invalid()
         try:
@@ -620,6 +649,10 @@ class BrokerCardStatus:
                 None if quality is None else UiBalanceQuality(quality),
                 age,
                 retries,
+                total_trades,
+                wins,
+                losses,
+                realized_pnl,
             )
         except (TypeError, ValueError) as exc:
             raise _invalid() from exc
@@ -2050,6 +2083,73 @@ class UiProjectionSnapshot:
             "operational_logs": [item.to_payload() for item in self.operational_logs],
         }
 
+    def semantic_signature(self) -> tuple:
+        """Return a stable signature omitting volatile fields (balance_age, latency)."""
+        broker_cards_sig = tuple(
+            (
+                c.broker,
+                c.account_mode,
+                c.is_connected,
+                c.balance_minor_units,
+                c.currency,
+                c.clock_synced,
+                c.connection_label,
+                c.total_trades,
+                c.wins,
+                c.losses,
+                c.realized_pnl_minor_units,
+            )
+            for c in self.broker_cards
+        )
+        health_gates_sig = tuple((g.gate_name, g.is_open, g.reason_code) for g in self.health_gates)
+        orders_sig = tuple(
+            (
+                o.order_id,
+                o.broker,
+                o.symbol,
+                o.state,
+                o.direction,
+                o.amount_minor_units,
+                o.broker_order_id,
+                o.realized_pnl_minor_units,
+                o.result_review_required,
+                o.reconciliation_review_required,
+                o.reconciliation_attempt_count,
+            )
+            for o in self.active_orders
+        )
+        logs_sig = (
+            len(self.operational_logs),
+            self.operational_logs[-1] if self.operational_logs else None,
+        )
+        return (
+            self.global_state,
+            self.safe_stop_active,
+            health_gates_sig,
+            broker_cards_sig,
+            orders_sig,
+            self.daily_pnl_minor_units,
+            self.daily_pnl_currency,
+            self.global_exposure_minor_units,
+            self.global_max_exposure_minor_units,
+            self.consecutive_losses,
+            self.risk_state,
+            self.digit_risk_config,
+            self.cooldown_remaining_seconds,
+            self.deriv_bot_armed,
+            self.deriv_bot_reason,
+            self.deriv_bot_waiting_status,
+            self.iqoption_bot_armed,
+            self.iqoption_bot_reason,
+            self.iqoption_entry_ready,
+            self.iqoption_entry_blocker,
+            self.iqoption_asset_ranking,
+            self.deriv_asset_ranking,
+            self.deriv_strategies,
+            self.iqoption_execution_metrics,
+            logs_sig,
+        )
+
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> UiProjectionSnapshot:
         base_keys = {
@@ -2453,6 +2553,69 @@ class UiAuthSubmitOtpAck:
 
 
 @dataclass(frozen=True, slots=True)
+class UiAuthActivateKeyCommand:
+    product_key: str
+
+    def __post_init__(self) -> None:
+        if not self.product_key.strip() or len(self.product_key) > 8192:
+            raise ValueError("product_key is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"product_key": self.product_key}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthActivateKeyCommand:
+        _exact(payload, {"product_key"})
+        try:
+            return cls(
+                product_key=_string(payload, "product_key", 8192),
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiAuthActivateKeyAck:
+    ok: bool
+    status: str
+    user_id_preview: str | None = None
+    plan: str | None = None
+    expires_at: str | None = None
+    device_id: str | None = None
+    reason: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"ok": self.ok, "status": self.status}
+        if self.user_id_preview is not None:
+            payload["user_id_preview"] = self.user_id_preview
+        if self.plan is not None:
+            payload["plan"] = self.plan
+        if self.expires_at is not None:
+            payload["expires_at"] = self.expires_at
+        if self.device_id is not None:
+            payload["device_id"] = self.device_id
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiAuthActivateKeyAck:
+        ok = payload.get("ok")
+        if not isinstance(ok, bool):
+            raise _invalid()
+        status = _string(payload, "status", 64)
+        return cls(
+            ok=ok,
+            status=status,
+            user_id_preview=_optional_string(payload, "user_id_preview", 128),
+            plan=_optional_string(payload, "plan", 64),
+            expires_at=_optional_string(payload, "expires_at", 64),
+            device_id=_optional_string(payload, "device_id", 128),
+            reason=_optional_string(payload, "reason", 128),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class UiAuthStatusRequest:
     def to_payload(self) -> dict[str, object]:
         return {}
@@ -2537,4 +2700,95 @@ class UiAuthSignOutAck:
         return cls(
             ok=ok,
             reason=_optional_string(payload, "reason", 128),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UiResolveOrderCommand:
+    order_id: str
+    action: str  # "SETTLE" or "REJECT"
+    realized_pnl_minor_units: int = 0
+    broker_order_id: str | None = None
+    reason: str = "MANUAL_OPERATOR_RESOLUTION"
+    operator: str = "OPERATOR"
+
+    def __post_init__(self) -> None:
+        if not self.order_id.strip() or len(self.order_id) > 128:
+            raise ValueError("order_id is invalid")
+        if self.action not in {"SETTLE", "REJECT", "QUERY_AND_RECOVER", "RECOVER"}:
+            raise ValueError("action must be 'SETTLE', 'REJECT', or 'QUERY_AND_RECOVER'")
+        if type(self.realized_pnl_minor_units) is not int:
+            raise TypeError("realized_pnl_minor_units must be int")
+        if self.broker_order_id is not None and len(self.broker_order_id) > 128:
+            raise ValueError("broker_order_id is invalid")
+        if not self.reason.strip() or len(self.reason) > 256:
+            raise ValueError("reason is invalid")
+        if not self.operator.strip() or len(self.operator) > 64:
+            raise ValueError("operator is invalid")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "order_id": self.order_id,
+            "action": self.action,
+            "realized_pnl_minor_units": self.realized_pnl_minor_units,
+            "broker_order_id": self.broker_order_id,
+            "reason": self.reason,
+            "operator": self.operator,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiResolveOrderCommand:
+        keys = set(payload)
+        base_keys = {
+            "order_id",
+            "action",
+            "realized_pnl_minor_units",
+            "reason",
+            "operator",
+        }
+        if keys not in (base_keys, base_keys | {"broker_order_id"}):
+            raise _invalid()
+        try:
+            pnl = payload.get("realized_pnl_minor_units", 0)
+            if type(pnl) is not int:
+                raise _invalid()
+            return cls(
+                order_id=_string(payload, "order_id", 128),
+                action=_string(payload, "action", 32),
+                realized_pnl_minor_units=pnl,
+                broker_order_id=_optional_string(payload, "broker_order_id", 128),
+                reason=_string(payload, "reason", 256),
+                operator=_string(payload, "operator", 64),
+            )
+        except ValueError as exc:
+            raise _invalid() from exc
+
+
+@dataclass(frozen=True, slots=True)
+class UiResolveOrderAck:
+    accepted: bool
+    order_id: str
+    new_state: str
+    reason_code: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "accepted": self.accepted,
+            "order_id": self.order_id,
+            "new_state": self.new_state,
+        }
+        if self.reason_code is not None:
+            payload["reason_code"] = self.reason_code
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> UiResolveOrderAck:
+        accepted = payload.get("accepted")
+        if not isinstance(accepted, bool):
+            raise _invalid()
+        return cls(
+            accepted=accepted,
+            order_id=_string(payload, "order_id", 128),
+            new_state=_string(payload, "new_state", 32),
+            reason_code=_optional_string(payload, "reason_code", 128),
         )

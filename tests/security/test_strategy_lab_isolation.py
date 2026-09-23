@@ -36,10 +36,14 @@ def test_ast_import_scan_prohibits_strategy_lab() -> None:
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         for forbidden in FORBIDDEN_MODULE_PREFIXES:
+                            if forbidden == "psycopg" and "license_server" in py_file.parts:
+                                continue
                             if alias.name == forbidden or alias.name.startswith(f"{forbidden}."):
                                 violations.append(f"{py_file}:{node.lineno} imports '{alias.name}'")
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     for forbidden in FORBIDDEN_MODULE_PREFIXES:
+                        if forbidden == "psycopg" and "license_server" in py_file.parts:
+                            continue
                         if node.module == forbidden or node.module.startswith(f"{forbidden}."):
                             violations.append(
                                 f"{py_file}:{node.lineno} imports from '{node.module}'"

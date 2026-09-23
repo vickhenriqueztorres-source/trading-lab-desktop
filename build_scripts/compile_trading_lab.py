@@ -38,7 +38,7 @@ EXCLUDE_PATTERNS = (
 def compile_executable(
     project_root: Path,
     output_dir: Path,
-    version: str = "1.9.11",
+    version: str = "1.9.18",
     platform_name: str = "win64",
     skip_pyinstaller: bool = False,
 ) -> Path:
@@ -102,6 +102,14 @@ def compile_executable(
         raise FileNotFoundError(f"Expected binary not found: {exe_path}")
     print(f"[2/5] Verified executable binary: {exe_path.name} ({exe_path.stat().st_size} bytes)")
 
+    # 2.5 Clean backend-only code from client bundle
+    for server_dir in (
+        target_dist / "apps" / "license_server",
+        target_dist / "_internal" / "apps" / "license_server",
+    ):
+        if server_dir.exists():
+            shutil.rmtree(server_dir, ignore_errors=True)
+
     # 3. Security Scan with SecretScanner
     print("[3/5] Scanning distribution directory for secrets, credentials or database files...")
     scanner = SecretScanner()
@@ -162,7 +170,7 @@ def compile_executable(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compile Trading Lab Desktop Windows Executable")
-    parser.add_argument("--version", default="1.9.11", help="Release version string")
+    parser.add_argument("--version", default="1.9.18", help="Release version string")
     parser.add_argument(
         "--output-dir",
         type=Path,

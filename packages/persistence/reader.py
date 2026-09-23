@@ -144,7 +144,11 @@ class StateReader:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def list_reconciliation_candidates(self) -> list[dict[str, Any]]:
+    def list_automatic_reconciliation_candidates(self) -> list[dict[str, Any]]:
+        """Return candidates for automatic status reconciliation.
+
+        Strictly excludes orders in MANUAL_REVIEW state.
+        """
         with closing(open_reader_connection(self._path)) as connection:
             rows = connection.execute(
                 """
@@ -158,11 +162,62 @@ class StateReader:
                 JOIN trade_intents ti ON ti.intent_id = o.intent_id
                 JOIN outbox_messages ob ON ob.intent_id = o.intent_id
                 JOIN risk_reservations rr ON rr.intent_id = o.intent_id
-                WHERE o.state IN ('ACCEPTED', 'OPEN', 'UNKNOWN', 'SETTLEMENT_UNKNOWN')
-                  AND NOT EXISTS (
-                      SELECT 1 FROM reconciliation_attempts ra
-                      WHERE ra.order_id = o.order_id AND ra.result = 'CONFLICT'
-                  )
+                WHERE o.state IN (
+                    'ACCEPTED', 'OPEN', 'UNKNOWN', 'SETTLEMENT_UNKNOWN', 'RECONCILING'
+                )
+                  AND o.state != 'MANUAL_REVIEW'
+                ORDER BY o.created_at
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_reconciliation_candidates(self) -> list[dict[str, Any]]:
+        return self.list_automatic_reconciliation_candidates()
+
+    def list_active_financial_exposures(self) -> list[dict[str, Any]]:
+        """Return non-terminal orders representing active or ambiguous financial exposure."""
+        with closing(open_reader_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT o.order_id, o.intent_id, o.correlation_id, o.broker,
+                       o.account_id, o.broker_order_id, o.state AS order_state,
+                       o.version, o.created_at AS order_created_at, o.updated_at,
+                       ti.product, ti.symbol, ti.direction, ti.amount_minor, ti.currency,
+                       rr.reservation_id, rr.state AS reservation_state,
+                       rr.amount_minor AS reserved_amount_minor
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                JOIN risk_reservations rr ON rr.intent_id = o.intent_id
+                WHERE o.state NOT IN ('SETTLED', 'REJECTED')
+                ORDER BY o.created_at
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_manual_review_orders(self) -> list[dict[str, Any]]:
+        """Return orders currently in MANUAL_REVIEW requiring operator action.
+
+        Includes orders in explicit MANUAL_REVIEW or non-terminal orders with
+        unresolved CONFLICT attempts.
+        """
+        with closing(open_reader_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT o.order_id, o.intent_id, o.correlation_id, o.broker,
+                       o.account_id, o.broker_order_id, o.state AS order_state,
+                       o.version, o.resolution_source, o.created_at AS order_created_at,
+                       o.updated_at, ti.product, ti.symbol, ti.direction,
+                       ti.amount_minor, ti.currency,
+                       rr.reservation_id, rr.state AS reservation_state,
+                       rr.amount_minor AS reserved_amount_minor
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                LEFT JOIN risk_reservations rr ON rr.intent_id = o.intent_id
+                WHERE o.state = 'MANUAL_REVIEW'
+                   OR (o.state NOT IN ('SETTLED', 'REJECTED') AND EXISTS (
+                       SELECT 1 FROM reconciliation_attempts ra
+                       WHERE ra.order_id = o.order_id AND ra.result = 'CONFLICT'
+                   ))
                 ORDER BY o.created_at
                 """
             ).fetchall()
@@ -338,6 +393,176 @@ class StateReader:
                 (since_utc.isoformat(),),
             ).fetchall()
             return {str(row["currency"]): int(row["pnl_minor"]) for row in rows}
+
+    def broker_trading_statistics(
+        self,
+        *,
+        since_utc: datetime | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Return aggregated trading statistics per broker without limit on settled count."""
+
+        boundary = self._optional_utc_boundary(since_utc)
+        with closing(open_reader_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT o.broker,
+                       ti.currency,
+                       COUNT(*) AS total_trades,
+                       SUM(CASE WHEN o.realized_pnl_minor > 0 THEN 1 ELSE 0 END) AS wins,
+                       SUM(CASE WHEN o.realized_pnl_minor < 0 THEN 1 ELSE 0 END) AS losses,
+                       SUM(COALESCE(o.realized_pnl_minor, 0)) AS net_profit_minor
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                WHERE o.state = 'SETTLED'
+                  AND o.realized_pnl_minor IS NOT NULL
+                  AND (? IS NULL OR o.created_at >= ?)
+                GROUP BY o.broker, ti.currency
+                ORDER BY o.broker
+                """,
+                (boundary, boundary),
+            ).fetchall()
+            result: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                raw_broker = str(row["broker"]).upper()
+                canonical = (
+                    "IQOPTION"
+                    if "IQ" in raw_broker
+                    else ("DERIV" if "DERIV" in raw_broker else raw_broker)
+                )
+                for broker_key in {canonical, raw_broker}:
+                    if broker_key not in result:
+                        result[broker_key] = {
+                            "broker": canonical,
+                            "currency": str(row["currency"]),
+                            "total_trades": 0,
+                            "wins": 0,
+                            "losses": 0,
+                            "net_profit_minor": 0,
+                        }
+                    result[broker_key]["total_trades"] += int(row["total_trades"])
+                    result[broker_key]["wins"] += int(row["wins"])
+                    result[broker_key]["losses"] += int(row["losses"])
+                    result[broker_key]["net_profit_minor"] += int(row["net_profit_minor"])
+            return result
+
+    def iqoption_martingale_statistics(
+        self,
+        *,
+        since_utc: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate Martingale cycle statistics for IQ Option from settled orders."""
+
+        boundary = self._optional_utc_boundary(since_utc)
+        with closing(open_reader_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT o.order_id, ti.symbol, o.created_at, o.realized_pnl_minor
+                FROM orders o
+                JOIN trade_intents ti ON ti.intent_id = o.intent_id
+                WHERE (o.broker = 'IQ_OPTION' OR o.broker = 'IQOPTION' OR o.broker LIKE '%IQ%')
+                  AND o.state = 'SETTLED'
+                  AND o.realized_pnl_minor IS NOT NULL
+                  AND (? IS NULL OR o.created_at >= ?)
+                ORDER BY o.created_at ASC, o.order_id ASC
+                """,
+                (boundary, boundary),
+            ).fetchall()
+
+            if not rows:
+                return {
+                    "total_cycles": 0,
+                    "wins_sem_gale": 0,
+                    "wins_g1": 0,
+                    "wins_g2": 0,
+                    "total_wins": 0,
+                    "losses_g2": 0,
+                    "losses_other": 0,
+                    "total_losses": 0,
+                    "win_rate": 0.0,
+                    "net_profit_minor": 0,
+                }
+
+            cycles: list[list[dict[str, Any]]] = []
+            current_cycle: list[dict[str, Any]] = []
+
+            for row in rows:
+                item = dict(row)
+                item_created_at = datetime.fromisoformat(str(item["created_at"]))
+                if not current_cycle:
+                    current_cycle.append(item)
+                    continue
+
+                prev = current_cycle[-1]
+                prev_created_at = datetime.fromisoformat(str(prev["created_at"]))
+                time_diff = (item_created_at - prev_created_at).total_seconds()
+                prev_pnl = int(prev.get("realized_pnl_minor") or 0)
+
+                is_recovery = (
+                    prev_pnl < 0
+                    and item["symbol"] == prev["symbol"]
+                    and 0 <= time_diff <= 180
+                    and len(current_cycle) < 3
+                )
+
+                if is_recovery:
+                    current_cycle.append(item)
+                else:
+                    cycles.append(current_cycle)
+                    current_cycle = [item]
+
+            if current_cycle:
+                cycles.append(current_cycle)
+
+            wins_sem_gale = 0
+            wins_g1 = 0
+            wins_g2 = 0
+            losses_g2 = 0
+            losses_other = 0
+            net_profit_minor = 0
+
+            for cycle in cycles:
+                last_order = cycle[-1]
+                step = len(cycle) - 1
+                pnl = int(last_order.get("realized_pnl_minor") or 0)
+                for ord_item in cycle:
+                    net_profit_minor += int(ord_item.get("realized_pnl_minor") or 0)
+
+                if pnl > 0:
+                    if step == 0:
+                        wins_sem_gale += 1
+                    elif step == 1:
+                        wins_g1 += 1
+                    else:
+                        wins_g2 += 1
+                else:
+                    if step == 2:
+                        losses_g2 += 1
+                    else:
+                        losses_other += 1
+
+            total_wins = wins_sem_gale + wins_g1 + wins_g2
+            effective_losses = losses_g2
+            total_effective_cycles = total_wins + effective_losses
+            if total_effective_cycles == 0 and losses_other > 0:
+                total_effective_cycles = total_wins + losses_other
+                effective_losses = losses_other
+
+            win_rate = (
+                (total_wins / total_effective_cycles * 100.0) if total_effective_cycles > 0 else 0.0
+            )
+
+            return {
+                "total_cycles": total_effective_cycles,
+                "wins_sem_gale": wins_sem_gale,
+                "wins_g1": wins_g1,
+                "wins_g2": wins_g2,
+                "total_wins": total_wins,
+                "losses_g2": losses_g2,
+                "losses_other": losses_other,
+                "total_losses": effective_losses,
+                "win_rate": win_rate,
+                "net_profit_minor": net_profit_minor,
+            }
 
     @staticmethod
     def _optional_utc_boundary(value: datetime | None) -> str | None:

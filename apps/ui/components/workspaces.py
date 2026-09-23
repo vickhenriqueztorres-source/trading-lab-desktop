@@ -371,7 +371,7 @@ class SettingsWorkspaceWidget(QWidget):
         card = QFrame()
         card.setObjectName("Surface")
         c_layout = QVBoxLayout(card)
-        c_layout.setContentsMargins(16, 16, 16, 16)
+        c_layout.setContentsMargins(20, 18, 20, 18)
         c_layout.setSpacing(12)
 
         self._diag_title = QLabel(t("settings.diagnostics"))
@@ -383,8 +383,25 @@ class SettingsWorkspaceWidget(QWidget):
         self._diag_hint.setObjectName("hint")
         c_layout.addWidget(self._diag_hint)
 
+        self._diag_details = QLabel()
+        self._diag_details.setObjectName("hint")
+        self._diag_details.setStyleSheet("color: #94A3B8; font-size: 12px; line-height: 1.5;")
+        self._diag_details.setText(
+            "• Registros de sistema redactados (sin credenciales ni tokens)\n"
+            "• Métricas de telemetría de red y latencia hacia los brokers\n"
+            "• Conciliación de órdenes, SQLite y estado de la máquina de estados"
+            if I18nManager.get_language() == "es"
+            else "• Redacted system logs (no credentials or tokens)\n"
+            "• Network telemetry metrics and latency to brokers\n"
+            "• Order reconciliation, SQLite and state machine status"
+        )
+        c_layout.addWidget(self._diag_details)
+
         self._btn_export_diag = QPushButton("📦 " + t("btn.diagnostic"))
-        self._btn_export_diag.setObjectName("PrimaryButton")
+        self._btn_export_diag.setObjectName("secondary")
+        self._btn_export_diag.setStyleSheet(
+            "min-height: 40px; padding: 8px 20px; font-size: 13px; font-weight: 600;"
+        )
         self._btn_export_diag.clicked.connect(self.diagnostic_requested.emit)
         c_layout.addWidget(self._btn_export_diag)
 
@@ -481,6 +498,16 @@ class SettingsWorkspaceWidget(QWidget):
 
         self._diag_title.setText(t("settings.diagnostics"))
         self._diag_hint.setText(t("settings.diagnostics_hint"))
+        if hasattr(self, "_diag_details"):
+            self._diag_details.setText(
+                "• Registros de sistema redactados (sin credenciales ni tokens)\n"
+                "• Métricas de telemetría de red y latencia hacia los brokers\n"
+                "• Conciliación de órdenes, SQLite y estado de la máquina de estados"
+                if I18nManager.get_language() == "es"
+                else "• Redacted system logs (no credentials or tokens)\n"
+                "• Network telemetry metrics and latency to brokers\n"
+                "• Order reconciliation, SQLite and state machine status"
+            )
         self._btn_export_diag.setText("📦 " + t("btn.diagnostic"))
 
         self._about_title.setText(t("settings.about"))

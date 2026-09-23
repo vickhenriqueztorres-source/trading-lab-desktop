@@ -6,8 +6,8 @@ from typing import ClassVar
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "DIGIT_STRATEGY_TITLE": {
-        "en": "Shared Digit Edge risk parameters",
-        "es": "Parámetros de riesgo compartidos Digit Edge",
+        "en": "Shared risk & execution parameters",
+        "es": "Parámetros de riesgo y operación",
     },
     "STAKE_LABEL": {"en": "Stake Amount (USD)", "es": "Monto por Entrada (USD)"},
     "STOP_LOSS_LABEL": {"en": "Daily Stop Loss", "es": "Stop Loss Diario"},
@@ -25,8 +25,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Filtro conservador de entrada",
     },
     "AUTO_SYMBOL_LABEL": {
-        "en": "Automatic asset selection (Demo)",
-        "es": "Selección automática de activo (Demo)",
+        "en": "Automatic asset selection",
+        "es": "Selección automática de activo",
     },
     "AUTO_SYMBOL_HELP": {
         "en": (
@@ -78,8 +78,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Relación configurada take-profit / stop-loss: {ratio}",
     },
     "DIFFERS_SESSION_EXPECTED_TOLL": {
-        "en": "Differs Session expected cost: USD {amount} per entry (EV -1.9%)",
-        "es": "Costo esperado Sessão Differs: USD {amount} por entrada (EV -1,9%)",
+        "en": "Horizon Shield expected cost: USD {amount} per entry (EV -1.9%)",
+        "es": "Costo esperado Horizon Shield: USD {amount} por entrada (EV -1,9%)",
     },
     "DIGIT_RISK_PROJECTION_UNAVAILABLE": {
         "en": "Risk/return projection unavailable until all fields are valid.",
@@ -92,6 +92,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "MARTINGALE_MULTIPLIER_LABEL": {
         "en": "Recovery calculation",
         "es": "Cálculo de recuperación",
+    },
+    "MARTINGALE_AUTO_OPTION": {
+        "en": "Dynamic quote pricing (Deriv)",
+        "es": "Automático según cotización Deriv",
+    },
+    "risk.dirty_warning": {
+        "en": "⚠️ Unapplied risk changes · Click Apply Configuration before operating",
+        "es": "⚠️ Cambios de riesgo sin aplicar · Guarde la configuración antes de operar",
+    },
+    "risk.martingale_warning": {
+        "en": "⚠️ High risk: Recovery progression exponentially increases risk of total loss.",
+        "es": "⚠️ Alto riesgo: La recuperación exponencial aumenta el riesgo de pérdida total.",
+    },
+    "bot.btn_turn_on": {
+        "en": "▶ START",
+        "es": "▶ ENCENDER",
+    },
+    "bot.btn_pause": {
+        "en": "⏹ PAUSE",
+        "es": "⏹ PAUSAR",
     },
     "MARTINGALE_STEPS_LABEL": {
         "en": "Recovery steps",
@@ -150,26 +170,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
     },
     "deriv.radar.title": {
-        "en": "Multi-asset Shadow radar",
-        "es": "Radar Shadow multiactivo",
+        "en": "Quantitative Multi-Asset Radar",
+        "es": "Radar Cuantitativo Multiactivo",
     },
     "deriv.radar.subtitle": {
         "en": (
-            "Independent buffers rank candidates and Demo automation may select the "
+            "Independent buffers rank candidates and automation may select the "
             "strongest eligible asset."
         ),
         "es": (
-            "Buffers independientes clasifican candidatos y la automatización Demo puede "
+            "Buffers independientes clasifican candidatos y la automatización puede "
             "seleccionar el activo elegible más fuerte."
         ),
     },
     "deriv.radar.notice": {
         "en": (
-            "Demo only: a candidate is executed only after the statistical edge and recent "
+            "A candidate is executed only after the statistical edge and recent "
             "financial result filters approve it. Otherwise the bot abstains."
         ),
         "es": (
-            "Solo Demo: un candidato se ejecuta únicamente si los filtros de ventaja estadística "
+            "Un candidato se ejecuta únicamente si los filtros de ventaja estadística "
             "y resultado financiero reciente lo aprueban. En caso contrario, el bot se abstiene."
         ),
     },
@@ -304,8 +324,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Configuración",
     },
     "brand.tagline": {
-        "en": "Discipline is also a strategy",
-        "es": "La disciplina también es una estrategia",
+        "en": '"DISCIPLINE IS ALSO A STRATEGY"',
+        "es": '"DISCIPLINA TAMBIÉN ES UNA ESTRATEGIA"',
     },
     "status.core_connected": {
         "en": "Core Connected",
@@ -407,6 +427,153 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "bot.idle_hint": {
         "en": "Waiting for entry conditions",
         "es": "Esperando condiciones de entrada",
+    },
+    "overview.deriv_panel_title": {
+        "en": "Deriv · Synthetic Digits",
+        "es": "Deriv · Dígitos Sintéticos",
+    },
+    "overview.iq_panel_title": {
+        "en": "IQ Option · Multi-Asset",
+        "es": "IQ Option · Multi-Activos",
+    },
+    "overview.open_orders_title": {
+        "en": "Active Operations and Risk Telemetry",
+        "es": "Operaciones en Curso y Alertas de Riesgo",
+    },
+    "overview.no_open_orders": {
+        "en": "No open operations currently. The engine is waiting for validated signals.",
+        "es": (
+            "No hay operaciones abiertas en este momento. "
+            "El motor está a la espera de señales validadas."
+        ),
+    },
+    "overview.deriv_bot_action_start": {
+        "en": "Start Deriv Bot",
+        "es": "Iniciar Bot Deriv",
+    },
+    "overview.deriv_bot_action_stop": {
+        "en": "Stop Deriv Bot",
+        "es": "Detener Bot Deriv",
+    },
+    "overview.iq_bot_action_start": {
+        "en": "Start IQ Option Bot",
+        "es": "Iniciar Bot IQ Option",
+    },
+    "overview.iq_bot_action_stop": {
+        "en": "Stop IQ Option Bot",
+        "es": "Detener Bot IQ Option",
+    },
+    "overview.exposure_label": {
+        "en": "Exposure",
+        "es": "Exposición",
+    },
+    "overview.period_pnl_label": {
+        "en": "Period Result",
+        "es": "Resultado Período",
+    },
+    "overview.confirmed_balance": {
+        "en": "Confirmed Balance",
+        "es": "Saldo Confirmado",
+    },
+    "overview.net_profit_label": {
+        "en": "Net Profit",
+        "es": "Lucro Líquido",
+    },
+    "overview.stats_trades": {
+        "en": "Total Operations",
+        "es": "Operaciones",
+    },
+    "overview.stats_wins": {
+        "en": "Wins",
+        "es": "Ganadas",
+    },
+    "overview.stats_losses": {
+        "en": "Losses",
+        "es": "Perdidas",
+    },
+    "overview.stats_winrate": {
+        "en": "Win Rate",
+        "es": "Efectividad",
+    },
+    "overview.active_orders_count": {
+        "en": "{count} open orders",
+        "es": "{count} órdenes abiertas",
+    },
+    "overview.deriv_strategy_default": {
+        "en": "Strategy: Selective Differs Edge",
+        "es": "Estrategia: Selective Differs Edge",
+    },
+    "overview.iq_strategy_default": {
+        "en": "Strategy: Multi-Asset Radar · RSI 14",
+        "es": "Estrategia: Radar Multi-Activos · RSI 14",
+    },
+    "overview.col_broker": {
+        "en": "Broker",
+        "es": "Corredor",
+    },
+    "overview.col_asset": {
+        "en": "Asset",
+        "es": "Activo",
+    },
+    "overview.col_direction": {
+        "en": "Direction",
+        "es": "Dirección",
+    },
+    "overview.col_stake": {
+        "en": "Stake",
+        "es": "Importe (Stake)",
+    },
+    "overview.col_opened_at": {
+        "en": "Opened UTC",
+        "es": "Apertura UTC",
+    },
+    "overview.col_status": {
+        "en": "Status",
+        "es": "Estado",
+    },
+    "operational.bot_paused": {
+        "en": "Bot paused",
+        "es": "Bot en pausa",
+    },
+    "operational.connected_bot_off": {
+        "en": "Connected · Bot off",
+        "es": "Conectado · Bot apagado",
+    },
+    "operational.bot_armed_waiting": {
+        "en": "Bot armed · Waiting for signal",
+        "es": "Bot armado · Esperando señal",
+    },
+    "operational.bot_armed_clock_untrusted": {
+        "en": "Bot armed · Entries suspended: clock unavailable",
+        "es": "Bot armado · Entradas suspendidas: reloj no disponible",
+    },
+    "operational.order_active": {
+        "en": "Order open · Waiting for outcome",
+        "es": "Orden abierta · Esperando resultado",
+    },
+    "operational.risk_cooldown": {
+        "en": "Preventive risk pause",
+        "es": "Pausa preventiva de riesgo",
+    },
+    "form.state.clean": {
+        "en": "Settings synchronized with Core",
+        "es": "Configuración sincronizada con el Core",
+    },
+    "form.state.dirty": {
+        "en": "Pending risk changes to apply",
+        "es": "Cambios de riesgo sin aplicar",
+    },
+    "form.state.applying": {
+        "en": "Applying parameters...",
+        "es": "Aplicando parámetros...",
+    },
+    "form.state.confirmed": {
+        "en": "Parameters confirmed by Core",
+        "es": "Parámetros confirmados por el Core",
+    },
+    "form.state.rejected": {
+        "en": "Parameters rejected by Core",
+        "es": "Parámetros rechazados por el Core",
     },
     "bot.running_hint": {
         "en": "Active and monitoring market",
@@ -515,9 +682,33 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "radar.col_price": {"en": "Price", "es": "Precio"},
     "radar.col_rsi": {"en": "RSI (14)", "es": "RSI (14)"},
     "radar.col_signal": {"en": "Signal", "es": "Señal"},
+    "radar.col_condition": {"en": "Condition", "es": "Condición"},
     "radar.col_status": {"en": "Status", "es": "Estado"},
     "radar.col_updated": {"en": "Last update", "es": "Última act."},
     "radar.monitoring": {"en": "MONITORING", "es": "MONITOREANDO"},
+    "activity.filter_prefix": {"en": "Filter by:", "es": "Filtrar por:"},
+    "iq.strategy.timeframe_readonly": {
+        "en": "Timeframe (manifest · read-only)",
+        "es": "Timeframe (manifiesto · solo lectura)",
+    },
+    "iq.strategy.auto_all_assets": {
+        "en": "🌐 Automatic (Multi-Asset Radar · All Pairs)",
+        "es": "🌐 Automático (Radar Multi-Ativos · Todos os Pares)",
+    },
+    "iq.strategy.auto_radar_hint": {
+        "en": (
+            "💡 Automatic Mode: Bot scans all 16 pairs simultaneously "
+            "and trades on the first signal."
+        ),
+        "es": (
+            "💡 Modo Automático: O robô monitora todos os pares simultaneamente no radar "
+            "e opera no primeiro que gerar sinal."
+        ),
+    },
+    "iq.reason.ready_for_capability_check": {
+        "en": "Checking broker capabilities...",
+        "es": "Comprobando capacidades...",
+    },
     "signal.none": {"en": "NEUTRAL", "es": "NEUTRAL"},
     "signal.call": {"en": "BUY (CALL)", "es": "COMPRA (CALL)"},
     "signal.put": {"en": "SELL (PUT)", "es": "VENTA (PUT)"},
@@ -1096,6 +1287,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "STOP NEW ENTRIES (SAFE STOP)",
         "es": "DETENER NUEVAS ENTRADAS (SAFE STOP)",
     },
+    "btn.safe_stop_short": {
+        "en": "🛑 SAFE STOP",
+        "es": "🛑 SAFE STOP",
+    },
     "btn.resume": {
         "en": "Resume Entries",
         "es": "Reanudar Entradas",
@@ -1141,6 +1336,42 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
     },
     "iq.risk.strategy": {"en": "Strategy", "es": "Estrategia"},
+    "iq.risk.strategy_hack_chino_desc": {
+        "en": "🤖 Hack Chino · 5 Probabilistic Models (M1 · Exp 1m)",
+        "es": "🤖 Hack Chino · 5 Modelos Probabilísticos (M1 · Exp 1m)",
+    },
+    "iq.risk.strategy_demo_desc": {
+        "en": "🎯 RSI 30/70 (unvalidated · Demo only)",
+        "es": "🎯 RSI 30/70 (não validado · solo Demo)",
+    },
+    "iq.risk.strategy_liquidity_gap_desc": {
+        "en": "🌊 Liquidity Gap (Extreme Sweep · Exp 2m)",
+        "es": "🌊 Liquidity Gap (Varredura de Extremo · Exp 2m)",
+    },
+    "iq.risk.strategy_pattern_reversal_desc": {
+        "en": "🔄 Pattern Reversal (2-Candle Engulfing · Exp 1m)",
+        "es": "🔄 Pattern Reversal (Engolfo de 2 Candles · Exp 1m)",
+    },
+    "iq.risk.strategy_extreme_rejection_desc": {
+        "en": "🎯 Extreme Rejection (8-Candle Sweep & Reject · Exp 1m)",
+        "es": "🎯 Varredura e Rejeição de Extremo (8 Velas · Exp 1m)",
+    },
+    "iq.risk.strategy_microtrend_scalper_desc": {
+        "en": "⚡ Three-Candle Microtrend (Continuation + EMA · Exp 1m)",
+        "es": "⚡ Microtendência 3 Velas (Continuação + EMA · Exp 1m)",
+    },
+    "iq.risk.strategy_hour_of_day_desc": {
+        "en": "📊 Hour of Day (UTC Hourly Probability · Exp 1m)",
+        "es": "📊 Hour of Day (Probabilidade Horária UTC · Exp 1m)",
+    },
+    "iq.risk.strategy_body_gap_fill_desc": {
+        "en": "🎯 Body Gap Fill (ATR 14 Separation · Exp 1m)",
+        "es": "🎯 Body Gap Fill (Separação ATR 14 · Exp 1m)",
+    },
+    "iq.risk.strategy_catalog_auto_desc": {
+        "en": "🌐 Multi-Strategy Radar (Global Catalog)",
+        "es": "🌐 Radar Multi-Estratégia (Catálogo Global)",
+    },
     "iq.risk.asset": {"en": "Asset", "es": "Activo"},
     "iq.risk.stake": {"en": "Stake", "es": "Monto por entrada"},
     "iq.risk.martingale": {"en": "Bounded Martingale", "es": "Martingale limitado"},
@@ -1309,7 +1540,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "tabs.strategies": {
         "en": "Strategy Catalog",
-        "es": "Catálogo de Estratégias",
+        "es": "Catálogo de Estrategias",
     },
     # Page Headers & Subtitles
     "page.deriv": {
@@ -1355,8 +1586,40 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Conexión segura y saldo disponible en la cuenta",
     },
     "card.strategy": {
-        "en": "Strategy",
-        "es": "Estrategia",
+        "en": "Bots",
+        "es": "Bots",
+    },
+    "card.strategy_catalog": {
+        "en": "AVAILABLE BOTS",
+        "es": "BOTS DISPONIBLES",
+    },
+    "bot.selected_badge": {
+        "en": "ACTIVE BOT",
+        "es": "BOT SELECCIONADO",
+    },
+    "bot.state.monitoring": {
+        "en": "MONITORING",
+        "es": "MONITORIZANDO",
+    },
+    "bot.state.signal": {
+        "en": "SIGNAL DETECTED",
+        "es": "SEÑAL DETECTADA",
+    },
+    "bot.state.warming": {
+        "en": "WARMING UP",
+        "es": "CALENTANDO BUFFERS",
+    },
+    "bot.state.ready": {
+        "en": "STANDBY / READY",
+        "es": "EN ESPERA / LISTO",
+    },
+    "page.deriv.pro_title": {
+        "en": "Deriv · Algorithmic Terminal Pro",
+        "es": "Deriv · Terminal Algorítmico Pro",
+    },
+    "page.iqoption.pro_title": {
+        "en": "IQ Option · Algorithmic Terminal Pro",
+        "es": "IQ Option · Terminal Algorítmico Pro",
     },
     "card.strategy_hint": {
         "en": "Select and configure statistical trading models",
@@ -1479,20 +1742,20 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     # Strategy selection modes
     "strategy.mode_single": {
-        "en": "Single mode · one active strategy",
-        "es": "Modo único · una estrategia activa",
+        "en": "Single mode · 1 active bot",
+        "es": "Modo único · 1 bot activo",
     },
     "strategy.mode_multi": {
-        "en": "Joint mode · selected strategies",
-        "es": "Modo conjunto · estrategias elegidas",
+        "en": "Joint mode · Selected bots",
+        "es": "Modo conjunto · Bots elegidos",
     },
     "strategy.mode_stress": {
-        "en": "Stress test · Demo only",
-        "es": "Prueba de carga · solo Demo",
+        "en": "Stress test · Multi-bot",
+        "es": "Prueba de carga · Multi-bot",
     },
     "strategy.stress_checkbox": {
-        "en": "Stress test (all strategies — Demo only)",
-        "es": "Prueba de carga (todas las estrategias — solo Demo)",
+        "en": "Stress test (all bots)",
+        "es": "Prueba de carga (todos los bots)",
     },
     "strategy.stress_tooltip": {
         "en": "Evaluates all strategies while keeping at most one order in flight.",
@@ -1540,12 +1803,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "● BOT ACTIVO · orden enviada",
     },
     "bot.demo_active": {
-        "en": "● DEMO BOT ACTIVE",
-        "es": "● BOT DEMO ACTIVO",
+        "en": "● BOT ACTIVE",
+        "es": "● BOT ACTIVO",
     },
     "bot.demo_paused": {
-        "en": "○ DEMO BOT PAUSED",
-        "es": "○ BOT DEMO PAUSADO",
+        "en": "○ BOT PAUSED",
+        "es": "○ BOT EN PAUSA",
     },
     "bot.real_read_only": {
         "en": "○ REAL ACCOUNT READ-ONLY",
@@ -1663,6 +1926,55 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": (
             "Reconexión automática en {time} · intentos {attempts}/3 · Administrado por el worker"
         ),
+    },
+    # --- Offline Product Key Activation ---
+    "activation.title": {
+        "en": "Activate Trading Lab",
+        "es": "Activar Trading Lab",
+    },
+    "activation.subtitle": {
+        "en": "Enter your offline cryptographic license key or select a .lic file.",
+        "es": "Ingresa tu clave criptográfica de licencia o selecciona un archivo .lic.",
+    },
+    "activation.key_label": {
+        "en": "License Key",
+        "es": "Clave de Licencia",
+    },
+    "activation.key_placeholder": {
+        "en": "TLKEY-PRO-...",
+        "es": "TLKEY-PRO-...",
+    },
+    "activation.paste_btn": {
+        "en": "Paste",
+        "es": "Pegar",
+    },
+    "activation.load_file_btn": {
+        "en": "Load file (.lic)",
+        "es": "Cargar archivo (.lic)",
+    },
+    "activation.activate_btn": {
+        "en": "Activate License",
+        "es": "Activar Licencia",
+    },
+    "activation.activating": {
+        "en": "Validating cryptographic signature…",
+        "es": "Validando firma criptográfica…",
+    },
+    "activation.success": {
+        "en": "License activated successfully!",
+        "es": "¡Licencia activada con éxito!",
+    },
+    "activation.err_empty_key": {
+        "en": "Please enter a license key or load a .lic file.",
+        "es": "Por favor ingresa una clave de licencia o carga un archivo .lic.",
+    },
+    "activation.err_invalid_key": {
+        "en": "Invalid or corrupt license key. Please check and try again.",
+        "es": "Clave de licencia inválida o corrupta. Revisa e inténtalo de nuevo.",
+    },
+    "activation.err_expired_key": {
+        "en": "This license key has expired.",
+        "es": "Esta clave de licencia ha expirado.",
     },
     # --- Login & Authentication ---
     "login.title": {
@@ -1798,6 +2110,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "account.plan_pro": {
         "en": "Pro Plan",
         "es": "Plan Pro",
+    },
+    "account.plan_phase0_practice": {
+        "en": "Practice",
+        "es": "Práctica",
+    },
+    "account.plan_practice": {
+        "en": "Practice",
+        "es": "Práctica",
     },
     "account.plan_enterprise": {
         "en": "Enterprise Plan",
@@ -1945,16 +2265,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     # --- IQ Option Strategy & Workspace ---
     "iq.strategy.title": {
-        "en": "IQ Option Strategy · RSI 14 Bounded Edge",
-        "es": "Estrategia IQ Option · RSI 14 Bounded Edge",
+        "en": "🤖 IQ Option Bot · Apex Horizon Pro",
+        "es": "🤖 Bot IQ Option · Apex Horizon Pro",
     },
     "iq.strategy.desc": {
-        "en": "Timeframe: 1M · Rule: CALL (RSI < 30) | PUT (RSI > 70) · Execution: Instant",
-        "es": "Timeframe: 1M · Regla: CALL (RSI < 30) | PUT (RSI > 70) · Ejecución: Instantánea",
+        "en": "Timeframe: 1M · Algorithmic radar engine with instant execution and stealth layer.",
+        "es": (
+            "Timeframe: 1M · Motor de radar algorítmico con ejecución instantánea y capa stealth."
+        ),
     },
     "iq.strategy.auto_select": {
-        "en": "AUTO SELECTION",
-        "es": "SELECCIÓN AUTOMÁTICA",
+        "en": "⚡ AUTOMATIC SELECTION",
+        "es": "⚡ SELECCIÓN AUTOMÁTICA",
     },
     "iq.strategy.evidence_wait": {
         "en": "Local evidence: awaiting Core snapshot",
@@ -1969,8 +2291,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "IQ Option · Radar Multiactivo",
     },
     "iq.workspace.hero_subtitle": {
-        "en": "RSI 14 Bounded Edge · M1",
-        "es": "RSI 14 Bounded Edge · M1",
+        "en": "Apex Horizon Pro · M1",
+        "es": "Apex Horizon Pro · M1",
     },
     "iq.workspace.hero_desc": {
         "en": (
@@ -1983,8 +2305,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
     },
     "iq.workspace.auto_scan_desc": {
-        "en": "AUTO SCAN: Monitor 15 OTC & Forex pairs (RSI < 30 / > 70)",
-        "es": "AUTO SCAN: Monitoreo de 15 pares OTC y Forex (RSI < 30 / > 70)",
+        "en": "AUTO SCAN: Continuous algorithmic monitoring across OTC & Forex pairs",
+        "es": "AUTO SCAN: Monitoreo algorítmico continuo en pares OTC y Forex",
     },
     "iq.workspace.login_box_desc": {
         "en": (
@@ -2061,19 +2383,118 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "iq.kpi.net_profit": {
         "en": "NET PROFIT",
-        "es": "BENEFICIO NETO",
+        "es": "LUCRO LÍQUIDO",
     },
     "iq.kpi.total_wins": {
         "en": "TOTAL WINS",
-        "es": "TOTAL GANANCIAS",
+        "es": "TOTAL GANHADAS",
     },
     "iq.kpi.total_losses": {
         "en": "TOTAL LOSSES",
-        "es": "TOTAL PÉRDIDAS",
+        "es": "TOTAL PERDIDAS",
     },
     "iq.kpi.win_rate": {
         "en": "WIN RATE",
-        "es": "ASERTIVIDAD",
+        "es": "ASSERTIVIDADE",
+    },
+    "iq.kpi.wins_detail": {
+        "en": "No Gale: {g0} · G1: {g1} · G2: {g2}",
+        "es": "Sem Gale: {g0} · G1: {g1} · G2: {g2}",
+    },
+    "iq.kpi.loss_detail": {
+        "en": "Loss Gale 2: {loss}",
+        "es": "Loss Gale 2: {loss}",
+    },
+    "iq.kpi.win_rate_detail": {
+        "en": "G0: {g0} | G1: {g1} | G2: {g2} | Loss: {loss}",
+        "es": "G0: {g0} | G1: {g1} | G2: {g2} | Loss: {loss}",
+    },
+    "iq.risk.save_settings": {
+        "en": "💾 Save Risk Settings",
+        "es": "💾 Salvar Configurações de Risco",
+    },
+    "iq.risk.saved_active": {
+        "en": "✅ Risk settings saved and active in bot!",
+        "es": "✅ Configurações salvas e ativas no robô!",
+    },
+    "iq.risk.saved_disarmed": {
+        "en": "✅ Risk settings saved successfully!",
+        "es": "✅ Configurações salvas com sucesso!",
+    },
+    "iq.risk.section_strategy": {
+        "en": "🎯 Strategy & Execution",
+        "es": "🎯 Estratégia e Operação",
+    },
+    "iq.risk.subsection_strategy_asset": {
+        "en": "🎯 Strategy & Asset Selection",
+        "es": "🎯 Estratégia e Escolha do Ativo",
+    },
+    "iq.risk.subsection_stake_martingale": {
+        "en": "💰 Stake & Martingale Management",
+        "es": "💰 Entrada e Gerenciamento de Martingale",
+    },
+    "iq.risk.section_limits": {
+        "en": "🛡️ Risk Limits & Protection",
+        "es": "🛡️ Limites de Risco e Proteção",
+    },
+    "iq.risk.save_btn_dirty": {
+        "en": "💾 Salvar Configurações da IQ Option (Alterações Pendentes)",
+        "es": "💾 Salvar Configurações da IQ Option (Alterações Pendentes)",
+    },
+    "iq.risk.save_btn_saved": {
+        "en": "✓ Configurações Salvas da IQ Option (Ativas)",
+        "es": "✓ Configurações Salvas da IQ Option (Ativas)",
+    },
+    "iq.risk.unsaved_banner": {
+        "en": "⚠️ Você possui alterações não salvas. Clique em Salvar para aplicar ao robô.",
+        "es": "⚠️ Você possui alterações não salvas. Clique em Salvar para aplicar ao robô.",
+    },
+    "iq.risk.tab_pending": {
+        "en": " (Pendente)",
+        "es": " (Pendente)",
+    },
+    "iq.risk.dialog_title": {
+        "en": "Unsaved Risk Settings",
+        "es": "Configurações de Risco Não Salvas",
+    },
+    "iq.risk.dialog_message": {
+        "en": (
+            "You have unsaved risk changes for IQ Option.\nDo you want to save and apply them now?"
+        ),
+        "es": (
+            "Você possui alterações não salvas na Gestão de Risco da IQ Option.\n"
+            "Deseja salvar e aplicar as alterações agora?"
+        ),
+    },
+    "iq.risk.dialog_save": {
+        "en": "💾 Save & Continue",
+        "es": "💾 Salvar e Continuar",
+    },
+    "iq.risk.dialog_discard": {
+        "en": "Discard Changes",
+        "es": "Descartar Alterações",
+    },
+    "iq.risk.dialog_cancel": {
+        "en": "Cancel",
+        "es": "Cancelar",
+    },
+    "iq.risk.core_protection_tip": {
+        "en": (
+            "🔒 Real-time protection monitored by Trading Core. "
+            "Automatic pause on target or loss stop."
+        ),
+        "es": (
+            "🔒 Proteção em tempo real monitorada pelo Trading Core. "
+            "Pausa automática ao atingir limites."
+        ),
+    },
+    "btn.bot.light_start": {
+        "en": "▶ Ligar Bot",
+        "es": "▶ Ligar Bot",
+    },
+    "btn.bot.light_stop": {
+        "en": "⏹ Desligar Bot",
+        "es": "⏹ Desligar Bot",
     },
     "radar.status_focus": {
         "en": "IN FOCUS",
@@ -2151,11 +2572,11 @@ class I18nManager:
             cls._listeners.remove(listener)
 
     @classmethod
-    def t(cls, key: str, **kwargs: object) -> str:
+    def t(cls, key: str, default: str | None = None, **kwargs: object) -> str:
         entry = TRANSLATIONS.get(key)
         if entry is None:
-            return key
-        text = entry.get(cls._current_lang) or entry.get(cls.DEFAULT_LANGUAGE) or key
+            return default if default is not None else key
+        text = entry.get(cls._current_lang) or entry.get(cls.DEFAULT_LANGUAGE) or default or key
         if kwargs:
             try:
                 return text.format(**kwargs)
@@ -2164,5 +2585,5 @@ class I18nManager:
         return text
 
 
-def t(key: str, **kwargs: object) -> str:
-    return I18nManager.t(key, **kwargs)
+def t(key: str, default: str | None = None, **kwargs: object) -> str:
+    return I18nManager.t(key, default=default, **kwargs)

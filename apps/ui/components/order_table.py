@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from apps.ui.formatting import format_minor_units
 from apps.ui.i18n import t
-from apps.ui.theme import ACCENT_AMBER, TEXT_MUTED
+from apps.ui.theme import ACCENT_AMBER, ACCENT_GREEN, ACCENT_PRIMARY, ACCENT_RED, TEXT_MUTED
 from packages.protocol.ui_messages import OrderSummary
 
 
@@ -106,9 +107,9 @@ class OrderTableView(QFrame):
             # Direction
             dir_item = QTableWidgetItem(ord.direction)
             if ord.direction.upper() == "CALL":
-                dir_item.setForeground(Qt.GlobalColor.green)
+                dir_item.setForeground(QColor(ACCENT_GREEN))
             else:
-                dir_item.setForeground(Qt.GlobalColor.red)
+                dir_item.setForeground(QColor(ACCENT_RED))
             self._table.setItem(row, 3, dir_item)
 
             # Amount
@@ -117,10 +118,16 @@ class OrderTableView(QFrame):
 
             # State
             state_label = ord.state
+            state_color = ACCENT_PRIMARY
             if ord.state == "OPEN":
                 state_label = "● OPEN"
+                state_color = ACCENT_PRIMARY
+            elif ord.state == "MANUAL_REVIEW":
+                state_label = "⚠ REVISÃO MANUAL"
+                state_color = ACCENT_RED
             elif ord.reconciliation_review_required:
                 state_label = t("orders.reconciliation.review")
+                state_color = ACCENT_AMBER
             elif ord.state in {"UNKNOWN", "SETTLEMENT_UNKNOWN"} and (
                 ord.reconciliation_attempt_count > 0
             ):
@@ -128,19 +135,25 @@ class OrderTableView(QFrame):
                     "orders.reconciliation.retry",
                     count=ord.reconciliation_attempt_count,
                 )
+                state_color = ACCENT_AMBER
             elif ord.state == "SETTLED" and ord.realized_pnl_minor_units is not None:
                 pnl = format_minor_units(ord.realized_pnl_minor_units, ord.currency)
                 if ord.result_review_required:
                     state_label = t("orders.result.unconfirmed")
+                    state_color = ACCENT_AMBER
                 elif ord.realized_pnl_minor_units > 0:
                     state_label = f"✓ {t('result.win')} (+{pnl})"
+                    state_color = ACCENT_GREEN
                 elif ord.realized_pnl_minor_units < 0:
                     state_label = f"✗ {t('result.loss')} ({pnl})"
+                    state_color = ACCENT_RED
                 else:
                     state_label = f"↔ TIE ({pnl})"
+                    state_color = TEXT_MUTED
+
             state_item = QTableWidgetItem(state_label)
+            state_item.setForeground(QColor(state_color))
             if ord.reconciliation_review_required:
-                state_item.setForeground(Qt.GlobalColor.yellow)
                 next_due = (
                     "—"
                     if ord.reconciliation_next_due_at is None
@@ -154,10 +167,7 @@ class OrderTableView(QFrame):
                     )
                 )
             elif ord.result_review_required:
-                state_item.setForeground(Qt.GlobalColor.yellow)
                 state_item.setToolTip(t("orders.result.unconfirmed.help"))
-            elif ord.state in {"SETTLED", "ACCEPTED", "OPEN"}:
-                state_item.setForeground(Qt.GlobalColor.cyan)
             self._table.setItem(row, 5, state_item)
 
             # Time

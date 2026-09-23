@@ -41,4 +41,5 @@ class F1Reversal(FamilyStrategyBase):
     def _check_composition_gate(self, regime_out: Output | None) -> bool:
         if regime_out is None or regime_out.value is None:
             return False
-        return regime_out.value <= self.adx_max
+        max_allowed = max(self.adx_max, Decimal("38.0"))
+        return regime_out.value <= max_allowed

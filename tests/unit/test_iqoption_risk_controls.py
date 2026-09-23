@@ -314,3 +314,78 @@ def test_iqoption_degraded_arm_does_not_bypass_database_failure(tmp_path, monkey
     assert reason == "DB_WRITE_FAILED"
     assert service._transport_supervisor.state is ExecutionState.DISARMED
     assert not (tmp_path / "operator_intent.json").exists()
+
+
+def test_shutdown_and_control_bot_false_disarms_and_resets_analyses(tmp_path) -> None:
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._profile_dir = tmp_path
+    service._iqoption_switch_lock = threading.RLock()
+    service._deriv_account_id = None
+    service._safe_stop = False
+    service._ui_shutdown_requested = False
+    intent_store = OperatorIntentStore(tmp_path)
+    intent_store.save_armed(True)
+    assert intent_store.load_armed() is True
+    service._transport_supervisor = TransportSupervisor(intent_store=intent_store)
+    service._transport_supervisor.arm()
+    assert service._transport_supervisor.armed_intent is True
+    service._iqoption_bot_armed = True
+    service._iqoption_bot_reason = "IQOPTION_BOT_ARMED"
+
+    mock_auto_trader = MagicMock()
+    service._iqoption_auto_trader = mock_auto_trader
+    mock_runtime = MagicMock()
+    service._runtime = mock_runtime
+
+    # When UI shutdown is requested:
+    service._request_ui_shutdown()
+
+    assert service._ui_shutdown_requested is True
+    assert service._iqoption_bot_armed is False
+    assert service._transport_supervisor.armed_intent is False
+    # operator_intent.json must have armed=False
+    assert intent_store.load_armed() is False
+    # auto_trader.reset_market_analyses must have been called
+    mock_auto_trader.reset_market_analyses.assert_called_once()
+    mock_runtime.stop_new_entries.assert_called_once()
+
+
+def test_update_iqoption_risk_config_accepts_local_strategies_with_any_asset(tmp_path) -> None:
+    service = CoreLifecycleService.__new__(CoreLifecycleService)
+    service._iqoption_switch_lock = threading.RLock()
+    service._iqoption_bot_armed = False
+    service._iqoption_risk_store = IqOptionRiskConfigStore(tmp_path)
+    service._iqoption_risk_config = IqOptionRiskConfig()
+    service._manifest_catalog = SimpleNamespace(active_strategies={})
+
+    # Local strategy with specific asset
+    cfg_pr = IqOptionRiskConfig(
+        strategy_id="iqoption-pattern-reversal",
+        symbol="EURUSD-OTC",
+    )
+    ok, err = service.update_iqoption_risk_config(cfg_pr)
+    assert ok is True
+    assert err is None
+    assert service._iqoption_risk_config.strategy_id == "iqoption-pattern-reversal"
+    assert service._iqoption_risk_config.symbol == "EURUSD-OTC"
+
+    # Local strategy with AUTO asset
+    cfg_lg = IqOptionRiskConfig(
+        strategy_id="iqoption-liquidity-gap",
+        symbol="AUTO",
+        duration_seconds=120,
+    )
+    ok, err = service.update_iqoption_risk_config(cfg_lg)
+    assert ok is True
+    assert err is None
+    assert service._iqoption_risk_config.strategy_id == "iqoption-liquidity-gap"
+    assert service._iqoption_risk_config.symbol == "AUTO"
+
+    # Manifest strategy with missing entry in catalog should return NO_CANDIDATE
+    cfg_manifest = IqOptionRiskConfig(
+        strategy_id="f5:custom",
+        symbol="EURUSD-OTC",
+    )
+    ok, err = service.update_iqoption_risk_config(cfg_manifest)
+    assert ok is False
+    assert err == "NO_CANDIDATE"

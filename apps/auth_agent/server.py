@@ -20,11 +20,14 @@ from apps.auth_agent.fake_service import (
     FakeIdentityServiceErrorCode,
 )
 from apps.auth_agent.http_service import HttpIdentityService
+from apps.auth_agent.pinned_keys import PINNED_LEASE_KEYS
 from apps.auth_agent.vault_factory import create_user_scoped_vault
 from packages.identity import OtpCode
 from packages.licensing import AuthorizationReason, LeaseVerifier, SignedLease
 from packages.protocol import (
     PROTOCOL_VERSION,
+    AuthActivateKeyRequest,
+    AuthActivateKeyResponse,
     AuthCheckAuthorizationRequest,
     AuthCheckAuthorizationResponse,
     AuthHandshakeRequest,
@@ -175,9 +178,14 @@ class AuthAgentServer:
             Path(profile_dir) / "vault",
             force_simulation=force_simulation,
         )
-        auth_base_url = os.environ.get("TRADING_LAB_AUTH_BASE_URL", "").strip()
+        from apps.launcher.build_defaults import get_auth_base_url
+
+        auth_base_url = (
+            os.environ.get("TRADING_LAB_AUTH_BASE_URL", "").strip() or get_auth_base_url()
+        )
+
         service: IdentityServicePort
-        if force_simulation or not auth_base_url:
+        if force_simulation or test_otp is not None or not auth_base_url:
             service = FakeIdentityService(
                 lease_ttl=lease_ttl,
                 signing_key_id=f"fake-{uuid4()}",
@@ -201,6 +209,11 @@ class AuthAgentServer:
             if key_id not in verification_keys and len(verification_keys) >= _MAX_VERIFICATION_KEYS:
                 raise AuthAgentServerError()
             verification_keys[key_id] = public_key
+        for key_id, b64_val in PINNED_LEASE_KEYS.items():
+            try:
+                verification_keys[key_id] = base64.urlsafe_b64decode(b64_val.encode("ascii"))
+            except Exception:
+                continue
         self._vault.set_secret(_FAKE_KEY_REGISTRY, _encode_key_registry(verification_keys))
         self._agent = AuthAgent(service, self._vault, LeaseVerifier(verification_keys))
         self._startup_decision = self._agent.restore()
@@ -401,6 +414,26 @@ class AuthAgentServer:
                 request,
                 MessageType.AUTH_SUBMIT_OTP_RESPONSE,
                 otp_result.to_payload(),
+            )
+        if request.message_type is MessageType.AUTH_ACTIVATE_KEY_REQUEST:
+            activate_command = AuthActivateKeyRequest.from_payload(request.payload)
+            key_text = activate_command.product_key.reveal_text()
+            decision = self._agent.activate_product_key(key_text)
+            status = (
+                AuthLoginStatus.AUTHORIZED
+                if decision.new_entries_allowed
+                else AuthLoginStatus.BLOCKED
+            )
+            activate_result = AuthActivateKeyResponse(
+                status=status,
+                user_id_preview=self._agent.user_id_preview,
+                reason=decision.reason.value,
+                expires_at=decision.expires_at,
+            )
+            return _response(
+                request,
+                MessageType.AUTH_ACTIVATE_KEY_RESPONSE,
+                activate_result.to_payload(),
             )
         if request.message_type is MessageType.AUTH_CHECK_AUTHORIZATION_REQUEST:
             authorization_command = AuthCheckAuthorizationRequest.from_payload(request.payload)

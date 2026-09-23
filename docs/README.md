@@ -43,6 +43,9 @@ separam uso do aplicativo, arquitetura, estratégias, risco, desenvolvimento, op
 21. [Martingale delimitado G1/G2 da IQ Option](IQOPTION_BOUNDED_MARTINGALE_20260910.md)
 22. [Correção de resultado, saldo e martingale por candle da IQ Option](IQOPTION_RESULT_BALANCE_CANDLE_MARTINGALE_CORRECTION_PLAN_20260910.md)
 23. [Plano pós-auditoria da madrugada: UNKNOWN, relógio, backoff e prioridade G1/G2](IQOPTION_OVERNIGHT_RELIABILITY_CORRECTION_PLAN_20260911.md)
+24. [Diagnóstico de travamento da UI e deadlock da IQ Option](DIAGNOSTICO_TRAVAMENTO_IQOPTION_2026-09-15.md)
+25. [Plano consolidado de correção v1.9.18](PLANO_CORRECAO_TRAVAMENTO_UI_IQOPTION_V1_9_18.md)
+26. [Auditoria da v1.9.18 e proposta revisada de recuperação IQ Option](ANALISE_E_PROPOSTA_IQOPTION_RECUPERACAO_V2_2026-09-16.md)
 
 ### Para produto e governança
 

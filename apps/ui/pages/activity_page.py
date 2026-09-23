@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from PySide6.QtWidgets import (
     QComboBox,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from apps.ui.components.log_terminal import OperationalLogTerminal
+from apps.ui.components.manual_review_panel import ManualReviewPanel
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.i18n import t
 from packages.protocol.ui_messages import OrderSummary
@@ -54,7 +56,7 @@ class ActivityPage(QWidget):
         filter_layout.setContentsMargins(12, 8, 12, 8)
         filter_layout.setSpacing(12)
 
-        self._filter_label = QLabel(t("orders.title") + ":")
+        self._filter_label = QLabel(t("activity.filter_prefix"))
         self._filter_label.setObjectName("Subtitle")
         filter_layout.addWidget(self._filter_label)
 
@@ -82,6 +84,8 @@ class ActivityPage(QWidget):
         orders_page = QWidget()
         orders_layout = QVBoxLayout(orders_page)
         orders_layout.setContentsMargins(0, 8, 0, 0)
+        self.manual_review_panel = ManualReviewPanel()
+        orders_layout.addWidget(self.manual_review_panel)
         self.order_table = OrderTableView()
         orders_layout.addWidget(self.order_table)
         self.tabs.addTab(orders_page, t("tabs.orders"))
@@ -91,8 +95,12 @@ class ActivityPage(QWidget):
 
         root.addWidget(self.tabs, 1)
 
+    def set_controller(self, controller: Any) -> None:
+        self.manual_review_panel.set_controller(controller)
+
     def update_orders(self, orders: Sequence[OrderSummary]) -> None:
         self._raw_orders = tuple(orders)
+        self.manual_review_panel.update_orders(orders)
         self._apply_filters()
 
     def _on_filter_changed(self, _index: int = 0) -> None:
@@ -127,7 +135,7 @@ class ActivityPage(QWidget):
     def retranslate(self) -> None:
         self._title.setText(t("page.activity"))
         self._subtitle.setText(t("page.activity_subtitle"))
-        self._filter_label.setText(t("orders.title") + ":")
+        self._filter_label.setText(t("activity.filter_prefix"))
 
         # Update broker filter texts
         broker_keys = {
@@ -153,6 +161,7 @@ class ActivityPage(QWidget):
 
         self.tabs.setTabText(0, t("tabs.orders"))
         self.tabs.setTabText(1, t("tabs.logs"))
+        self._filter_label.setText(t("activity.filter_prefix"))
         self.order_table.retranslate()
 
 

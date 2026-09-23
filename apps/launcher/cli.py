@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import IO, Any
 
+from apps.launcher.build_defaults import get_auth_base_url
 from apps.launcher.models import LauncherLifecycleState
 
 
@@ -62,8 +63,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--auth-base-url",
         type=str,
-        default=os.environ.get("TRADING_LAB_AUTH_BASE_URL", ""),
+        default=get_auth_base_url(),
         help="base URL for identity/license server HTTP service",
+    )
+    parser.add_argument(
+        "--force-auth-simulation",
+        action="store_true",
+        default=False,
+        help="developer only: force auth simulation mode instead of contacting license server",
     )
     return parser
 
@@ -210,8 +217,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    if arguments.auth_base_url:
-        os.environ["TRADING_LAB_AUTH_BASE_URL"] = arguments.auth_base_url
     distribution_root, manifest = _distribution_integrity_paths(
         arguments.verify_manifest,
         arguments.distribution_root,
@@ -227,6 +232,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not result.is_valid:
                 return 1
         return 0
+
+    if arguments.force_auth_simulation:
+        os.environ["TRADING_LAB_AUTH_BASE_URL"] = ""
+    elif arguments.auth_base_url:
+        os.environ["TRADING_LAB_AUTH_BASE_URL"] = arguments.auth_base_url
+    else:
+        os.environ["TRADING_LAB_AUTH_BASE_URL"] = get_auth_base_url()
 
     profile_dir = arguments.profile_dir or _default_profile_dir()
     deriv_transport = arguments.deriv_transport
@@ -248,7 +260,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         deriv_transport=deriv_transport,
         manifest_path=manifest,
         distribution_root=distribution_root,
+        force_auth_simulation=arguments.force_auth_simulation,
     )
+
     stop_requested = threading.Event()
 
     def request_stop(_signum: int, _frame: object) -> None:

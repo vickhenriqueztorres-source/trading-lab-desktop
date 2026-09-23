@@ -45,15 +45,16 @@ class LeaseSigner:
 
 
 class LeaseVerifier:
-    def __init__(self, public_keys: dict[str, bytes]) -> None:
+    def __init__(self, public_keys: dict[str, bytes], *, allow_long_term: bool = True) -> None:
         if not public_keys:
             raise ValueError("at least one verification key is required")
+        self._allow_long_term = allow_long_term
         self._public_keys = {
             key_id: Ed25519PublicKey.from_public_bytes(value)
             for key_id, value in public_keys.items()
         }
 
-    def verify(self, signed: SignedLease) -> LeaseClaims:
+    def verify(self, signed: SignedLease, *, allow_long_term: bool | None = None) -> LeaseClaims:
         public_key = self._public_keys.get(signed.key_id)
         if public_key is None:
             raise ValueError(AuthorizationReason.LEASE_INVALID_SIGNATURE.value)
@@ -67,13 +68,15 @@ class LeaseVerifier:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(AuthorizationReason.LEASE_INVALID.value) from exc
         claims = LeaseClaims.from_external_payload(decoded)
-        if (
-            not claims.real_mode_allowed
-            and claims.expires_at - claims.issued_at > _MAX_PRACTICE_LEASE
-        ):
-            raise ValueError(AuthorizationReason.LEASE_INVALID.value)
-        if claims.real_mode_allowed and claims.expires_at - claims.issued_at > _MAX_REAL_LEASE:
-            raise ValueError(AuthorizationReason.LEASE_INVALID.value)
+        long_term = self._allow_long_term if allow_long_term is None else allow_long_term
+        if not long_term:
+            if (
+                not claims.real_mode_allowed
+                and claims.expires_at - claims.issued_at > _MAX_PRACTICE_LEASE
+            ):
+                raise ValueError(AuthorizationReason.LEASE_INVALID.value)
+            if claims.real_mode_allowed and claims.expires_at - claims.issued_at > _MAX_REAL_LEASE:
+                raise ValueError(AuthorizationReason.LEASE_INVALID.value)
         return claims
 
     def evaluate(
@@ -100,9 +103,9 @@ class LeaseVerifier:
             )
             return self._blocked(verification_reason)
         reason: AuthorizationReason | None = None
-        if claims.user_id != expected_user_id:
+        if claims.user_id not in ("*", "ANY", "ALL") and claims.user_id != expected_user_id:
             reason = AuthorizationReason.USER_MISMATCH
-        elif claims.device_id != expected_device_id:
+        elif claims.device_id not in ("*", "ANY", "ALL") and claims.device_id != expected_device_id:
             reason = AuthorizationReason.DEVICE_MISMATCH
         elif device_revoked:
             reason = AuthorizationReason.DEVICE_REVOKED

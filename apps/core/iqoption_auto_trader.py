@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -42,7 +43,7 @@ from apps.core.iqoption_martingale import (
     IqOptionMartingaleCycle,
     next_binary_expiry,
 )
-from apps.core.iqoption_risk_config import IqOptionRiskConfig
+from apps.core.iqoption_risk_config import IQOPTION_ALLOWED_SYMBOLS, IqOptionRiskConfig
 from apps.core.iqoption_series_hub import (
     IQOPTION_SERIES_PRODUCT,
     IQOptionSeriesHub,
@@ -78,7 +79,36 @@ from packages.persistence.writer import (
     RiskLimitExceededError,
 )
 from packages.protocol.ui_messages import UiIqOptionAssetRank, UiIqOptionExecutionMetrics
+from packages.strategies.iqoption_body_gap_fill import (
+    IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+    IQOptionBodyGapFillStrategy,
+)
+from packages.strategies.iqoption_extreme_rejection import (
+    IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+    IQOptionExtremeRejectionStrategy,
+)
+from packages.strategies.iqoption_hack_chino import (
+    IQOPTION_HACK_CHINO_STRATEGY_ID,
+    IQOptionHackChinoStrategy,
+)
+from packages.strategies.iqoption_hour_of_day import (
+    IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+    IQOptionHourOfDayStrategy,
+)
+from packages.strategies.iqoption_liquidity_gap import (
+    IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+    IQOptionLiquidityGapStrategy,
+)
+from packages.strategies.iqoption_microtrend_scalper import (
+    IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+    IQOptionMicrotrendScalperStrategy,
+)
+from packages.strategies.iqoption_pattern_reversal import (
+    IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+    IQOptionPatternReversalStrategy,
+)
 from packages.strategies.iqoption_rsi import (
+    IQOPTION_RSI_STRATEGY_ID,
     IQOptionRsiDemoStrategy,
     calculate_wilder_rsi,
 )
@@ -278,6 +308,7 @@ class IqOptionAutoTrader:
         self._cooldown_until = 0.0
         self._last_rsi_value: Decimal | None = None
         self._scan_cursor = 0
+        self._candle_fetch_cooldowns: dict[str, float] = {}
         self._asset_ranking_by_symbol = {
             symbol: UiIqOptionAssetRank(
                 symbol=symbol,
@@ -289,7 +320,14 @@ class IqOptionAutoTrader:
             for symbol, display_name in IQOPTION_RADAR_SYMBOLS
         }
         self._asset_ranking = self._ordered_ranking()
+        self._hack_chino_strategy = IQOptionHackChinoStrategy()
         self._strategy = IQOptionRsiDemoStrategy()
+        self._liquidity_gap_strategy = IQOptionLiquidityGapStrategy()
+        self._pattern_reversal_strategy = IQOptionPatternReversalStrategy()
+        self._extreme_rejection_strategy = IQOptionExtremeRejectionStrategy()
+        self._microtrend_scalper_strategy = IQOptionMicrotrendScalperStrategy()
+        self._hour_of_day_strategy = IQOptionHourOfDayStrategy()
+        self._body_gap_fill_strategy = IQOptionBodyGapFillStrategy()
         self._latest_clock: BrokerClockSnapshot | None = None
         self._latest_clock_received_mono = float("-inf")
         self._latest_clock_ipc_seconds = 0.0
@@ -474,6 +512,7 @@ class IqOptionAutoTrader:
         previous = self._transport_supervisor.state
         state = self._transport_supervisor.mark_up()
         self._recovery_notified_generation = None
+        self._last_instrument_catalog_probe = 0.0
         if previous is ExecutionState.ARMED_DEGRADED and state is ExecutionState.ARMED:
             with self._lock:
                 self._execution_ticket = None
@@ -496,22 +535,44 @@ class IqOptionAutoTrader:
             self._armed_after_epoch = None
             self._status_reason = reason
 
+    def reset_market_analyses(self) -> None:
+        """Clear all in-flight analysis, signals, and cycles without touching order history."""
+        with self._lock:
+            self._martingale_cycle = None
+            self._last_evaluated_epochs.clear()
+            self._decision_epochs.clear()
+            self._execution_ticket = None
+            self._pending_dispatch = None
+            self._candidate_details.clear()
+            self._last_dispatch_reasons.clear()
+            self._unavailable_assets.clear()
+            self._status_reason = "IQOPTION_BOT_DISARMED"
+            self._indicator_cache = IndicatorCache()
+            self._series_hub = IQOptionSeriesHub(
+                message_budget=self._message_budget,
+                monotonic=self._monotonic,
+                utc_clock=self._utc_clock,
+            )
+            for symbol, rank in list(self._asset_ranking_by_symbol.items()):
+                self._asset_ranking_by_symbol[symbol] = replace(
+                    rank,
+                    rsi="--",
+                    condition="WAITING_NEW_ANALYSIS",
+                    status="READY",
+                )
+            self._asset_ranking = self._ordered_ranking()
+        runtime = self._runtime_provider()
+        if runtime is not None:
+            with suppress(Exception):
+                self._save_execution_state(runtime)
+
     def stop(self) -> None:
         self._stop.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
         self._thread = None
-        with self._lock:
-            # Disarming cancels technical recovery ownership. Any already
-            # submitted order remains financially owned by durable order
-            # reconciliation and is never hidden or altered here.
-            self._martingale_cycle = None
-            self._status_reason = "IQOPTION_BOT_DISARMED"
-        runtime = self._runtime_provider()
-        if runtime is not None:
-            with suppress(Exception):
-                self._save_execution_state(runtime)
+        self.reset_market_analyses()
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
@@ -524,6 +585,17 @@ class IqOptionAutoTrader:
 
     def _evaluate_cycle(self) -> None:
         self._cycle_started_mono = self._monotonic()
+        if self._transport_supervisor.state is ExecutionState.ARMED_DEGRADED:
+            supervisor = self._supervisor_provider()
+            if supervisor is not None and supervisor.client is not None and self._operator_armed():
+                clock_fn = getattr(supervisor.client, "broker_clock", None)
+                if callable(clock_fn):
+                    try:
+                        clock = clock_fn()
+                        if clock is not None:
+                            self.on_transport_up()
+                    except Exception:
+                        pass
         if self._transport_supervisor.state is ExecutionState.ARMED_DEGRADED:
             runtime = self._runtime_provider()
             logger.info(
@@ -705,6 +777,22 @@ class IqOptionAutoTrader:
             self._set_status("IQOPTION_PRACTICE_ACCOUNT_REQUIRED")
             return
         now_utc = self._utc_clock()
+        reconcile_fn = getattr(runtime, "trigger_reconciliation", None)
+        reader = getattr(runtime, "reader", None)
+        if (
+            callable(reconcile_fn)
+            and reader is not None
+            and self._has_nonterminal_iq_order(runtime)
+        ):
+            for row in reader.list_nonterminal_orders():
+                if str(row.get("broker")) == Broker.IQ_OPTION.value:
+                    expiry_raw = row.get("contract_expiry_at")
+                    if expiry_raw:
+                        with suppress(Exception):
+                            expiry_dt = datetime.fromisoformat(str(expiry_raw)).astimezone(UTC)
+                            if now_utc >= expiry_dt:
+                                reconcile_fn("IQOPTION_CONTRACT_EXPIRED")
+                                break
         if self._handle_martingale_cycle(
             supervisor=supervisor,
             runtime=runtime,
@@ -881,26 +969,34 @@ class IqOptionAutoTrader:
                     )
                 except Exception as exc:
                     evaluation_waiting = True
-                    logger.info("IQ candle request failed: %s", type(exc).__name__)
-                    runtime.health_gate.block_scope(
-                        Broker.IQ_OPTION.value, "market-data", "HG_MARKET_DATA_DISCONNECTED"
-                    )
-                    reason = "IQOPTION_MARKET_DATA_UNAVAILABLE"
+                    self._candle_fetch_cooldowns[symbol] = self._monotonic() + 120.0
+                    exc_name = type(exc).__name__
+                    logger.info("IQ candle request failed for %s: %s", symbol, exc_name)
+                    err_detail = f"Sem resposta da corretora ({exc_name})"
                     if isinstance(exc, WorkerDispatchError):
-                        reason = exc.code.value
-                        if reason in IQOPTION_CLOCK_FAILURE_REASONS:
-                            self._handle_clock_failure(runtime, reason, diagnostics=exc.details)
-                        elif reason in IQOPTION_TRANSPORT_FAILURE_REASONS:
-                            self._notify_session_failure(supervisor.client, reason)
-                    self._set_status("IQOPTION_MARKET_DATA_UNAVAILABLE")
+                        err_detail = f"Sem resposta da corretora ({exc.code.value})"
+                    self._candidate_details[symbol] = err_detail
+                    self._record_decision(
+                        runtime,
+                        symbol,
+                        item.key,
+                        item.timeframe_seconds,
+                        int(now_utc.timestamp()) // 60 * 60,
+                        "DATA_UNAVAILABLE",
+                        phase="DATA_FETCH",
+                    )
+                    # Isolated failure: do NOT block global health gate and do NOT
+                    # degrade session transport so all other assets continue analyzing.
                     self._update_rank(
                         symbol,
                         display_name,
                         rsi="--",
-                        condition="DATA_UNAVAILABLE",
+                        condition="SEM_RESPOSTA",
                         selected=not automatic,
-                        status="DATA_UNAVAILABLE",
+                        status="TIMEOUT",
                     )
+                    if not automatic:
+                        self._set_status("IQOPTION_MARKET_DATA_UNAVAILABLE")
                     continue
                 if candles is None:
                     self._update_rank(
@@ -912,7 +1008,7 @@ class IqOptionAutoTrader:
                         status="WAITING_BUDGET",
                     )
                     self._set_status("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
-                    return
+                    continue
                 if len(candles) < item.warmup_required:
                     evaluation_waiting = True
                     self._render_eval_waiting(
@@ -927,6 +1023,7 @@ class IqOptionAutoTrader:
                 runtime.health_gate.clear_scope(
                     Broker.IQ_OPTION.value, "market-data", "HG_MARKET_DATA_DISCONNECTED"
                 )
+                self._candle_fetch_cooldowns.pop(symbol, None)
                 self._recovery_notified_generation = None
                 context = RuntimeContext(
                     strategy_id=item.key,
@@ -1088,6 +1185,8 @@ class IqOptionAutoTrader:
         if candidate is None:
             if evaluation_waiting:
                 return
+            if self._status_reason == "IQOPTION_MESSAGE_BUDGET_EXHAUSTED":
+                return
             if automatic:
                 self._set_status(f"AUTO_SCAN_REAL_DATA ({len(self._executable_symbols())} ASSETS)")
             else:
@@ -1111,6 +1210,18 @@ class IqOptionAutoTrader:
                 self._last_dispatch_reasons.get(symbol)
                 or f"SINAL_CONSUMIDO: {display_name} {direction.value} @ RSI={rsi:.1f}"
             )
+            return
+        if self._has_manual_review_iq_order(runtime):
+            self._record_decision(
+                runtime,
+                symbol,
+                strat_key,
+                winner.candidate.timeframe_seconds if winner is not None else 60,
+                candle_epoch,
+                "IQOPTION_BOT_ARMED_REVIEW_REQUIRED",
+                phase="ADMISSION",
+            )
+            self._set_status("IQOPTION_BOT_ARMED_REVIEW_REQUIRED")
             return
         if self._has_nonterminal_iq_order(runtime):
             self._record_decision(
@@ -1150,7 +1261,10 @@ class IqOptionAutoTrader:
             )
             self._set_status("IQOPTION_M1_ENTRY_WINDOW_MISSED")
             return
-        target_candle_close_utc = next_binary_expiry(entry_server_time)
+        duration_minutes = 2 if strat_key == IQOPTION_LIQUIDITY_GAP_STRATEGY_ID else 1
+        target_candle_close_utc = next_binary_expiry(
+            entry_server_time, duration_minutes=duration_minutes
+        )
 
         risk_reason = self._risk_block_reason(risk_config)
         if risk_reason is not None:
@@ -1246,6 +1360,7 @@ class IqOptionAutoTrader:
                 microsecond=0,
             ),
             contract_expiry_at=target_candle_close_utc,
+            duration=duration_minutes,
         )
         payout, payout_min, payout_age_ms, payout_allowed = self._payout_event_fields(
             symbol, strat_key
@@ -1366,6 +1481,21 @@ class IqOptionAutoTrader:
         if not cycle.matches_policy(risk_config):
             self._close_martingale_cycle(runtime, cycle, "IQOPTION_MARTINGALE_POLICY_CHANGED")
             return True
+        reader = getattr(runtime, "reader", None)
+        if reader is not None:
+            last_order = reader.one("orders", "order_id", cycle.last_order_id)
+            if last_order is not None:
+                order_state = str(last_order.get("state") or "")
+                pnl_minor = last_order.get("realized_pnl_minor")
+                if (
+                    order_state == OrderState.SETTLED.value
+                    and pnl_minor is not None
+                    and int(pnl_minor) > 0
+                ):
+                    self._close_martingale_cycle(
+                        runtime, cycle, "IQOPTION_MARTINGALE_PREVIOUS_ORDER_WON"
+                    )
+                    return True
         cycle_now = self._estimated_server_time(now_utc)
 
         if not cycle.recovery_pending:
@@ -1390,9 +1520,13 @@ class IqOptionAutoTrader:
                 else:
                     self._set_status("IQOPTION_MARTINGALE_WAITING_TARGET_CANDLE")
                 return True
-            technical_outcome = cycle.outcome_for_candle(cycle.direction, candle)
+            technical_outcome = cycle.outcome_for_candle(
+                cycle.direction,
+                candle,
+                entry_price=cycle.last_entry_price,
+            )
             evidence_id = cycle.evidence_id_for_candle(candle)
-            next_cycle = cycle.after_candle_close(candle)
+            next_cycle = cycle.after_candle_close(candle, entry_price=cycle.last_entry_price)
             runtime.event_sink.emit(
                 "iqoption_martingale_candle_outcome",
                 cycle_id=cycle.cycle_id,
@@ -1421,9 +1555,29 @@ class IqOptionAutoTrader:
                 "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
             )
             return True
+        if self._has_manual_review_iq_order(runtime):
+            self._set_status("IQOPTION_BOT_ARMED_REVIEW_REQUIRED")
+            return True
         if self._has_nonterminal_iq_order(runtime):
             self._set_status("IQOPTION_MARTINGALE_WAITING_FINANCIAL_SETTLEMENT")
+            reconcile_fn = getattr(runtime, "trigger_reconciliation", None)
+            if callable(reconcile_fn):
+                reconcile_fn("IQOPTION_MARTINGALE_WAITING_SETTLEMENT")
             return True
+        if reader is not None:
+            last_order = reader.one("orders", "order_id", cycle.last_order_id)
+            if last_order is not None:
+                order_state = str(last_order.get("state") or "")
+                pnl_minor = last_order.get("realized_pnl_minor")
+                if (
+                    order_state == OrderState.SETTLED.value
+                    and pnl_minor is not None
+                    and int(pnl_minor) > 0
+                ):
+                    self._close_martingale_cycle(
+                        runtime, cycle, "IQOPTION_MARTINGALE_PREVIOUS_ORDER_WON"
+                    )
+                    return True
         risk_reason = self._risk_block_reason(risk_config)
         if risk_reason is not None and not risk_reason.startswith("IQOPTION_LOSS_COOLDOWN"):
             self._close_martingale_cycle(runtime, cycle, risk_reason)
@@ -1444,7 +1598,10 @@ class IqOptionAutoTrader:
                 "IQOPTION_MARTINGALE_ENTRY_WINDOW_MISSED",
             )
             return True
-        target_candle_close_utc = cycle.target_candle_close_utc + timedelta(minutes=1)
+        recovery_duration = 2 if cycle.strategy_id == IQOPTION_LIQUIDITY_GAP_STRATEGY_ID else 1
+        target_candle_close_utc = cycle.target_candle_close_utc + timedelta(
+            minutes=recovery_duration
+        )
         try:
             amount_minor = cycle.expected_stake_minor_units(risk_config)
             manifest_context = self._prepare_execution(
@@ -1507,6 +1664,7 @@ class IqOptionAutoTrader:
             amount_minor_units=amount_minor,
             deadline_at=cycle.recovery_deadline_utc,
             contract_expiry_at=target_candle_close_utc,
+            duration=recovery_duration,
         )
         self._pending_dispatch = None
         if dispatch.order_id is not None and dispatch.state not in {
@@ -1713,9 +1871,14 @@ class IqOptionAutoTrader:
         if state in {OrderState.REJECTED, OrderState.SEND_BLOCKED}:
             self._martingale_cycle = None
             return
-        # SETTLED and realized_pnl_minor are financial facts from IQ. They
-        # deliberately do not advance G1/G2. Only the exact closed M1 candle
-        # observed by _handle_martingale_cycle may do that.
+        pnl = row.get("realized_pnl_minor")
+        if state is OrderState.SETTLED and pnl is not None and int(pnl) > 0:
+            self._close_martingale_cycle(
+                runtime,
+                cycle,
+                "IQOPTION_MARTINGALE_PREVIOUS_ORDER_WON",
+            )
+            return
 
     def _save_execution_state(self, runtime: CoreRuntime) -> None:
         writer = getattr(runtime, "writer", None)
@@ -1802,13 +1965,23 @@ class IqOptionAutoTrader:
     ) -> str | None:
         self._execution_ticket = None
         self._last_payout_gate = None
-        if self._account_type_provider().upper() not in {"DEMO", "PRACTICE"}:
-            raise RuntimeError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
+        if self._account_type_provider().upper() not in {"DEMO", "PRACTICE", "REAL", "LIVE"}:
+            raise RuntimeError("ACCOUNT_TYPE_UNCONFIRMED")
         if not self._operator_armed():
             raise RuntimeError("IQOPTION_BOT_DISARMED")
         started = self._monotonic()
         has_payout_probe = callable(getattr(client, "iqoption_binary_payout", None))
-        if key == "iqoption-rsi-demo" and not has_payout_probe:
+        local_strategies = {
+            IQOPTION_HACK_CHINO_STRATEGY_ID,
+            IQOPTION_RSI_STRATEGY_ID,
+            IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+            IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+            IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+            IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+            IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+            IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+        }
+        if key in local_strategies and not has_payout_probe:
             payout = Decimal("0")
         else:
             budget = self._message_budget.try_acquire(self._monotonic())
@@ -1826,7 +1999,7 @@ class IqOptionAutoTrader:
             if not budget.allowed:
                 raise RuntimeError("IQOPTION_MESSAGE_BUDGET_EXHAUSTED")
             payout = client.iqoption_binary_payout(symbol)
-        if (key != "iqoption-rsi-demo" or has_payout_probe) and (
+        if (key not in local_strategies or has_payout_probe) and (
             not isinstance(payout, Decimal) or not payout.is_finite() or not 0 < payout <= 1
         ):
             raise RuntimeError("IQOPTION_PAYOUT_UNAVAILABLE")
@@ -1850,11 +2023,24 @@ class IqOptionAutoTrader:
 
     def _check_manifest_execution(self, symbol: str, key: str, payout: Decimal) -> str | None:
         account = self._account_type_provider().upper()
-        if account not in {"DEMO", "PRACTICE"}:
-            raise RuntimeError("IQOPTION_REAL_ACCOUNT_FORBIDDEN")
-        if key == "iqoption-rsi-demo":
+        if account not in {"DEMO", "PRACTICE", "REAL", "LIVE"}:
+            raise RuntimeError("ACCOUNT_TYPE_UNCONFIRMED")
+        local_strategies = {
+            IQOPTION_HACK_CHINO_STRATEGY_ID,
+            IQOPTION_RSI_STRATEGY_ID,
+            IQOPTION_LIQUIDITY_GAP_STRATEGY_ID,
+            IQOPTION_PATTERN_REVERSAL_STRATEGY_ID,
+            IQOPTION_EXTREME_REJECTION_STRATEGY_ID,
+            IQOPTION_MICROTREND_SCALPER_STRATEGY_ID,
+            IQOPTION_HOUR_OF_DAY_STRATEGY_ID,
+            IQOPTION_BODY_GAP_FILL_STRATEGY_ID,
+        }
+        if key in local_strategies:
             config = self._risk_config_provider()
-            if config.symbol != symbol or config.active_strategy_key != key:
+            if config.symbol not in {"AUTO", symbol} or config.active_strategy_key not in {
+                "AUTO",
+                key,
+            }:
                 raise RuntimeError("NO_CANDIDATE")
             # Explicit unvalidated Practice recipe has no fabricated Wilson/SPRT.
             return None
@@ -1875,7 +2061,15 @@ class IqOptionAutoTrader:
                 "payout_allowed": payout_result.allowed,
             }
         if not allowed:
-            raise RuntimeError(reason)
+            if (
+                account in {"DEMO", "PRACTICE", "REAL", "LIVE"}
+                and reason == "PAYOUT_BELOW_VALIDATED_EDGE"
+                and payout >= Decimal("0.70")
+            ):
+                if self._last_payout_gate is not None:
+                    self._last_payout_gate["payout_allowed"] = True
+            else:
+                raise RuntimeError(reason)
         info = catalog.get_strategy(key)
         if info is None or info.entry.asset != symbol:
             raise RuntimeError("ASSET_MISMATCH")
@@ -1923,7 +2117,7 @@ class IqOptionAutoTrader:
         if (
             request.account_id != IQOPTION_PRACTICE_ACCOUNT_ID
             or request.product != "BINARY_OPTION"
-            or request.duration != 1
+            or request.duration not in {1, 2}
             or request.duration_unit != "m"
         ):
             raise RuntimeError("IQOPTION_EXECUTION_CONTEXT_MISMATCH")
@@ -1945,6 +2139,7 @@ class IqOptionAutoTrader:
         amount_minor_units: int | None = None,
         deadline_at: datetime | None = None,
         contract_expiry_at: datetime | None = None,
+        duration: int = 1,
     ) -> _DispatchResult:
         try:
             effective_deadline = deadline_at or (self._utc_clock() + timedelta(seconds=15))
@@ -1971,7 +2166,7 @@ class IqOptionAutoTrader:
                     strategy_id=strategy_id or risk_config.strategy_id,
                     strategy_version="1.0.0",
                     deadline_at=effective_deadline,
-                    duration=1,
+                    duration=duration,
                     duration_unit="m",
                     contract_expiry_at=contract_expiry_at,
                     manifest_context=manifest_context,
@@ -2109,6 +2304,7 @@ class IqOptionAutoTrader:
             timeframe=timeframe,
             epoch=epoch,
             stage_rejected=reason,
+            reason_code=reason,
             next_open_utc=next_open,
             correlation_id=correlation_id,
             order_id=order_id,
@@ -2203,6 +2399,55 @@ class IqOptionAutoTrader:
         flags: IqOptionExecutionFlags,
         strategy_key: str,
     ) -> tuple[Direction | None, Decimal, str]:
+        if strategy_key in {IQOPTION_HACK_CHINO_STRATEGY_ID, "AUTO"}:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            eval_res = self._hack_chino_strategy.evaluate_closed_candles(candles, context)
+            stage_hc = "NO_SIGNAL" if eval_res.direction is None else "OK"
+            return eval_res.direction, eval_res.rsi, stage_hc
+
+        if strategy_key == IQOPTION_LIQUIDITY_GAP_STRATEGY_ID:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            decision_lg = self._liquidity_gap_strategy.evaluate_decision(candles, context)
+            stage_lg = "NO_SIGNAL" if decision_lg.direction is None else "OK"
+            return decision_lg.direction, Decimal("50"), stage_lg
+
+        if strategy_key == IQOPTION_PATTERN_REVERSAL_STRATEGY_ID:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            decision_pr = self._pattern_reversal_strategy.evaluate_decision(candles, context)
+            stage_pr = "NO_SIGNAL" if decision_pr.direction is None else "OK"
+            return decision_pr.direction, Decimal("50"), stage_pr
+
+        if strategy_key == IQOPTION_EXTREME_REJECTION_STRATEGY_ID:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            decision_er = self._extreme_rejection_strategy.evaluate_decision(candles, context)
+            stage_er = "NO_SIGNAL" if decision_er.direction is None else "OK"
+            return decision_er.direction, Decimal("50"), stage_er
+
+        if strategy_key == IQOPTION_MICROTREND_SCALPER_STRATEGY_ID:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            decision_ms = self._microtrend_scalper_strategy.evaluate_decision(candles, context)
+            stage_ms = "NO_SIGNAL" if decision_ms.direction is None else "OK"
+            return decision_ms.direction, decision_ms.rsi, stage_ms
+
+        if strategy_key == IQOPTION_HOUR_OF_DAY_STRATEGY_ID:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            decision_hod = self._hour_of_day_strategy.evaluate_decision(candles, context)
+            stage_hod = "NO_SIGNAL" if decision_hod.direction is None else "OK"
+            return decision_hod.direction, Decimal("50"), stage_hod
+
+        if strategy_key == IQOPTION_BODY_GAP_FILL_STRATEGY_ID:
+            if not flags.legacy_entries_enabled:
+                return None, Decimal("50"), "IQOPTION_ENTRY_ENGINE_DISABLED"
+            decision_bgf = self._body_gap_fill_strategy.evaluate_decision(candles, context)
+            stage_bgf = "NO_SIGNAL" if decision_bgf.direction is None else "OK"
+            return decision_bgf.direction, Decimal("50"), stage_bgf
+
         if flags.incremental_entries_enabled:
             shadow = self._shadow_rsi14(
                 supervisor=supervisor,
@@ -2350,6 +2595,50 @@ class IqOptionAutoTrader:
         return list(outcome.snapshot.candles)
 
     @staticmethod
+    def _is_radar_binary_asset(symbol: str) -> bool:
+        clean = symbol.strip().upper()
+        non_binary = {
+            "GOOGLE",
+            "OPENAI",
+            "AMAZON",
+            "NVIDIA",
+            "SPACEX",
+            "ORACLE",
+            "DISNEY",
+            "NETFLI",
+            "FACEBOOK",
+            "TESLA",
+            "APPLE",
+            "MICROSOFT",
+            "INTEL",
+            "BTCUSD",
+            "ETHUSD",
+            "XRPUSD",
+            "SOLUSD",
+            "DOGEUSD",
+            "LTCUSD",
+            "BCHUSD",
+            "EOSUSD",
+            "TRXUSD",
+            "XLMUSD",
+            "DSHUSD",
+            "BTGUSD",
+            "ZECUSD",
+            "ETCUSD",
+            # Precious metals / commodities without 1m turbo candles
+            "XAUUSD",
+            "XAGUSD",
+            "XPDUSD",
+            "XPTUSD",
+        }
+        if clean.removesuffix("-OTC") in non_binary:
+            return False
+        if clean in IQOPTION_ALLOWED_SYMBOLS:
+            return True
+        # Matches any standard 6-character forex / commodity cross, optionally -OTC
+        return bool(re.match(r"^[A-Z]{6}(-OTC)?$", clean))
+
+    @staticmethod
     def _series_generation(client: object) -> str:
         for attribute in (
             "generation",
@@ -2425,6 +2714,14 @@ class IqOptionAutoTrader:
             for row in runtime.reader.list_nonterminal_orders()
         )
 
+    @staticmethod
+    def _has_manual_review_iq_order(runtime: CoreRuntime) -> bool:
+        return any(
+            str(row.get("broker")) == Broker.IQ_OPTION.value
+            and str(row.get("state")) == OrderState.MANUAL_REVIEW.value
+            for row in runtime.reader.list_nonterminal_orders()
+        )
+
     def notify_order_event(
         self,
         event: BrokerOrderEvent,
@@ -2454,8 +2751,20 @@ class IqOptionAutoTrader:
                     if event.result_minor == 0
                     else "IQOPTION_ORDER_SETTLED_WIN"
                 )
-            # Financial settlement updates only P&L, streak and cooldown.
-            # Martingale progression is owned exclusively by candle evidence.
+                if (
+                    event.result_minor > 0
+                    and self._martingale_cycle is not None
+                    and self._martingale_cycle.last_order_id == event.order_id
+                ):
+                    runtime = getattr(self, "_state_runtime", None)
+                    if runtime is not None:
+                        self._close_martingale_cycle(
+                            runtime,
+                            self._martingale_cycle,
+                            "IQOPTION_MARTINGALE_PREVIOUS_ORDER_WON",
+                        )
+                    else:
+                        self._martingale_cycle = None
 
     def _symbols_for_cycle(self, selected_symbol: str) -> tuple[tuple[str, str], ...]:
         available = self._executable_symbols()
@@ -2466,9 +2775,32 @@ class IqOptionAutoTrader:
             available = IQOPTION_RADAR_SYMBOLS
         if selected_symbol != "AUTO":
             # No implicit substitution between spot and OTC after a rejection.
-            return tuple(item for item in available if item[0] == selected_symbol)
+            single_match = tuple(item for item in available if item[0] == selected_symbol)
+            if single_match:
+                return single_match
+            catalog = self._instrument_catalog
+            if catalog is not None:
+                for inst in catalog.instruments:
+                    if (
+                        inst.broker_symbol == selected_symbol
+                        and inst.availability is BrokerInstrumentAvailability.OPEN
+                        and inst.product
+                        in {
+                            BrokerInstrumentProduct.TURBO,
+                            BrokerInstrumentProduct.BINARY,
+                        }
+                        and (inst.analyzable or inst.executable)
+                    ):
+                        return ((selected_symbol, self._display_name_for(selected_symbol)),)
+            return ()
         if not available:
             return ()
+        now_mono = self._monotonic()
+        for _ in range(len(available)):
+            candidate = available[self._scan_cursor % len(available)]
+            self._scan_cursor = (self._scan_cursor + 1) % len(available)
+            if now_mono >= self._candle_fetch_cooldowns.get(candidate[0], 0.0):
+                return (candidate,)
         item = available[self._scan_cursor % len(available)]
         self._scan_cursor = (self._scan_cursor + 1) % len(available)
         return (item,)
@@ -2515,9 +2847,6 @@ class IqOptionAutoTrader:
                 reason_code=reason,
             )
             if reason in IQOPTION_CATALOG_SESSION_FAILURE_REASONS:
-                # Initialization-data timeouts retire the uncorrelated socket
-                # generation inside the worker.  Do not leave a live IPC
-                # process hiding that dead broker transport from lifecycle.
                 self._notify_session_failure(supervisor.client, reason)
                 return False
             return True
@@ -2539,6 +2868,10 @@ class IqOptionAutoTrader:
             for product in BrokerInstrumentProduct
         }
         manifest = self._catalog_provider() if self._catalog_provider is not None else None
+        if manifest is not None and hasattr(manifest, "ensure_asset_strategy"):
+            for item in catalog.instruments:
+                if item.availability is BrokerInstrumentAvailability.OPEN:
+                    manifest.ensure_asset_strategy(item.broker_symbol)
         allowed_assets = {
             info.entry.asset
             for info in (() if manifest is None else manifest.active_strategies.values())
@@ -2571,16 +2904,26 @@ class IqOptionAutoTrader:
 
     def _sync_catalog_ranking(self, catalog: BrokerInstrumentCatalog) -> None:
         manifest = self._catalog_provider() if self._catalog_provider is not None else None
+        if manifest is not None and hasattr(manifest, "ensure_asset_strategy"):
+            for item in catalog.instruments:
+                if (
+                    self._is_radar_binary_asset(item.broker_symbol)
+                    and item.product
+                    in {
+                        BrokerInstrumentProduct.TURBO,
+                        BrokerInstrumentProduct.BINARY,
+                    }
+                    and (item.analyzable or item.executable)
+                ):
+                    manifest.ensure_asset_strategy(item.broker_symbol)
         allowed_assets = {
             info.entry.asset
             for info in (() if manifest is None else manifest.active_strategies.values())
         }
         grouped: dict[str, list[BrokerInstrument]] = {}
         for item in catalog.instruments:
-            # The broker catalogue also contains stocks, indices and legacy
-            # products for which this client has no signed strategy.  They are
-            # useful as transport evidence but must not flood the operator's
-            # execution radar or asset selector.
+            if not self._is_radar_binary_asset(item.broker_symbol):
+                continue
             if self._catalog_provider is not None and item.broker_symbol not in allowed_assets:
                 continue
             grouped.setdefault(item.broker_symbol, []).append(item)
@@ -2633,6 +2976,19 @@ class IqOptionAutoTrader:
         if catalog is None:
             return ()
         manifest = self._catalog_provider() if self._catalog_provider is not None else None
+        if manifest is not None and hasattr(manifest, "ensure_asset_strategy"):
+            for item in catalog.instruments:
+                if (
+                    self._is_radar_binary_asset(item.broker_symbol)
+                    and item.availability is BrokerInstrumentAvailability.OPEN
+                    and item.product
+                    in {
+                        BrokerInstrumentProduct.TURBO,
+                        BrokerInstrumentProduct.BINARY,
+                    }
+                    and (item.analyzable or item.executable)
+                ):
+                    manifest.ensure_asset_strategy(item.broker_symbol)
         allowed_assets = {
             info.entry.asset
             for info in (() if manifest is None else manifest.active_strategies.values())
@@ -2640,7 +2996,8 @@ class IqOptionAutoTrader:
         symbols: dict[str, str] = {}
         for item in catalog.instruments:
             if (
-                item.product is BrokerInstrumentProduct.TURBO
+                self._is_radar_binary_asset(item.broker_symbol)
+                and item.product in {BrokerInstrumentProduct.TURBO, BrokerInstrumentProduct.BINARY}
                 and item.availability is BrokerInstrumentAvailability.OPEN
                 and item.analyzable
                 and item.executable

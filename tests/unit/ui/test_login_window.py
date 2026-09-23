@@ -127,3 +127,19 @@ def test_account_page_instantiation_and_update_headless() -> None:
     page.update_auth_status(None)
     assert page._lbl_email_val.text() != ""
     assert page._progress_sub.value() == 0
+
+
+def test_login_window_server_unavailable_shows_friendly_error() -> None:
+    _ = _get_qapp()
+    mock_controller = MagicMock()
+    window = LoginWindow(mock_controller)
+    window._txt_email.setText("trader@domain.com")
+
+    # Simulate network failure / server down exception
+    window._on_start_login_finished(ConnectionError("Failed to reach license server"))
+
+    assert not window._lbl_email_error.isHidden()
+    from apps.ui.i18n import t
+
+    assert window._lbl_email_error.text() == t("login.err_unavailable")
+    assert window._btn_send_code.isEnabled()

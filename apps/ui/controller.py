@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from apps.ui.ipc_client import UiIpcClient, UiIpcError
 from packages.protocol import (
+    UiAuthActivateKeyAck,
     UiAuthSignOutAck,
     UiAuthStartLoginAck,
     UiAuthStatusResponse,
@@ -15,6 +16,7 @@ from packages.protocol import (
     UiIqOptionLoginAck,
     UiIqOptionRiskConfig,
     UiProjectionSnapshot,
+    UiResolveOrderAck,
     UiUpdateDigitRiskConfigAck,
 )
 
@@ -26,7 +28,7 @@ class UiController:
         self,
         client: UiIpcClient,
         *,
-        poll_interval: float = 0.5,
+        poll_interval: float = 1.0,
         on_update: Callable[[UiProjectionSnapshot | None, bool], None] | None = None,
     ) -> None:
         if not 0.1 <= poll_interval <= 10:
@@ -37,6 +39,7 @@ class UiController:
         self._lock = threading.Lock()
         self._snapshot: UiProjectionSnapshot | None = None
         self._connected = False
+        self._cached_auth_status: UiAuthStatusResponse | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -49,6 +52,11 @@ class UiController:
     def connected(self) -> bool:
         with self._lock:
             return self._connected
+
+    @property
+    def cached_auth_status(self) -> UiAuthStatusResponse | None:
+        with self._lock:
+            return self._cached_auth_status
 
     def start(self) -> UiProjectionSnapshot:
         snapshot = self.refresh()
@@ -129,11 +137,38 @@ class UiController:
             self.refresh()
         return ack
 
+    def auth_activate_key(self, product_key: str) -> UiAuthActivateKeyAck:
+        ack = self._client.auth_activate_key(product_key)
+        if ack.status in ("AUTHORIZED", "OFFLINE_AUTHORIZED") or ack.ok:
+            self.refresh()
+        return ack
+
     def auth_status(self) -> UiAuthStatusResponse:
         return self._client.auth_status()
 
     def auth_sign_out(self) -> UiAuthSignOutAck:
         ack = self._client.auth_sign_out()
+        self.refresh()
+        return ack
+
+    def resolve_order(
+        self,
+        order_id: str,
+        action: str,
+        *,
+        realized_pnl_minor_units: int = 0,
+        broker_order_id: str | None = None,
+        reason: str = "MANUAL_OPERATOR_RESOLUTION",
+        operator: str = "OPERATOR",
+    ) -> UiResolveOrderAck:
+        ack = self._client.resolve_order(
+            order_id,
+            action,
+            realized_pnl_minor_units=realized_pnl_minor_units,
+            broker_order_id=broker_order_id,
+            reason=reason,
+            operator=operator,
+        )
         self.refresh()
         return ack
 
@@ -146,7 +181,9 @@ class UiController:
         self._client.close()
 
     def _poll(self) -> None:
+        poll_count = 0
         while not self._stop.wait(self._poll_interval):
+            poll_count += 1
             try:
                 self.refresh()
             except UiIpcError:
@@ -155,6 +192,15 @@ class UiController:
                 # serialized IPC client reconnects on the next request, so keep this
                 # bounded poll loop alive until the UI is explicitly stopped.
                 continue
+
+            # Refresh auth status every 10 poll intervals (~5s) or on initial startup
+            if self._cached_auth_status is None or poll_count % 10 == 0:
+                try:
+                    auth = self._client.auth_status()
+                    with self._lock:
+                        self._cached_auth_status = auth
+                except Exception:
+                    pass
 
     def _set_state(self, snapshot: UiProjectionSnapshot | None, connected: bool) -> None:
         with self._lock:

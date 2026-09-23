@@ -64,12 +64,14 @@ class TopBar(QFrame):
                 border-color: {TOKENS.BORDER_HOVER};
             }}
             QLabel#planBadge {{
-                background-color: {TOKENS.ACCENT_PRIMARY};
-                color: #070B14;
+                background-color: rgba(58, 167, 184, 0.15);
+                color: #3AA7B8;
+                border: 1px solid rgba(58, 167, 184, 0.35);
                 font-size: 10px;
                 font-weight: 800;
                 border-radius: 4px;
-                padding: 2px 6px;
+                padding: 3px 8px;
+                letter-spacing: 0.5px;
             }}
             """
         )
@@ -152,8 +154,40 @@ class TopBar(QFrame):
     def _update_account_chip(self) -> None:
         display_email = self._email or t("account.not_signed_in")
         self._btn_account.setText(display_email)
-        plan_key = f"account.plan_{self._plan.lower()}" if self._plan else "account.plan_none"
-        self._lbl_plan.setText(t(plan_key))
+        if self._plan:
+            norm = self._plan.upper()
+            if "PRO" in norm:
+                self._lbl_plan.setText("PRO")
+                self._lbl_plan.setStyleSheet(
+                    f"background-color: rgba(31, 181, 122, 0.15); color: {TOKENS.ACCENT_GREEN}; "
+                    "border: 1px solid rgba(31, 181, 122, 0.4); font-size: 10px; font-weight: 800; "
+                    "border-radius: 4px; padding: 3px 8px;"
+                )
+            elif "PRACTICE" in norm or "DEMO" in norm or "PHASE0" in norm:
+                self._lbl_plan.setText(t("mode.PRACTICE"))
+                self._lbl_plan.setStyleSheet(
+                    f"background-color: rgba(217, 162, 27, 0.15); color: {TOKENS.ACCENT_AMBER}; "
+                    "border: 1px solid rgba(217, 162, 27, 0.4); font-size: 10px; font-weight: 800; "
+                    "border-radius: 4px; padding: 3px 8px;"
+                )
+            else:
+                plan_key = f"account.plan_{self._plan.lower()}"
+                translated = t(plan_key)
+                self._lbl_plan.setText(
+                    self._plan if translated.startswith("account.plan_") else translated
+                )
+                self._lbl_plan.setStyleSheet(
+                    f"background-color: rgba(58, 167, 184, 0.15); color: {TOKENS.ACCENT_PRIMARY}; "
+                    "border: 1px solid rgba(58, 167, 184, 0.4); font-size: 10px; font-weight: 800; "
+                    "border-radius: 4px; padding: 3px 8px;"
+                )
+        else:
+            self._lbl_plan.setText(t("account.plan_none"))
+            self._lbl_plan.setStyleSheet(
+                f"background-color: {TOKENS.BG_ELEVATED}; color: {TOKENS.TEXT_MUTED}; "
+                f"border: 1px solid {TOKENS.BORDER_COLOR}; font-size: 10px; font-weight: 700; "
+                "border-radius: 4px; padding: 3px 8px;"
+            )
 
     def retranslate(self) -> None:
         if self._current_title_key:

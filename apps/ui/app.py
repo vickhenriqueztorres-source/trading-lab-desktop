@@ -8,8 +8,9 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon, QResizeEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -28,6 +29,7 @@ from apps.ui.components import (
     HealthGatePillWidget,
     IqOptionStrategyConfigWidget,
     IqOptionWorkspaceWidget,
+    NoScrollConfigFilter,
     ResultsDashboardWidget,
     SettingsWorkspaceWidget,
     SyntheticStrategyConfigWidget,
@@ -54,10 +56,11 @@ from packages.protocol.ui_messages import (
     UiGlobalState,
     UiIqOptionLoginAck,
     UiIqOptionRiskConfig,
+    UiProjectionSnapshot,
 )
 from packages.security import without_broker_credentials
 
-APP_VERSION = "1.9.11"
+APP_VERSION = "1.9.18"
 
 
 def _window_title(mode: str) -> str:
@@ -149,15 +152,28 @@ class TradingLabMainWindow(QMainWindow):
         self.resize(1180, 780)
         self.setMinimumSize(960, 640)
 
+        # State cache and flags
+        self._last_snapshot: UiProjectionSnapshot | None = None
+        self._last_snapshot_sig: tuple | None = None
+        self._last_connected: bool | None = None
+        self._last_auth_status: object | None = None
+        self._initial_refresh_done = False
+
         # Apply dark theme
         self.setStyleSheet(get_application_stylesheet())
 
         self._build_ui()
         self._fit_to_available_screen()
 
+        # Prevent mouse wheel from inadvertently altering configuration inputs
+        q_app = QApplication.instance()
+        if q_app is not None:
+            self._no_scroll_filter = NoScrollConfigFilter(self)
+            q_app.installEventFilter(self._no_scroll_filter)
+
         # Timer for polling IPC projection
         self._timer = QTimer(self)
-        self._timer.setInterval(300)
+        self._timer.setInterval(1000)
         self._timer.timeout.connect(self._refresh_projection)
         self._timer.start()
 
@@ -182,8 +198,17 @@ class TradingLabMainWindow(QMainWindow):
         y = available.y() + max(0, (available.height() - height) // 2)
         self.setGeometry(x, y, width, height)
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        is_compact = event.size().width() < 1050 or event.size().height() < 720
+        if hasattr(self, "_sidebar") and hasattr(self._sidebar, "set_compact_mode"):
+            self._sidebar.set_compact_mode(is_compact)
+        if hasattr(self, "_overview_page") and hasattr(self._overview_page, "set_compact_mode"):
+            self._overview_page.set_compact_mode(is_compact)
+
     def _build_ui(self) -> None:
         central_widget = QWidget(self)
+        central_widget.setObjectName("root")
         self.setCentralWidget(central_widget)
 
         root_layout = QHBoxLayout(central_widget)
@@ -228,10 +253,12 @@ class TradingLabMainWindow(QMainWindow):
         self._topbar.add_right_widget(lang_container)
         content_layout.addWidget(self._topbar)
 
-        # Pages Stacked Widget (wrapped with 24px margins)
+        # Pages Stacked Widget (wrapped with balanced margins)
         pages_container = QWidget()
+        pages_container.setObjectName("PagesContainer")
+        pages_container.setStyleSheet("background-color: transparent;")
         pages_layout = QVBoxLayout(pages_container)
-        pages_layout.setContentsMargins(24, 24, 24, 24)
+        pages_layout.setContentsMargins(16, 12, 16, 12)
         pages_layout.setSpacing(0)
 
         self._pages = QStackedWidget(self)
@@ -243,12 +270,15 @@ class TradingLabMainWindow(QMainWindow):
             lambda: self._on_page_selected(self._PAGE_SETTINGS)
         )
         self._overview_page.bot_toggle_clicked.connect(self._on_overview_bot_toggle)
+        self._overview_page.deriv_bot_toggle_clicked.connect(self._on_toggle_bot)
+        self._overview_page.iqoption_bot_toggle_clicked.connect(self._on_toggle_iqoption_bot)
         self._pages.addWidget(self._overview_page)
 
         # Page 1: Deriv Workspace
         self._deriv_workspace = DerivWorkspaceWidget()
         self._deriv_workspace.deriv_demo_connect_requested.connect(self._on_connect_deriv_demo)
         self._deriv_workspace.safe_stop_requested.connect(self._on_safe_stop)
+        self._deriv_workspace.bot_toggle_requested.connect(self._on_toggle_bot)
         self._synthetic_config_panel = SyntheticStrategyConfigWidget()
         self._asset_radar_panel = DerivAssetRadarWidget()
         self._synthetic_live_panel = SyntheticStrategyLiveWidget()
@@ -266,8 +296,10 @@ class TradingLabMainWindow(QMainWindow):
 
         # Page 2: IQ Option Workspace
         self._iqoption_workspace = IqOptionWorkspaceWidget()
+        self._iqoption_workspace.set_controller(self._controller)
         self._iqoption_workspace.iqoption_login_requested.connect(self._on_iqoption_login)
         self._iqoption_workspace.safe_stop_requested.connect(self._on_safe_stop)
+        self._iqoption_workspace.iqoption_bot_toggle_requested.connect(self._on_toggle_iqoption_bot)
         self._iqoption_config_panel = IqOptionStrategyConfigWidget()
         self._iqoption_config_panel.config_apply_requested.connect(
             self._on_iqoption_risk_config_apply
@@ -361,6 +393,7 @@ class TradingLabMainWindow(QMainWindow):
 
     def _create_activity_page(self) -> QWidget:
         self._activity_page = ActivityPage()
+        self._activity_page.set_controller(self._controller)
         self._order_table_widget = self._activity_page.order_table
         self._log_terminal = self._activity_page.log_terminal
         self._activity_tabs = self._activity_page.tabs
@@ -381,6 +414,7 @@ class TradingLabMainWindow(QMainWindow):
             self._controller.auth_sign_out()
         self._auth_status = None
         self._topbar.set_account_info(None, None)
+        self._sidebar.set_account_info(None, None)
         self._account_page.update_auth_status(None)
 
         from apps.ui.auth import LoginWindow
@@ -394,6 +428,9 @@ class TradingLabMainWindow(QMainWindow):
                 self._topbar.set_account_info(
                     self._auth_status.user_id_preview, self._auth_status.plan
                 )
+                self._sidebar.set_account_info(
+                    self._auth_status.user_id_preview, self._auth_status.plan
+                )
                 self._account_page.update_auth_status(self._auth_status)
             self.show()
         else:
@@ -402,10 +439,38 @@ class TradingLabMainWindow(QMainWindow):
     def _on_page_selected(self, index: int) -> None:
         if not (0 <= index < self._pages.count()):
             return
+        if (
+            self._pages.currentIndex() == self._PAGE_IQ_OPTION
+            and index != self._PAGE_IQ_OPTION
+            and hasattr(self, "_iqoption_config_panel")
+            and hasattr(self._iqoption_config_panel, "has_unsaved_changes")
+            and self._iqoption_config_panel.has_unsaved_changes()
+        ):
+            msg = QMessageBox(self)
+            msg.setWindowTitle(t("iq.risk.dialog_title"))
+            msg.setText(t("iq.risk.dialog_message"))
+            msg.setIcon(QMessageBox.Icon.Warning)
+            btn_save = msg.addButton(t("iq.risk.dialog_save"), QMessageBox.ButtonRole.AcceptRole)
+            btn_discard = msg.addButton(
+                t("iq.risk.dialog_discard"), QMessageBox.ButtonRole.DestructiveRole
+            )
+            msg.addButton(t("iq.risk.dialog_cancel"), QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(btn_save)
+            msg.exec()
+            clicked = msg.clickedButton()
+            if clicked == btn_save:
+                self._iqoption_config_panel.save_changes()
+            elif clicked == btn_discard:
+                self._iqoption_config_panel.discard_unsaved_changes()
+            else:
+                self._sidebar.set_current_page(self._PAGE_IQ_OPTION)
+                return
         self._pages.setCurrentIndex(index)
         self._sidebar.set_current_page(index)
         self._update_topbar_title(index)
         self._update_bottombar_primary_action(index)
+        if self._last_snapshot is not None:
+            self._update_page(index, self._last_snapshot)
 
     def _update_topbar_title(self, index: int | None = None) -> None:
         if index is None:
@@ -413,9 +478,9 @@ class TradingLabMainWindow(QMainWindow):
         if index == self._PAGE_OVERVIEW:
             self._topbar.set_title(t("nav.overview"), "nav.overview")
         elif index == self._PAGE_DERIV:
-            self._topbar.set_title(self._deriv_workspace.tab_label())
+            self._topbar.set_title(t("page.deriv.pro_title"), "page.deriv.pro_title")
         elif index == self._PAGE_IQ_OPTION:
-            self._topbar.set_title(self._iqoption_workspace.tab_label())
+            self._topbar.set_title(t("page.iqoption.pro_title"), "page.iqoption.pro_title")
         elif index == self._PAGE_ACTIVITY:
             self._topbar.set_title(t("nav.activity"), "nav.activity")
         elif index == self._PAGE_ACCOUNT:
@@ -439,6 +504,10 @@ class TradingLabMainWindow(QMainWindow):
         self._btn_en.setChecked(lang == "en")
 
     def _on_language_changed(self, lang: str) -> None:
+        self._last_snapshot = None
+        self._last_connected = None
+        self._last_auth_status = None
+        self._initial_refresh_done = False
         self.setWindowTitle(_window_title(t("app.practice_badge")))
         self._lbl_badge.setText(t("app.practice_badge"))
         self._lbl_subtitle.setText(t("app.practice_subtitle"))
@@ -484,37 +553,51 @@ class TradingLabMainWindow(QMainWindow):
         self._bottombar.retranslate()
         self._update_topbar_title()
 
+    @staticmethod
+    def _set_style_if_changed(widget: QWidget, style: str) -> None:
+        if widget.styleSheet() != style:
+            widget.setStyleSheet(style)
+
     def _refresh_projection(self) -> None:
         connected = self._controller.connected
-        self._topbar.set_core_connected(connected)
-        if connected:
-            self._lbl_ipc_status.setText(f"● {t('app.status.connected')}")
-            self._lbl_ipc_status.setStyleSheet(
-                f"color: {ACCENT_GREEN}; font-weight: bold; font-size: 11px;"
-            )
-        else:
-            self._lbl_ipc_status.setText(f"○ {t('app.status.disconnected')}")
-            self._lbl_ipc_status.setStyleSheet(
-                f"color: {ACCENT_RED}; font-weight: bold; font-size: 11px;"
-            )
+        if connected != self._last_connected:
+            self._topbar.set_core_connected(connected)
+            if connected:
+                self._lbl_ipc_status.setText(f"● {t('app.status.connected')}")
+                self._set_style_if_changed(
+                    self._lbl_ipc_status,
+                    f"color: {ACCENT_GREEN}; font-weight: bold; font-size: 11px;",
+                )
+            else:
+                self._lbl_ipc_status.setText(f"○ {t('app.status.disconnected')}")
+                self._set_style_if_changed(
+                    self._lbl_ipc_status,
+                    f"color: {ACCENT_RED}; font-weight: bold; font-size: 11px;",
+                )
 
-        if self._auth_status is None or self._auth_poll_counter >= 15:
-            self._auth_poll_counter = 0
-            with contextlib.suppress(Exception):
-                self._auth_status = self._controller.auth_status()
-        else:
-            self._auth_poll_counter += 1
-
-        if self._auth_status is not None:
+        # 0. Check background-cached auth status (never block the Qt GUI thread with socket I/O)
+        new_auth = getattr(self._controller, "cached_auth_status", None)
+        if new_auth is not None and new_auth != self._last_auth_status:
+            self._auth_status = new_auth
+            self._last_auth_status = new_auth
             user_preview = getattr(self._auth_status, "user_id_preview", "")
             plan = getattr(self._auth_status, "plan", "")
             if isinstance(user_preview, str) and isinstance(plan, str):
                 self._topbar.set_account_info(user_preview, plan)
+                self._sidebar.set_account_info(user_preview, plan)
                 self._account_page.update_auth_status(self._auth_status)
 
         snapshot = self._controller.snapshot
-        self._overview_page.update_projection(snapshot, self._controller)
+        snapshot_sig = snapshot.semantic_signature() if snapshot is not None else None
+        if snapshot_sig == self._last_snapshot_sig and connected == self._last_connected:
+            return
+
+        self._last_connected = connected
+        self._last_snapshot = snapshot
+        self._last_snapshot_sig = snapshot_sig
+
         if snapshot is None:
+            self._overview_page.update_projection(None, self._controller)
             self._bottombar.set_system_ready(False)
             return
 
@@ -525,16 +608,19 @@ class TradingLabMainWindow(QMainWindow):
         state_text = t(state_key)
         self._lbl_state_val.setText(state_text)
         if snapshot.global_state == UiGlobalState.READY:
-            self._lbl_state_val.setStyleSheet(
-                f"color: {ACCENT_GREEN}; font-size: 16px; font-weight: bold;"
+            self._set_style_if_changed(
+                self._lbl_state_val,
+                f"color: {ACCENT_GREEN}; font-size: 16px; font-weight: bold;",
             )
         elif snapshot.global_state == UiGlobalState.SAFE_STOPPED:
-            self._lbl_state_val.setStyleSheet(
-                f"color: {ACCENT_RED}; font-size: 16px; font-weight: bold;"
+            self._set_style_if_changed(
+                self._lbl_state_val,
+                f"color: {ACCENT_RED}; font-size: 16px; font-weight: bold;",
             )
         else:
-            self._lbl_state_val.setStyleSheet(
-                f"color: {ACCENT_AMBER}; font-size: 16px; font-weight: bold;"
+            self._set_style_if_changed(
+                self._lbl_state_val,
+                f"color: {ACCENT_AMBER}; font-size: 16px; font-weight: bold;",
             )
 
         self._lbl_consec_losses.setText(
@@ -554,13 +640,15 @@ class TradingLabMainWindow(QMainWindow):
         pnl_curr = (snapshot.daily_pnl_currency or "USD").upper()
         if pnl_val >= 0:
             self._lbl_pnl_val.setText(format_minor_units(pnl_val, pnl_curr, positive_sign=True))
-            self._lbl_pnl_val.setStyleSheet(
-                f"color: {ACCENT_GREEN}; font-size: 20px; font-weight: bold;"
+            self._set_style_if_changed(
+                self._lbl_pnl_val,
+                f"color: {ACCENT_GREEN}; font-size: 20px; font-weight: bold;",
             )
         else:
             self._lbl_pnl_val.setText(format_minor_units(pnl_val, pnl_curr))
-            self._lbl_pnl_val.setStyleSheet(
-                f"color: {ACCENT_RED}; font-size: 20px; font-weight: bold;"
+            self._set_style_if_changed(
+                self._lbl_pnl_val,
+                f"color: {ACCENT_RED}; font-size: 20px; font-weight: bold;",
             )
 
         # 4. Update Broker Cards
@@ -569,78 +657,35 @@ class TradingLabMainWindow(QMainWindow):
                 self._deriv_real_selected = card_data.account_mode.value == "REAL"
                 self._card_deriv.update_card(card_data)
                 self._deriv_workspace.update_status(card_data)
+                self._main_tabs.setTabText(self._PAGE_DERIV, self._deriv_workspace.tab_label())
                 if card_data.account_mode.value == "REAL":
                     self.setWindowTitle(_window_title(t("mode.REAL")))
                     self._lbl_badge.setText(t("mode.REAL"))
-                    self._lbl_badge.setStyleSheet(
-                        f"background: {ACCENT_RED}; color: white; font-weight: 900; padding: 5px;"
+                    self._set_style_if_changed(
+                        self._lbl_badge,
+                        f"background: {ACCENT_RED}; color: white; font-weight: 900; padding: 5px;",
                     )
                 else:
                     self.setWindowTitle(_window_title(t("app.practice_badge")))
                     self._lbl_badge.setText(t("app.practice_badge"))
-                    self._lbl_badge.setStyleSheet("")
+                    self._set_style_if_changed(self._lbl_badge, "")
             elif card_data.broker == "IQOPTION":
                 self._card_iqoption.update_card(card_data)
                 self._iqoption_workspace.update_status(card_data)
-        self._retranslate_navigation()
+                self._main_tabs.setTabText(
+                    self._PAGE_IQ_OPTION, self._iqoption_workspace.tab_label()
+                )
 
         # 5. Update Health Gates
         self._health_pill_widget.update_gates(snapshot.health_gates)
 
-        # 6. Update Orders
-        self._activity_page.update_orders(snapshot.active_orders)
-        self._log_terminal.update_entries(snapshot.operational_logs)
-        self._results_dashboard.update_results(snapshot.active_orders)
-        self._deriv_workspace.update_orders(snapshot.active_orders)
-        self._deriv_workspace.update_risk(
-            snapshot.global_exposure_minor_units,
-            snapshot.global_max_exposure_minor_units,
-            snapshot.daily_pnl_currency,
-            snapshot.risk_state,
-            snapshot.consecutive_losses,
-            snapshot.digit_risk_config,
-            snapshot.cooldown_remaining_seconds,
-            snapshot.digit_martingale_step,
-            snapshot.digit_next_stake_minor_units,
-            snapshot.digit_projected_sequence_loss_minor_units,
-        )
-        self._iqoption_workspace.update_orders(snapshot.active_orders)
-        self._iqoption_workspace.update_iqoption_radar(snapshot.iqoption_asset_ranking)
-        self._iqoption_config_panel.set_available_assets(snapshot.iqoption_asset_ranking)
-        self._iqoption_workspace.update_iqoption_risk(snapshot.iqoption_risk_config)
-        self._iqoption_workspace.update_iqoption_metrics(snapshot.iqoption_execution_metrics)
-        self._iqoption_workspace.update_bot_state(
-            snapshot.iqoption_bot_armed,
-            snapshot.iqoption_bot_reason,
-            entry_ready=snapshot.iqoption_entry_ready,
-            entry_blocker=snapshot.iqoption_entry_blocker,
-        )
-        self._settings_workspace.update_risk_projection(
-            snapshot.global_exposure_minor_units,
-            snapshot.global_max_exposure_minor_units,
-            snapshot.daily_pnl_currency,
-            snapshot.risk_state,
-        )
-        self._deriv_workspace.update_strategy_statuses(snapshot.deriv_strategies)
-        self._synthetic_live_panel.update_statuses(snapshot.deriv_strategies)
-        self._asset_radar_panel.update_ranking(snapshot.deriv_asset_ranking)
-        if snapshot.digit_risk_config is not None:
-            self._deriv_workspace.set_execution_strategy(
-                snapshot.digit_risk_config.active_strategy_id
-            )
-            self._synthetic_config_panel.set_strategy(snapshot.digit_risk_config.active_strategy_id)
-            self._synthetic_live_panel.set_strategy(snapshot.digit_risk_config.active_strategy_id)
-            self._synthetic_config_panel.set_risk_config(snapshot.digit_risk_config)
-        self._synthetic_config_panel.set_cooldown_remaining(snapshot.cooldown_remaining_seconds)
-        if snapshot.iqoption_risk_config is not None:
-            self._iqoption_config_panel.set_config(snapshot.iqoption_risk_config)
-        iq_card = next(
-            (c for c in snapshot.broker_cards if c.broker in {"IQ_OPTION", "IQOPTION"}),
-            None,
-        )
-        self._iqoption_config_panel.set_account_type(
-            "UNKNOWN" if iq_card is None else iq_card.account_mode.value
-        )
+        # 6. Update Workspace Pages (Full on initial load; active page only on subsequent ticks)
+        if not self._initial_refresh_done:
+            self._initial_refresh_done = True
+            for page_idx in range(self._pages.count()):
+                self._update_page(page_idx, snapshot)
+        else:
+            self._update_page(self._pages.currentIndex(), snapshot)
 
         # 7. Each broker state is authoritative from its own Core projection.
         self._bot_enabled = snapshot.deriv_bot_armed
@@ -664,22 +709,97 @@ class TradingLabMainWindow(QMainWindow):
             snapshot.deriv_bot_waiting_status,
         )
 
+    def _update_page(self, index: int, snapshot: UiProjectionSnapshot) -> None:
+        if index == self._PAGE_OVERVIEW:
+            self._overview_page.update_projection(snapshot, self._controller)
+        elif index == self._PAGE_DERIV:
+            self._deriv_workspace.update_orders(snapshot.active_orders)
+            self._deriv_workspace.update_risk(
+                snapshot.global_exposure_minor_units,
+                snapshot.global_max_exposure_minor_units,
+                snapshot.daily_pnl_currency,
+                snapshot.risk_state,
+                snapshot.consecutive_losses,
+                snapshot.digit_risk_config,
+                snapshot.cooldown_remaining_seconds,
+                snapshot.digit_martingale_step,
+                snapshot.digit_next_stake_minor_units,
+                snapshot.digit_projected_sequence_loss_minor_units,
+            )
+            self._deriv_workspace.update_strategy_statuses(snapshot.deriv_strategies)
+            self._synthetic_live_panel.update_statuses(snapshot.deriv_strategies)
+            self._asset_radar_panel.update_ranking(snapshot.deriv_asset_ranking)
+            if snapshot.digit_risk_config is not None:
+                self._deriv_workspace.set_execution_strategy(
+                    snapshot.digit_risk_config.active_strategy_id
+                )
+                self._synthetic_config_panel.set_strategy(
+                    snapshot.digit_risk_config.active_strategy_id
+                )
+                self._synthetic_live_panel.set_strategy(
+                    snapshot.digit_risk_config.active_strategy_id
+                )
+                self._synthetic_config_panel.set_risk_config(snapshot.digit_risk_config)
+            self._synthetic_config_panel.set_cooldown_remaining(snapshot.cooldown_remaining_seconds)
+        elif index == self._PAGE_IQ_OPTION:
+            self._iqoption_workspace.update_orders(snapshot.active_orders)
+            self._iqoption_workspace.update_iqoption_radar(snapshot.iqoption_asset_ranking)
+            self._iqoption_config_panel.set_available_assets(snapshot.iqoption_asset_ranking)
+            self._iqoption_workspace.update_iqoption_risk(snapshot.iqoption_risk_config)
+            self._iqoption_workspace.update_iqoption_metrics(snapshot.iqoption_execution_metrics)
+            self._iqoption_workspace.update_bot_state(
+                snapshot.iqoption_bot_armed,
+                snapshot.iqoption_bot_reason,
+                entry_ready=snapshot.iqoption_entry_ready,
+                entry_blocker=snapshot.iqoption_entry_blocker,
+            )
+            if snapshot.iqoption_risk_config is not None:
+                self._iqoption_config_panel.set_config(snapshot.iqoption_risk_config)
+            iq_card = next(
+                (c for c in snapshot.broker_cards if c.broker in {"IQ_OPTION", "IQOPTION"}),
+                None,
+            )
+            self._iqoption_config_panel.set_account_type(
+                "UNKNOWN" if iq_card is None else iq_card.account_mode.value
+            )
+        elif index == self._PAGE_ACTIVITY:
+            self._activity_page.update_orders(snapshot.active_orders)
+            self._log_terminal.update_entries(snapshot.operational_logs)
+            self._results_dashboard.update_results(snapshot.active_orders)
+        elif index == self._PAGE_ACCOUNT:
+            if self._auth_status is not None:
+                self._account_page.update_auth_status(self._auth_status)
+        elif index == self._PAGE_SETTINGS:
+            self._settings_workspace.update_risk_projection(
+                snapshot.global_exposure_minor_units,
+                snapshot.global_max_exposure_minor_units,
+                snapshot.daily_pnl_currency,
+                snapshot.risk_state,
+            )
+
     def _update_bot_buttons(self) -> None:
-        self._btn_deriv_bot.setText(
-            t("btn.bot.deriv.stop") if self._bot_enabled else t("btn.bot.deriv.start")
-        )
-        self._btn_deriv_bot.setObjectName(
-            "SafeStopButton" if self._bot_enabled else "BotStartButton"
-        )
-        self._btn_iqoption_bot.setText(
-            t("btn.bot.iq.stop") if self._iqoption_bot_enabled else t("btn.bot.iq.start")
-        )
-        self._btn_iqoption_bot.setObjectName(
-            "SafeStopButton" if self._iqoption_bot_enabled else "BotStartButton"
-        )
-        for button in (self._btn_deriv_bot, self._btn_iqoption_bot):
-            button.style().unpolish(button)
-            button.style().polish(button)
+        deriv_text = t("btn.bot.deriv.stop") if self._bot_enabled else t("btn.bot.deriv.start")
+        deriv_obj = "SafeStopButton" if self._bot_enabled else "BotStartButton"
+        if self._btn_deriv_bot.text() != deriv_text:
+            self._btn_deriv_bot.setText(deriv_text)
+        if self._btn_deriv_bot.objectName() != deriv_obj:
+            self._btn_deriv_bot.setObjectName(deriv_obj)
+            self._btn_deriv_bot.style().unpolish(self._btn_deriv_bot)
+            self._btn_deriv_bot.style().polish(self._btn_deriv_bot)
+
+        iq_text = t("btn.bot.iq.stop") if self._iqoption_bot_enabled else t("btn.bot.iq.start")
+        iq_obj = "SafeStopButton" if self._iqoption_bot_enabled else "BotStartButton"
+        if self._btn_iqoption_bot.text() != iq_text:
+            self._btn_iqoption_bot.setText(iq_text)
+        if self._btn_iqoption_bot.objectName() != iq_obj:
+            self._btn_iqoption_bot.setObjectName(iq_obj)
+            self._btn_iqoption_bot.style().unpolish(self._btn_iqoption_bot)
+            self._btn_iqoption_bot.style().polish(self._btn_iqoption_bot)
+
+        if hasattr(self, "_deriv_workspace") and hasattr(
+            self._deriv_workspace, "update_context_bot_toggle"
+        ):
+            self._deriv_workspace.update_context_bot_toggle(self._bot_enabled)
 
     def _update_bot_button(self) -> None:
         """Compatibility shim retained for existing UI tests."""
@@ -711,6 +831,14 @@ class TradingLabMainWindow(QMainWindow):
 
     def _on_toggle_iqoption_bot(self) -> None:
         try:
+            if (
+                not self._iqoption_bot_enabled
+                and hasattr(self, "_iqoption_config_panel")
+                and hasattr(self._iqoption_config_panel, "has_unsaved_changes")
+                and self._iqoption_config_panel.has_unsaved_changes()
+            ):
+                self._iqoption_config_panel.save_changes()
+
             ack = self._controller.control_iqoption_bot(not self._iqoption_bot_enabled)
             self._refresh_projection()
             automatic_recovery = {
@@ -730,10 +858,23 @@ class TradingLabMainWindow(QMainWindow):
 
     def _on_iqoption_risk_config_apply(self, config: UiIqOptionRiskConfig) -> None:
         try:
-            if self._iqoption_bot_enabled:
+            was_armed = self._iqoption_bot_enabled
+            if was_armed:
                 self._controller.control_iqoption_bot(False)
             ack = self._controller.update_iqoption_risk_config(config)
-            self._iqoption_config_panel.set_apply_result(ack.accepted, ack.reason_code)
+            if ack.accepted and was_armed:
+                rearm_ack = self._controller.control_iqoption_bot(True)
+                self._iqoption_config_panel.set_apply_result(
+                    rearm_ack.accepted,
+                    rearm_ack.reason_code,
+                    rearmed=rearm_ack.accepted,
+                )
+            else:
+                self._iqoption_config_panel.set_apply_result(
+                    ack.accepted,
+                    ack.reason_code,
+                    rearmed=False,
+                )
             self._refresh_projection()
         except Exception as exc:
             self._iqoption_config_panel.set_apply_result(False, str(exc)[:64])
@@ -1100,6 +1241,10 @@ class TradingLabMainWindow(QMainWindow):
             self._iqoption_workspace.set_iqoption_login_status(t("iq_option.login.saved_failed"))
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        with contextlib.suppress(Exception):
+            self._controller.control_iqoption_bot(False)
+        with contextlib.suppress(Exception):
+            self._controller.safe_stop()
         with contextlib.suppress(Exception):
             self._controller.request_safe_close()
         event.accept()

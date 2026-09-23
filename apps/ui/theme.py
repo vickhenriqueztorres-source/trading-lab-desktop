@@ -206,17 +206,18 @@ def get_application_stylesheet() -> str:
         background-color: rgba(229, 72, 77, 0.25);
     }}
 
-    /* Botões de estratégia */
+    /* Botões de estratégia / bots */
     QPushButton#StrategyButtonActive {{
         text-align: left;
-        color: {TEXT_PRIMARY};
-        background-color: {BG_ELEVATED};
-        border: 1px solid {BORDER_HOVER};
-        border-left: 3px solid {ACCENT_PRIMARY};
+        color: #FFFFFF;
+        background-color: rgba(58, 167, 184, 0.14);
+        border: 1px solid rgba(58, 167, 184, 0.50);
+        border-left: 4px solid #00E5FF;
         border-radius: {RADIUS_SM}px;
-        padding: 12px;
+        padding: 8px 12px;
         font-size: 11px;
         font-weight: 800;
+        line-height: 1.3;
     }}
 
     QPushButton#StrategyButton {{
@@ -224,15 +225,18 @@ def get_application_stylesheet() -> str:
         color: {TEXT_MUTED};
         background-color: {BG_SURFACE};
         border: 1px solid {BORDER_COLOR};
+        border-left: 4px solid transparent;
         border-radius: {RADIUS_SM}px;
-        padding: 11px;
-        font-size: 10px;
-        font-weight: 700;
+        padding: 8px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1.3;
     }}
 
     QPushButton#StrategyButton:hover {{
+        background-color: rgba(255, 255, 255, 0.03);
         border: 1px solid {BORDER_ACCENT};
-        color: {TEXT_SECONDARY};
+        color: {TEXT_PRIMARY};
     }}
 
     /* Botão do seletor de idioma */
@@ -262,6 +266,7 @@ def get_application_stylesheet() -> str:
         max-height: 36px;
         padding: 0 12px;
         font-size: 13px;
+        font-family: {FONT_MONO}, {FONT_MAIN};
     }}
 
     QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus {{

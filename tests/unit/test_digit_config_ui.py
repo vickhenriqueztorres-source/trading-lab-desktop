@@ -207,3 +207,48 @@ def test_digit_panel_hides_internal_martingale_safety_bounds() -> None:
     assert panel.current_config() is not None
     assert panel.current_config().martingale_max_stake_minor_units == 5000
     panel.close()
+
+
+def test_digit_panel_strategy_selection_clean_dirty_state() -> None:
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    panel = DigitConfigPanelWidget()
+    panel.show()
+    app.processEvents()
+
+    # Initial state: clean and only active strategy checked in single mode
+    assert panel._dirty is False
+    assert panel._dirty_banner.isVisible() is False
+    assert panel.apply_button.styleSheet() == ""
+    assert panel._strategy_inputs["tail-probability-edge"].isChecked() is True
+    assert panel._strategy_inputs["parity-regime-edge"].isChecked() is False
+
+    # Programmatic active strategy change (sync from Core/snapshot, apply=False)
+    panel.set_active_strategy("parity-regime-edge", apply=False)
+    app.processEvents()
+    assert panel._dirty is False
+    assert panel._dirty_banner.isVisible() is False
+    assert panel._strategy_inputs["parity-regime-edge"].isChecked() is True
+    assert panel._strategy_inputs["tail-probability-edge"].isChecked() is False
+
+    # Ensure set_config is not blocked
+    panel.set_config(_config())
+    assert panel._dirty is False
+    assert panel._dirty_banner.isVisible() is False
+
+    # Explicit operator strategy change (apply=True)
+    applied_configs: list[UiDigitRiskConfig] = []
+    panel.config_apply_requested.connect(applied_configs.append)
+    panel.set_active_strategy("selective-differs-edge", apply=True)
+    app.processEvents()
+    assert len(applied_configs) == 1
+    assert applied_configs[0].active_strategy_id == "selective-differs-edge"
+    assert panel._dirty is True
+    assert panel._dirty_banner.isVisible() is True
+
+    # After Core acknowledgment
+    panel.set_apply_result(True)
+    app.processEvents()
+    assert panel._dirty is False
+    assert panel._dirty_banner.isVisible() is False
+    panel.close()

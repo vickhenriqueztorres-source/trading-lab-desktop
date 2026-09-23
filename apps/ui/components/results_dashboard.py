@@ -94,7 +94,10 @@ class ResultsDashboardWidget(QFrame):
         return caption, value
 
     def update_results(self, orders: Sequence[OrderSummary]) -> None:
-        self._orders = tuple(orders)
+        incoming = tuple(orders)
+        if incoming == self._orders:
+            return
+        self._orders = incoming
         settled = tuple(
             item
             for item in self._orders

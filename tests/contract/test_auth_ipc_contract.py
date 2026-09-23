@@ -151,3 +151,34 @@ def test_auth_server_simulation_contract_is_platform_independent(tmp_path: Path)
     assert client.status().auth_state == "REAUTH_REQUIRED"
     client.shutdown()
     thread.join(timeout=2.0)
+
+
+def test_auth_agent_ipc_activate_product_key_contract(tmp_path: Path) -> None:
+    from scripts.gerar_licenca import generate_license
+
+    session_token = SecretValue.from_text(secrets.token_hex(32))
+    server = AuthAgentServer(
+        session_token,
+        tmp_path,
+        force_simulation=True,
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    product_key, _ = generate_license(client_name="IPC Client Test", days=30)
+
+    client = AuthAgentIpcClient.connect("127.0.0.1", server.port, session_token)
+    try:
+        response = client.activate_product_key(product_key)
+        assert response.status is AuthLoginStatus.AUTHORIZED
+        assert response.user_id_preview is not None
+
+        status = client.status()
+        assert status.lease_active is True
+        assert status.auth_state == "OFFLINE_AUTHORIZED"
+    finally:
+        try:
+            client.shutdown()
+        finally:
+            server.stop()
+            server_thread.join(timeout=1.0)

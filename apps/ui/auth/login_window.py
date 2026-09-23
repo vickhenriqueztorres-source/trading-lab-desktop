@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 import re
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from apps.launcher.build_defaults import get_support_renew_url
 from apps.ui.auth.logic import (
     format_code,
     format_countdown,
@@ -38,9 +40,14 @@ from apps.ui.auth.logic import (
 from apps.ui.controller import UiController
 from apps.ui.design import TOKENS, asset_path, icon
 from apps.ui.i18n import t
-from packages.protocol import UiAuthStartLoginAck, UiAuthSubmitOtpAck
+from packages.protocol import (
+    UiAuthActivateKeyAck,
+    UiAuthStartLoginAck,
+    UiAuthSubmitOtpAck,
+)
 
-SUPPORT_RENEW_URL = os.environ.get("TRADING_LAB_RENEW_URL", "https://tradinglab.app/renew")
+SUPPORT_RENEW_URL = get_support_renew_url()
+
 _CODE_EXPIRATION_SECONDS = 300
 _RESEND_COOLDOWN_SECONDS = 30
 
@@ -118,10 +125,11 @@ class DigitBox(QLineEdit):
 
 
 class LoginWindow(QDialog):
-    """Modern 3-step OTP login dialog with email validation and device activation."""
+    """Modern 3-step OTP and cryptographic offline product key activation dialog."""
 
     _start_login_finished = Signal(object)
     _submit_otp_finished = Signal(object)
+    _activate_key_finished = Signal(object)
 
     _STATE_EMAIL = 0
     _STATE_CODE = 1
@@ -142,8 +150,8 @@ class LoginWindow(QDialog):
         self._countdown_seconds = _CODE_EXPIRATION_SECONDS
         self._resend_cooldown = _RESEND_COOLDOWN_SECONDS
 
-        self.setWindowTitle(t("login.title"))
-        self.setFixedSize(440, 560)
+        self.setWindowTitle(t("activation.title"))
+        self.setFixedSize(460, 580)
         self.setModal(True)
 
         app_icon = asset_path("app.ico")
@@ -192,6 +200,19 @@ class LoginWindow(QDialog):
                 border-color: {TOKENS.ACCENT_PRIMARY};
                 background-color: {TOKENS.BG_ELEVATED};
             }}
+            QLineEdit#inputKey {{
+                background-color: {TOKENS.BG_SURFACE};
+                border: 1px solid {TOKENS.BORDER_COLOR};
+                border-radius: {TOKENS.RADIUS_MD}px;
+                color: {TOKENS.TEXT_PRIMARY};
+                font-family: Consolas, "Liberation Mono", Menlo, Courier, monospace;
+                font-size: 13px;
+                padding: 10px 12px;
+            }}
+            QLineEdit#inputKey:focus {{
+                border-color: {TOKENS.ACCENT_PRIMARY};
+                background-color: {TOKENS.BG_ELEVATED};
+            }}
             QPushButton#primaryButton {{
                 background-color: {TOKENS.ACCENT_PRIMARY};
                 color: #070B14;
@@ -208,6 +229,19 @@ class LoginWindow(QDialog):
                 background-color: {TOKENS.BG_SURFACE};
                 color: {TOKENS.TEXT_MUTED};
                 border: 1px solid {TOKENS.BORDER_COLOR};
+            }}
+            QPushButton#actionButton {{
+                background-color: {TOKENS.BG_SURFACE};
+                color: {TOKENS.TEXT_PRIMARY};
+                font-size: 12px;
+                font-weight: 600;
+                border: 1px solid {TOKENS.BORDER_COLOR};
+                border-radius: {TOKENS.RADIUS_MD}px;
+                padding: 8px 14px;
+            }}
+            QPushButton#actionButton:hover {{
+                background-color: {TOKENS.BG_ELEVATED};
+                border-color: {TOKENS.ACCENT_PRIMARY};
             }}
             QPushButton#linkButton {{
                 background: transparent;
@@ -252,6 +286,7 @@ class LoginWindow(QDialog):
 
         self._start_login_finished.connect(self._on_start_login_finished)
         self._submit_otp_finished.connect(self._on_submit_otp_finished)
+        self._activate_key_finished.connect(self._on_activate_key_finished)
 
         # Timers
         self._timer_countdown = QTimer(self)
@@ -292,51 +327,111 @@ class LoginWindow(QDialog):
         lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_logo.setPixmap(_render_svg_pixmap("logo-wordmark.svg", 180, 42))
         layout.addWidget(lbl_logo)
-        layout.addSpacing(28)
+        layout.addSpacing(20)
 
         # Title & Subtitle
-        lbl_title = QLabel(t("login.title"))
+        lbl_title = QLabel(t("activation.title"))
         lbl_title.setObjectName("dialogTitle")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_title)
-        layout.addSpacing(8)
+        layout.addSpacing(6)
 
-        lbl_sub = QLabel(t("login.subtitle"))
+        lbl_sub = QLabel(t("activation.subtitle"))
         lbl_sub.setObjectName("dialogSubtitle")
         lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_sub.setWordWrap(True)
         layout.addWidget(lbl_sub)
-        layout.addSpacing(28)
+        layout.addSpacing(18)
 
-        # Email field
+        # License Key Label
+        lbl_key = QLabel(t("activation.key_label"))
+        lbl_key.setObjectName("fieldLabel")
+        layout.addWidget(lbl_key)
+        layout.addSpacing(6)
+
+        # Key Input + Paste Button
+        key_row = QHBoxLayout()
+        key_row.setSpacing(6)
+
+        self._txt_key = QLineEdit()
+        self._txt_key.setObjectName("inputKey")
+        self._txt_key.setPlaceholderText(t("activation.key_placeholder"))
+        self._txt_key.returnPressed.connect(self._handle_activate_key)
+        key_row.addWidget(self._txt_key, 1)
+
+        self._btn_paste_key = QPushButton(t("activation.paste_btn"))
+        self._btn_paste_key.setObjectName("actionButton")
+        self._btn_paste_key.setFixedHeight(38)
+        self._btn_paste_key.clicked.connect(self._on_paste_key)
+        key_row.addWidget(self._btn_paste_key)
+
+        layout.addLayout(key_row)
+        layout.addSpacing(4)
+
+        # Load file row
+        file_row = QHBoxLayout()
+        self._btn_load_file = QPushButton(t("activation.load_file_btn"))
+        self._btn_load_file.setObjectName("linkButton")
+        self._btn_load_file.clicked.connect(self._on_load_file)
+        file_row.addWidget(self._btn_load_file)
+        file_row.addStretch()
+        layout.addLayout(file_row)
+        layout.addSpacing(4)
+
+        # License Key Error label
+        self._lbl_key_error = QLabel()
+        self._lbl_key_error.setObjectName("errorLabel")
+        self._lbl_key_error.setWordWrap(True)
+        self._lbl_key_error.hide()
+        layout.addWidget(self._lbl_key_error)
+        layout.addSpacing(12)
+
+        # Activate Button
+        self._btn_activate = QPushButton(t("activation.activate_btn"))
+        self._btn_activate.setObjectName("primaryButton")
+        self._btn_activate.setFixedHeight(44)
+        self._btn_activate.clicked.connect(self._handle_activate_key)
+        layout.addWidget(self._btn_activate)
+        layout.addSpacing(14)
+
+        # Email fallback container
+        self._email_container = QWidget()
+        email_layout = QVBoxLayout(self._email_container)
+        email_layout.setContentsMargins(0, 0, 0, 0)
+        email_layout.setSpacing(6)
+
         lbl_email = QLabel(t("login.email_label"))
         lbl_email.setObjectName("fieldLabel")
-        layout.addWidget(lbl_email)
-        layout.addSpacing(6)
+        email_layout.addWidget(lbl_email)
 
         self._txt_email = QLineEdit()
         self._txt_email.setObjectName("inputEmail")
         self._txt_email.setPlaceholderText(t("login.email_placeholder"))
         self._txt_email.returnPressed.connect(self._handle_send_code)
-        layout.addWidget(self._txt_email)
-        layout.addSpacing(6)
+        email_layout.addWidget(self._txt_email)
 
-        # Error label
         self._lbl_email_error = QLabel()
         self._lbl_email_error.setObjectName("errorLabel")
         self._lbl_email_error.setWordWrap(True)
         self._lbl_email_error.hide()
-        layout.addWidget(self._lbl_email_error)
+        email_layout.addWidget(self._lbl_email_error)
 
-        layout.addStretch()
-
-        # Send Code Button
         self._btn_send_code = QPushButton(t("login.send_code"))
         self._btn_send_code.setObjectName("primaryButton")
-        self._btn_send_code.setFixedHeight(44)
+        self._btn_send_code.setFixedHeight(40)
         self._btn_send_code.clicked.connect(self._handle_send_code)
-        layout.addWidget(self._btn_send_code)
+        email_layout.addWidget(self._btn_send_code)
 
+        self._email_container.hide()
+        layout.addWidget(self._email_container)
+
+        # Toggle email button
+        self._btn_toggle_email = QPushButton(t("login.title"))
+        self._btn_toggle_email.setObjectName("linkButton")
+        self._btn_toggle_email.clicked.connect(self._toggle_email_section)
+        layout.addWidget(self._btn_toggle_email, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        layout.addStretch()
         return widget
 
     # -------------------------------------------------------------------------
@@ -487,9 +582,90 @@ class LoginWindow(QDialog):
     # -------------------------------------------------------------------------
     # Event Handlers & Navigation
     # -------------------------------------------------------------------------
+    def _toggle_email_section(self) -> None:
+        self._email_container.setVisible(not self._email_container.isVisible())
+
+    def _show_key_error(self, message: str) -> None:
+        self._lbl_key_error.setText(message)
+        self._lbl_key_error.show()
+
+    def _hide_key_error(self) -> None:
+        self._lbl_key_error.hide()
+
+    def _on_paste_key(self) -> None:
+        clipboard = QGuiApplication.clipboard()
+        text = clipboard.text() if clipboard else ""
+        if text.strip():
+            self._txt_key.setText(text.strip())
+            self._hide_key_error()
+
+    def _on_load_file(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            t("activation.load_file_btn"),
+            "",
+            "License (*.lic *.txt);;All (*.*)",
+        )
+        if file_path:
+            try:
+                content = Path(file_path).read_text(encoding="utf-8").strip()
+                if content:
+                    self._txt_key.setText(content)
+                    self._hide_key_error()
+                    self._handle_activate_key()
+            except Exception as exc:
+                self._show_key_error(str(exc))
+
+    def _handle_activate_key(self) -> None:
+        self._hide_key_error()
+        key = self._txt_key.text().strip()
+        if not key:
+            self._show_key_error(t("activation.err_empty_key"))
+            return
+
+        self._btn_activate.setEnabled(False)
+        self._btn_activate.setText(t("activation.activating"))
+        self._stack.setCurrentIndex(self._STATE_ACTIVATING)
+
+        def run_activate() -> None:
+            try:
+                ack = self._controller.auth_activate_key(key)
+                self._activate_key_finished.emit(ack)
+            except Exception as exc:
+                self._activate_key_finished.emit(exc)
+
+        threading.Thread(
+            target=run_activate,
+            name="auth-activate-key-thread",
+            daemon=True,
+        ).start()
+
+    def _on_activate_key_finished(self, result: object) -> None:
+        self._btn_activate.setEnabled(True)
+        self._btn_activate.setText(t("activation.activate_btn"))
+
+        if isinstance(result, UiAuthActivateKeyAck) and (
+            result.ok or result.status in ("AUTHORIZED", "OFFLINE_AUTHORIZED")
+        ):
+            self.accept()
+            return
+
+        self._stack.setCurrentIndex(self._STATE_EMAIL)
+        if isinstance(result, UiAuthActivateKeyAck):
+            if result.reason and "EXPIRED" in result.reason:
+                self._show_key_error(t("activation.err_expired_key"))
+            else:
+                self._show_key_error(t("activation.err_invalid_key"))
+        elif isinstance(result, Exception):
+            self._show_key_error(t("activation.err_invalid_key"))
+        else:
+            self._show_key_error(t("activation.err_invalid_key"))
+
     def _show_email_error(self, message: str) -> None:
         self._lbl_email_error.setText(message)
         self._lbl_email_error.show()
+        self._lbl_key_error.setText(message)
+        self._lbl_key_error.show()
 
     def _hide_email_error(self) -> None:
         self._lbl_email_error.hide()

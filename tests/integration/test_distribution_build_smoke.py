@@ -39,7 +39,7 @@ def test_build_spec_and_version_info_exist() -> None:
 
     version_text = version_info_path.read_text(encoding="utf-8")
     assert "Trading Lab Desktop" in version_text
-    assert "1.9.11.0" in version_text
+    assert "1.9.18.0" in version_text
 
 
 def test_compile_executable_staging_manifest_and_integrity(tmp_path: Path) -> None:

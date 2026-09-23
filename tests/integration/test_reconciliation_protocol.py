@@ -208,7 +208,7 @@ def test_rec_06_to_09_matching_conflicts_require_manual_review(
     result = report.results[0]
     assert result.outcome is ReconciliationOutcome.MANUAL_REVIEW_REQUIRED
     assert result.reason_code == reason
-    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "MANUAL_REVIEW"
     assert (
         reader.one("risk_reservations", "reservation_id", fixture.persisted.reservation_id)["state"]
         == "ACTIVE"
@@ -460,7 +460,7 @@ def test_unresolved_order_escalates_to_review_without_releasing_exposure(
     assert report.results[0].outcome is ReconciliationOutcome.MANUAL_REVIEW_REQUIRED
     assert report.results[0].reason_code == "RECONCILIATION_EVIDENCE_INSUFFICIENT"
     assert reader.count("reconciliation_attempts") == 8
-    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "UNKNOWN"
+    assert reader.one("orders", "order_id", fixture.persisted.order_id)["state"] == "MANUAL_REVIEW"
     reservation = reader.one(
         "risk_reservations",
         "reservation_id",

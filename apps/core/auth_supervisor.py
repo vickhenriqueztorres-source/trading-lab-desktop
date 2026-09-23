@@ -16,6 +16,7 @@ from packages.identity import OtpCode
 from packages.licensing import AuthorizationDecision, AuthorizationReason
 from packages.observability.events import EventSink, NullEventSink
 from packages.protocol import (
+    AuthActivateKeyResponse,
     AuthCheckAuthorizationResponse,
     AuthMode,
     AuthStartLoginResponse,
@@ -191,6 +192,9 @@ class AuthAgentSupervisor:
 
     def submit_otp(self, challenge_id: str, code: OtpCode) -> AuthSubmitOtpResponse:
         return self.client.submit_otp(challenge_id, code)
+
+    def activate_product_key(self, product_key: str) -> AuthActivateKeyResponse:
+        return self.client.activate_product_key(product_key)
 
     def status(self) -> AuthStatusResponse:
         return self.client.status()

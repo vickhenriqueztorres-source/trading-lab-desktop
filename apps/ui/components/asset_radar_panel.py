@@ -62,8 +62,9 @@ class DerivAssetRadarWidget(QWidget):
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
-        self._table.setMinimumHeight(190)
-        self._table.setMaximumHeight(250)
+        self._table.setMinimumHeight(180)
+        self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table_header = self._table.horizontalHeader()
         table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -93,6 +94,7 @@ class DerivAssetRadarWidget(QWidget):
             self._state.setObjectName("StatusPillOffline")
             self._state.style().unpolish(self._state)
             self._state.style().polish(self._state)
+            self._table.setFixedHeight(80)
             return
 
         self._table.clearSpans()
@@ -141,6 +143,11 @@ class DerivAssetRadarWidget(QWidget):
                     cell.setForeground(QColor(ACCENT_CYAN))
                 self._table.setItem(row, column, cell)
         self._table.resizeRowsToContents()
+        total_h = self._table.horizontalHeader().height()
+        for i in range(self._table.rowCount()):
+            total_h += self._table.rowHeight(i)
+        if total_h > 0:
+            self._table.setFixedHeight(max(total_h + 6, 180))
 
     @staticmethod
     def _state_text(state: str) -> str:

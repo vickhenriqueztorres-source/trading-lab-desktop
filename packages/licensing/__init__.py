@@ -5,6 +5,7 @@ from packages.licensing.models import (
     LeaseClaims,
     SignedLease,
 )
+from packages.licensing.product_key import decode_product_key, encode_product_key
 
 __all__ = [
     "AuthorizationDecision",
@@ -13,4 +14,6 @@ __all__ = [
     "LeaseSigner",
     "LeaseVerifier",
     "SignedLease",
+    "decode_product_key",
+    "encode_product_key",
 ]

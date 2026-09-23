@@ -16,6 +16,7 @@ _RECONCILIATION_GATES = frozenset(
         "HG_RECONCILIATION_REQUIRED",
         "HG_ORDER_UNKNOWN",
         "HG_SETTLEMENT_UNKNOWN",
+        "HG_RECONCILIATION_CONFLICT",
     }
 )
 
@@ -67,9 +68,11 @@ class ReconciliationScheduler:
         )
         self._thread.start()
 
-    def trigger(self, reason: str = "external") -> None:
+    def trigger(self, reason: str = "external", reset_delay: bool = True) -> None:
         if self._stop.is_set():
             return
+        if reset_delay:
+            self._delay = self._base_delay
         self._trigger.set()
         self._event_sink.emit("reconciliation_cycle_requested", reason_code=reason)
 

@@ -19,36 +19,6 @@ work/
 .installed.cfg
 *.egg
 
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Testing and linters
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
-# Local databases and secrets
-data/
-*.db
-*.db-wal
-*.db-shm
-*.vault
-.env
-.env.*
-!.env.example
-
-# Logs and diagnostics
-logs/
-*.log
-reports/
-updates/
-
-# OS specific
 
 # Virtual environments
 .venv/
@@ -69,6 +39,7 @@ data/
 *.db-wal
 *.db-shm
 *.vault
+*.pem
 .env
 .env.*
 !.env.example
@@ -104,3 +75,9 @@ cache/
 # Local Supabase CLI state accidentally created outside the canonical
 # strategy-lab/apps/hub/supabase project directory.
 /strategy-lab/supabase/
+
+# Local license keys, tokens, and test files
+*.lic
+licencas/
+ULTIMO_CODIGO_OTP.txt
+scratch/

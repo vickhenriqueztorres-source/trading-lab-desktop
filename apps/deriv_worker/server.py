@@ -38,7 +38,7 @@ class DerivWorkerServer:
         session: PublicDerivSession,
         scenario: FakeDerivScenario = FakeDerivScenario.NORMAL,
         connect_timeout: float = 3.0,
-        stream_poll_seconds: float = 0.05,
+        stream_poll_seconds: float = 0.15,
         suspension_gap_seconds: float = 30.0,
         order_session: DerivOrderSession | None = None,
         reconciliation_handler: DerivReconciliationHandler | None = None,

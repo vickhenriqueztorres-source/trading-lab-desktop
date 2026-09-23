@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Trading Lab — Painel Admin{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              bg: '#0A0F14',
+              surface: '#111820',
+              border: '#1E293B',
+              primary: '#3AA7B8',
+              success: '#1FB57A',
+              warning: '#F59E0B',
+              danger: '#EF4444'
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="min-h-full flex flex-col bg-slate-950 text-slate-100 antialiased font-sans">
+  <!-- Top Navigation -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-6">
+        <a href="/admin" class="flex items-center space-x-3 text-cyan-400 font-bold text-lg tracking-wide hover:opacity-90">
+          <span class="inline-block w-3 h-3 rounded-full bg-cyan-400"></span>
+          <span>Trading Lab Admin</span>
+        </a>
+        <nav class="hidden md:flex items-center space-x-4 text-sm font-medium text-slate-300">
+          <a href="/admin" class="hover:text-cyan-400 px-3 py-1.5 rounded hover:bg-slate-800 transition">Clientes</a>
+          <a href="/admin/customers/new" class="hover:text-cyan-400 px-3 py-1.5 rounded hover:bg-slate-800 transition">+ Novo Cliente</a>
+          <a href="/admin/audit" class="hover:text-cyan-400 px-3 py-1.5 rounded hover:bg-slate-800 transition">Auditoria</a>
+        </nav>
+      </div>
+      <div class="flex items-center space-x-4">
+        {% if admin_email %}
+          <span class="hidden sm:inline-block text-xs font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded border border-slate-700">
+            {{ admin_email }}
+          </span>
+          <form action="/admin/logout" method="POST" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="text-xs font-semibold px-3 py-1.5 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 border border-slate-700 rounded transition">
+              Sair
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% if error %}
+      <div class="mb-6 rounded-lg bg-red-950/70 border border-red-800/60 p-4 text-sm text-red-200 flex items-center space-x-3">
+        <svg class="w-5 h-5 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span>{{ error }}</span>
+      </div>
+    {% endif %}
+    {% if success %}
+      <div class="mb-6 rounded-lg bg-emerald-950/70 border border-emerald-800/60 p-4 text-sm text-emerald-200 flex items-center space-x-3">
+        <svg class="w-5 h-5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+        <span>{{ success }}</span>
+      </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-600">
+    Trading Lab License Server &bull; Painel Interno &bull; Autenticação e Gestão de Licenças
+  </footer>
+</body>
+</html>

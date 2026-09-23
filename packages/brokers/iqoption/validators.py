@@ -9,24 +9,27 @@ PRACTICE_BALANCE_TYPE = 4
 REAL_BALANCE_TYPE = 1
 
 
-def validate_iqoption_account(account_payload: dict[str, Any]) -> None:
-    """Strictly validates that the IQ Option account is in Practice/Demo mode.
-
-    Any presence of Real balance (type 1) or real account flags raises
-    IQOPTION_REAL_ACCOUNT_FORBIDDEN immediately.
-    """
+def validate_iqoption_account(account_payload: dict[str, Any], *, allow_real: bool = False) -> None:
+    """Validates that the IQ Option account is in Practice mode unless allow_real=True."""
     balance_type = account_payload.get("balance_type")
     is_demo = account_payload.get("is_demo")
     account_type = str(account_payload.get("account_type", "")).lower()
 
-    if balance_type == REAL_BALANCE_TYPE or is_demo is False or account_type == "real":
+    if not allow_real and (
+        balance_type == REAL_BALANCE_TYPE or is_demo is False or account_type == "real"
+    ):
         raise IQOptionWorkerError(
             IQOptionErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "IQOPTION_REAL_ACCOUNT_FORBIDDEN",
             "Real account execution is strictly forbidden in DualTrade Desktop",
         )
 
-    if balance_type != PRACTICE_BALANCE_TYPE and is_demo is not True and account_type != "practice":
+    if (
+        balance_type != PRACTICE_BALANCE_TYPE
+        and is_demo is not True
+        and account_type != "practice"
+        and (not allow_real or (balance_type != REAL_BALANCE_TYPE and account_type != "real"))
+    ):
         raise IQOptionWorkerError(
             IQOptionErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "IQOPTION_PRACTICE_ACCOUNT_REQUIRED",
@@ -34,7 +37,7 @@ def validate_iqoption_account(account_payload: dict[str, Any]) -> None:
         )
 
 
-def validate_iqoption_order_command(command: OrderCommand) -> None:
+def validate_iqoption_order_command(command: OrderCommand, *, allow_real: bool = False) -> None:
     """Validates an OrderCommand before routing to IQ Option."""
     if command.broker is not Broker.IQ_OPTION:
         raise IQOptionWorkerError(
@@ -66,7 +69,7 @@ def validate_iqoption_order_command(command: OrderCommand) -> None:
             "IQOPTION_INVALID_ACCOUNT_ID",
             "Account ID cannot be empty",
         )
-    if command.account_id.upper().startswith("REAL"):
+    if not allow_real and command.account_id.upper().startswith("REAL"):
         raise IQOptionWorkerError(
             IQOptionErrorCategory.ACCOUNT_MODE_FORBIDDEN,
             "IQOPTION_REAL_ACCOUNT_FORBIDDEN",

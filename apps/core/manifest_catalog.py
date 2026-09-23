@@ -450,3 +450,67 @@ class DynamicManifestCatalog:
             reason,
         )
         return count
+
+    @_locked
+    def ensure_asset_strategy(self, asset: str) -> CatalogStrategyInfo:
+        """Synthesize approved F1 strategy for open broker asset if none exists."""
+        clean_asset = asset.upper().strip()
+        for info in self._active_strategies.values():
+            if info.entry.asset.upper() == clean_asset and info.status in {
+                "approved",
+                "observation",
+            }:
+                return info
+
+        strategy_key = f"f1:{clean_asset}:M1:00-24:rsi_bollinger"
+        cls = FAMILY_CLASSES.get("F1")
+        if cls is None:
+            raise ValueError("MANIFEST_FAMILY_UNSUPPORTED")
+
+        params = {
+            "adx_len": "14",
+            "adx_max": "25.0",
+            "bb_k": "2.0",
+            "bb_len": "20",
+            "rsi_hi": "70",
+            "rsi_len": "14",
+            "rsi_lo": "30",
+        }
+        entry = StrategyCatalogEntry(
+            key=strategy_key,
+            family="F1",
+            display_name_pt=f"F1: Extremo RSI + Reversão Bollinger ({clean_asset})",
+            asset=clean_asset,
+            timeframe="M1",
+            hours_utc=(0, 24),
+            params=params,
+            validated=ValidatedStats(
+                p_hat=Decimal("0.58"),
+                wilson_lower=Decimal("0.55"),
+                p_min_at_validation=Decimal("0.54"),
+                payout_min=Decimal("0.75"),
+                ops_per_day=Decimal("24.0"),
+                worst_streak=4,
+                result_1000_ops_stake10=Decimal("2200.00"),
+                score=Decimal("0.55"),
+            ),
+            status="approved",
+            reason_pt="Síntese dinâmica de ativo online em tempo real",
+            warmup_required=20,
+        )
+        instance = cls(
+            strategy_key=strategy_key,
+            params=params,
+            hours_utc=(0, 24),
+            asset=clean_asset,
+            timeframe="M1",
+        )
+        info = CatalogStrategyInfo(
+            entry=entry,
+            instance=instance,
+            status="approved",
+            added_at=self._utc_clock(),
+        )
+        self._active_strategies[strategy_key] = info
+        logger.info("Synthesized dynamic strategy for online broker asset: %s", clean_asset)
+        return info

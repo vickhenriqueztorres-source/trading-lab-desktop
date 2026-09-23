@@ -1747,3 +1747,12 @@ def test_rejected_initial_ssid_is_cleared_without_http_fallback() -> None:
         session.connect()
 
     assert invalidated == [True]
+
+
+def test_catalog_symbol_normalizes_option_pairs() -> None:
+    assert IQOptionCommunityReadOnlySession._catalog_symbol("front.EURUSD-op") == "EURUSD"
+    assert IQOptionCommunityReadOnlySession._catalog_symbol("front.GBPUSD-OP") == "GBPUSD"
+    assert IQOptionCommunityReadOnlySession._catalog_symbol("front.EURUSD-OTC") == "EURUSD-OTC"
+    assert IQOptionCommunityReadOnlySession._catalog_symbol("front.EURUSD") == "EURUSD"
+    assert IQOptionCommunityReadOnlySession._catalog_symbol("") is None
+    assert IQOptionCommunityReadOnlySession._catalog_symbol(None) is None

@@ -787,7 +787,7 @@ def test_last_reason_is_exposed_with_waiting_duration() -> None:
     assert status.waiting_since_seconds == 7
     assert status.armed_epoch == 123
     assert status.rearm_notice is True
-    assert "descartou sinais anteriores" in status.description
+    assert "descartó señales anteriores" in status.description
 
 
 def test_rearm_resets_waiting_and_is_reported() -> None:

@@ -159,7 +159,8 @@ class ProcessTreeSupervisor:
             self._state = LauncherLifecycleState.FAILED
             return False
         except Exception as exc:
-            self._failure_reason = getattr(exc, "reason_code", type(exc).__name__)
+            reason = getattr(exc, "reason_code", None)
+            self._failure_reason = reason or str(exc) or type(exc).__name__
             self._fail_safe_cleanup()
             self._state = LauncherLifecycleState.FAILED
             return False

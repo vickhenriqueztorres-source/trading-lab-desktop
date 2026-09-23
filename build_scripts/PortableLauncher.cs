@@ -13,15 +13,15 @@ using System.Threading;
 [assembly: AssemblyCompany("Trading Lab Systems")]
 [assembly: AssemblyProduct("Trading Lab Desktop")]
 [assembly: AssemblyCopyright("Copyright (C) 2026 Trading Lab Systems")]
-[assembly: AssemblyVersion("1.9.11.0")]
-[assembly: AssemblyFileVersion("1.9.11.0")]
-[assembly: AssemblyInformationalVersion("1.9.11")]
+[assembly: AssemblyVersion("1.9.18.0")]
+[assembly: AssemblyFileVersion("1.9.18.0")]
+[assembly: AssemblyInformationalVersion("1.9.18")]
 
 namespace TradingLabPortable
 {
     internal static class Program
     {
-        private const string ProductVersion = "1.9.11";
+        private const string ProductVersion = "1.9.18";
         private const string PayloadResource = "TradingLab.payload.zip";
         private const string SingleInstanceName = "Local\\TradingLabDesktop.SingleInstance";
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 
 from PySide6.QtCore import QUrl, Signal
@@ -15,13 +14,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from apps.launcher.build_defaults import get_support_contact_url, get_support_renew_url
 from apps.ui.auth.logic import mask_email
 from apps.ui.design import TOKENS
 from apps.ui.i18n import t
 from packages.protocol import UiAuthStatusResponse
 
-SUPPORT_RENEW_URL = os.environ.get("TRADING_LAB_RENEW_URL", "https://tradinglab.app/renew")
-SUPPORT_CONTACT_URL = os.environ.get("TRADING_LAB_SUPPORT_URL", "https://t.me/tradinglab_support")
+SUPPORT_RENEW_URL = get_support_renew_url()
+SUPPORT_CONTACT_URL = get_support_contact_url()
 
 
 class AccountPage(QWidget):
@@ -87,16 +87,23 @@ class AccountPage(QWidget):
             }}
             QPushButton#secondary {{
                 background-color: {TOKENS.BG_SURFACE};
-                border: 1px solid {TOKENS.BORDER_COLOR};
+                border: 1px solid {TOKENS.BORDER_ACCENT};
                 border-radius: {TOKENS.RADIUS_MD}px;
                 color: {TOKENS.TEXT_PRIMARY};
                 font-size: 13px;
                 font-weight: 600;
                 padding: 8px 16px;
+                min-width: 140px;
             }}
             QPushButton#secondary:hover {{
                 background-color: {TOKENS.BG_ELEVATED};
                 border-color: {TOKENS.BORDER_HOVER};
+                color: #FFFFFF;
+            }}
+            QPushButton#secondary:disabled {{
+                background-color: {TOKENS.BG_CARD};
+                border: 1px solid {TOKENS.BORDER_COLOR};
+                color: {TOKENS.TEXT_MUTED};
             }}
             QPushButton#danger {{
                 background-color: {TOKENS.BG_SURFACE};
@@ -106,9 +113,10 @@ class AccountPage(QWidget):
                 font-size: 13px;
                 font-weight: 600;
                 padding: 8px 16px;
+                min-width: 140px;
             }}
             QPushButton#danger:hover {{
-                background-color: rgba(239, 68, 68, 0.15);
+                background-color: rgba(229, 72, 77, 0.15);
             }}
             QProgressBar {{
                 background-color: {TOKENS.BG_SURFACE};

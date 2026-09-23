@@ -15,6 +15,8 @@ from packages.protocol import (
     MessageType,
     ProtocolError,
     ProtocolErrorCode,
+    UiAuthActivateKeyAck,
+    UiAuthActivateKeyCommand,
     UiAuthSignOutAck,
     UiAuthSignOutCommand,
     UiAuthStartLoginAck,
@@ -34,6 +36,8 @@ from packages.protocol import (
     UiIqOptionLoginCommand,
     UiIqOptionRiskConfig,
     UiProjectionSnapshot,
+    UiResolveOrderAck,
+    UiResolveOrderCommand,
     UiUpdateDigitRiskConfigAck,
     UiUpdateDigitRiskConfigCommand,
     UiUpdateIqOptionRiskConfigCommand,
@@ -240,6 +244,14 @@ class UiIpcClient:
         )
         return UiAuthSubmitOtpAck.from_payload(response.payload)
 
+    def auth_activate_key(self, product_key: str) -> UiAuthActivateKeyAck:
+        response = self._round_trip(
+            MessageType.UI_AUTH_ACTIVATE_KEY_COMMAND,
+            MessageType.UI_AUTH_ACTIVATE_KEY_ACK,
+            payload=UiAuthActivateKeyCommand(product_key=product_key).to_payload(),
+        )
+        return UiAuthActivateKeyAck.from_payload(response.payload)
+
     def auth_status(self) -> UiAuthStatusResponse:
         response = self._round_trip(
             MessageType.UI_AUTH_STATUS_REQUEST,
@@ -255,6 +267,31 @@ class UiIpcClient:
             payload=UiAuthSignOutCommand().to_payload(),
         )
         return UiAuthSignOutAck.from_payload(response.payload)
+
+    def resolve_order(
+        self,
+        order_id: str,
+        action: str,
+        *,
+        realized_pnl_minor_units: int = 0,
+        broker_order_id: str | None = None,
+        reason: str = "MANUAL_OPERATOR_RESOLUTION",
+        operator: str = "OPERATOR",
+    ) -> UiResolveOrderAck:
+        command = UiResolveOrderCommand(
+            order_id=order_id,
+            action=action,
+            realized_pnl_minor_units=realized_pnl_minor_units,
+            broker_order_id=broker_order_id,
+            reason=reason,
+            operator=operator,
+        )
+        response = self._round_trip(
+            MessageType.UI_RESOLVE_ORDER_COMMAND,
+            MessageType.UI_RESOLVE_ORDER_ACK,
+            payload=command.to_payload(),
+        )
+        return UiResolveOrderAck.from_payload(response.payload)
 
     def close(self) -> None:
         with self._lock:

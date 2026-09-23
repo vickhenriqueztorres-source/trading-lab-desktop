@@ -226,6 +226,62 @@ class AuthSubmitOtpResponse:
         return cls(status, _optional_string(payload, "user_id_preview", maximum=16))
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class AuthActivateKeyRequest:
+    product_key: SecretValue
+
+    def to_payload(self) -> dict[str, object]:
+        return {"product_key": self.product_key.reveal_text()}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> AuthActivateKeyRequest:
+        _exact(payload, {"product_key"})
+        key = _string(payload, "product_key", maximum=8192)
+        return cls(SecretValue.from_text(key))
+
+    def __repr__(self) -> str:
+        return "AuthActivateKeyRequest(<redacted>)"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthActivateKeyResponse:
+    status: AuthLoginStatus
+    user_id_preview: str | None = None
+    reason: str | None = None
+    expires_at: datetime | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "status": self.status.value,
+            "user_id_preview": self.user_id_preview,
+            "reason": self.reason,
+            "expires_at": None if self.expires_at is None else self.expires_at.isoformat(),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> AuthActivateKeyResponse:
+        _exact(payload, {"status", "user_id_preview", "reason", "expires_at"})
+        try:
+            status = AuthLoginStatus(_string(payload, "status", maximum=32))
+        except ValueError as exc:
+            raise _invalid() from exc
+        raw_expiry = payload.get("expires_at")
+        expires_at: datetime | None = None
+        if raw_expiry is not None:
+            if not isinstance(raw_expiry, str):
+                raise _invalid()
+            try:
+                expires_at = require_aware_utc(datetime.fromisoformat(raw_expiry), "expires_at")
+            except ValueError as exc:
+                raise _invalid() from exc
+        return cls(
+            status,
+            _optional_string(payload, "user_id_preview", maximum=128),
+            _optional_string(payload, "reason", maximum=64),
+            expires_at,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class AuthCheckAuthorizationRequest:
     broker: str

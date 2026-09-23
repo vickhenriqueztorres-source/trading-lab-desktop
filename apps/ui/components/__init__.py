@@ -11,6 +11,7 @@ from apps.ui.components.iqoption_strategy_summary import IqOptionStrategySummary
 from apps.ui.components.iqoption_workspace import IqOptionWorkspaceWidget
 from apps.ui.components.kpi_card import KpiCard, RingGauge
 from apps.ui.components.log_terminal import OperationalLogTerminal
+from apps.ui.components.no_scroll_filter import NoScrollConfigFilter
 from apps.ui.components.order_table import OrderTableView
 from apps.ui.components.results_dashboard import ResultsDashboardWidget
 from apps.ui.components.risk_gauge import GlobalRiskGaugeWidget
@@ -19,6 +20,7 @@ from apps.ui.components.synthetic_strategy_panel import (
     SyntheticStrategyConfigWidget,
     SyntheticStrategyLiveWidget,
 )
+from apps.ui.components.terminal_button import TerminalButton
 from apps.ui.components.workspaces import BrokerWorkspaceWidget, SettingsWorkspaceWidget
 
 __all__ = [
@@ -42,6 +44,8 @@ __all__ = [
     "SyntheticStrategyConfigWidget",
     "SyntheticStrategyLiveWidget",
     "SafeStopButton",
+    "TerminalButton",
+    "NoScrollConfigFilter",
     "BrokerWorkspaceWidget",
     "SettingsWorkspaceWidget",
 ]

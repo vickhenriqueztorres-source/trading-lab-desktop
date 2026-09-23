@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Lab — bots para opciones binarias en Deriv e IQ Option</title>
+  <style>
+    :root {
+      --bg: #0A0F14;
+      --surface: #111820;
+      --surface-hover: #16212D;
+      --primary: #3AA7B8;
+      --primary-hover: #3294A3;
+      --green: #1FB57A;
+      --text: #E6EDF3;
+      --text-muted: #8B98A5;
+      --border: #1E293B;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+      width: 100%;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 1.25rem 0;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+
+    .nav-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.15s ease;
+    }
+
+    .nav-link:hover {
+      color: var(--text);
+    }
+
+    main {
+      flex: 1;
+      padding: 4rem 0 3rem;
+    }
+
+    .hero {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--primary);
+      background-color: rgba(58, 167, 184, 0.1);
+      border: 1px solid rgba(58, 167, 184, 0.25);
+      border-radius: 4px;
+      margin-bottom: 1.5rem;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      color: var(--text);
+      max-width: 800px;
+      margin: 0 auto 1.25rem;
+    }
+
+    .subtitle {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin: 0 auto 2.5rem;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.75rem 1.5rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      text-decoration: none;
+      border-radius: 6px;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background-color: var(--primary);
+      color: #0A0F14;
+      border: 1px solid var(--primary);
+    }
+
+    .btn-primary:hover {
+      background-color: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+
+    .btn-secondary {
+      background-color: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background-color: var(--surface-hover);
+      border-color: var(--primary);
+    }
+
+    .btn-outline {
+      background-color: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-outline:hover {
+      background-color: var(--surface);
+      border-color: var(--text-muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+
+    .card {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .card-tag {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--green);
+    }
+
+    .card h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 0.75rem;
+    }
+
+    .card p, .card ul {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    .card ul {
+      list-style: none;
+    }
+
+    .card ul li {
+      margin-bottom: 0.75rem;
+    }
+
+    .card ul li:last-child {
+      margin-bottom: 0;
+    }
+
+    .card strong {
+      color: var(--text);
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem 0;
+      background-color: var(--bg);
+      margin-top: auto;
+    }
+
+    .footer-inner {
+      text-align: center;
+    }
+
+    .risk-warning {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 0 auto 1.5rem;
+      padding: 1rem;
+      background-color: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .footer-copy {
+      color: #627282;
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 768px) {
+      h1 {
+        font-size: 1.9rem;
+      }
+      .subtitle {
+        font-size: 1rem;
+      }
+      .actions {
+        flex-direction: column;
+        width: 100%;
+      }
+      .btn {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="container header-inner">
+      <a href="/" class="logo" aria-label="Trading Lab Inicio">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" width="180" height="36" fill="none">
+          <g transform="translate(6, 6) scale(0.8125)">
+            <path d="M 6 48 C 12 48 18 46 22 36 C 26 26 30 16 36 16 C 42 16 45 22 47 30 C 49 38 52 48 60 48" stroke="#3AA7B8" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="44" y1="20" x2="44" y2="48" stroke="#3AA7B8" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M 44 26 C 47 34 50 44 60 48 L 44 48 Z" fill="#3AA7B8" stroke="#3AA7B8" stroke-width="1" stroke-linejoin="round"/>
+          </g>
+          <text x="68" y="41" fill="#E8EEF2" font-family="Segoe UI, Arial, sans-serif" font-weight="800" font-size="24" letter-spacing="0.06em">TRADING LAB</text>
+        </svg>
+      </a>
+      <nav class="nav-links">
+        <a href="{{ support_contact_url }}" class="nav-link" target="_blank" rel="noopener noreferrer">Soporte</a>
+        <a href="/admin" class="nav-link">Administración</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <section class="hero">
+        <div class="badge">Versión de Escritorio v1.9.11</div>
+        <h1>Trading Lab — bots para opciones binarias en Deriv e IQ Option</h1>
+        <p class="subtitle">
+          Automatización cuantitativa de alta velocidad para Windows. Ejecución disciplinada de estrategias en tiempo real bajo estrictos controles de riesgo para cuentas Práctica y Real.
+        </p>
+        <div class="actions">
+          <a href="{{ renew_url }}" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Comprar acceso</a>
+          {% if download_url %}
+          <a href="{{ download_url }}" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">Descargar para Windows</a>
+          {% endif %}
+          <a href="{{ support_contact_url }}" class="btn btn-outline" target="_blank" rel="noopener noreferrer">Soporte</a>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <div class="card-header">
+            <span class="card-tag">Tecnología</span>
+          </div>
+          <h2>Cómo funciona</h2>
+          <p>
+            Trading Lab conecta directamente con los servidores de Deriv e IQ Option a través de un núcleo de ejecución aislado. Procesa ticks de mercado en milisegundos y calcula señales matemáticas avanzadas (RSI 14, Bandas de Bollinger, Digit Edge y Paridad). Todas las órdenes son supervisadas por un sistema de riesgo que protege tu capital con Stop Loss, Take Profit y límites de exposición.
+          </p>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <span class="card-tag">Compatibilidad</span>
+          </div>
+          <h2>Requisitos</h2>
+          <ul>
+            <li><strong>Sistema Operativo:</strong> Windows 10 o Windows 11 de 64 bits.</li>
+            <li><strong>Corredores:</strong> Cuenta activa en Deriv o IQ Option (funciona en modo Demo/Práctica y Real).</li>
+            <li><strong>Conexión:</strong> Acceso a internet continuo para análisis de mercado en tiempo real.</li>
+            <li><strong>Seguridad:</strong> Validación de dispositivo mediante firma criptográfica Ed25519 local.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <span class="card-tag">Paso a Paso</span>
+          </div>
+          <h2>Cómo acceder</h2>
+          <ul>
+            <li><strong>1. Compra:</strong> Adquiere tu suscripción mediante el enlace oficial de pago.</li>
+            <li><strong>2. Recibes acceso por correo:</strong> Tu licencia queda habilitada al instante para tu dirección de correo.</li>
+            <li><strong>3. Descarga e inicia sesión:</strong> Abre la aplicación en tu equipo e ingresa con tu correo mediante código de un solo uso (OTP).</li>
+          </ul>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <div class="risk-warning">
+        Operar opciones binarias implica riesgo de pérdida total del capital. Trading Lab es una herramienta de automatización y no garantiza resultados.
+      </div>
+      <p class="footer-copy">
+        &copy; 2026 Trading Lab. Todos los derechos reservados.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

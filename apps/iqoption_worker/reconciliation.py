@@ -9,7 +9,10 @@ from uuid import uuid4
 
 from apps.iqoption_worker.order_session import IQOptionOrderSession
 from apps.iqoption_worker.schema import IQOptionWorkerError
-from packages.brokers.iqoption.community_read_only import IQOptionExternalError
+from packages.brokers.iqoption.community_read_only import (
+    ActiveIdentityResolver,
+    IQOptionExternalError,
+)
 from packages.brokers.iqoption.result_parser import (
     IQOptionResultError,
     IQOptionResultSource,
@@ -44,10 +47,17 @@ class IQOptionReconciliationHandler:
         order_session: IQOptionOrderSession,
         *,
         timeout_seconds: float = 2.0,
+        identity_resolver: ActiveIdentityResolver | None = None,
     ) -> None:
         self._transport = transport
         self._order_session = order_session
         self._timeout_seconds = timeout_seconds
+        self._identity_resolver = (
+            identity_resolver
+            or getattr(transport, "identity_resolver", None)
+            or getattr(order_session, "identity_resolver", None)
+            or ActiveIdentityResolver()
+        )
 
     def query_order_status(
         self,
@@ -89,9 +99,19 @@ class IQOptionReconciliationHandler:
                         isinstance(res, dict)
                         and str(res.get("id", res.get("option_id"))) == query.broker_order_id
                     ):
-                        contract_data = res
-                        result_source = IQOptionResultSource.BETINFO
-                        raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
+                        try:
+                            parse_iqoption_financial_result(
+                                res,
+                                IQOptionResultSource.BETINFO,
+                                expected_stake_minor=query.amount.minor_units,
+                                observed_at=datetime.now(UTC),
+                            )
+                            contract_data = res
+                            result_source = IQOptionResultSource.BETINFO
+                            raw_bytes = json.dumps(res, sort_keys=True, default=str).encode("utf-8")
+                        except IQOptionResultError as exc:
+                            # Incomplete betinfo fields; allow fallback to history routes
+                            last_unavailable_reason = exc.reason_code
                 else:
                     valid_empty_response = True
             except (
@@ -267,13 +287,57 @@ class IQOptionReconciliationHandler:
         causation_id: str,
         result_source: IQOptionResultSource,
     ) -> OrderStatusResult:
-        contract_symbol = str(contract.get("active", contract.get("symbol", "")))
-        contract_direction = str(contract.get("direction", "")).upper()
-        contract_currency = str(contract.get("currency", "")).upper()
+        raw_active = (
+            contract.get("active_canonical")
+            or contract.get("active")
+            or contract.get("active_id")
+            or contract.get("symbol")
+        )
+        canonical = self._identity_resolver.resolve(
+            raw_active,
+            expected_symbol=query.symbol,
+        )
+        if canonical is not None:
+            contract_symbol = canonical.symbol
+        else:
+            raw_str = str(raw_active or "").strip().upper()
+            if raw_str.isdigit():
+                # Unmapped numeric active_id is not a confirmed symbol mismatch
+                return OrderStatusResult(
+                    outcome=StatusQueryOutcome.UNAVAILABLE,
+                    evidence=None,
+                    response_message_id=str(uuid4()),
+                    correlation_id=query.correlation_id,
+                    causation_id=causation_id,
+                    reason_code="IQOPTION_ACTIVE_ID_UNRESOLVED",
+                )
+            contract_symbol = raw_str
 
-        if contract_symbol and contract_symbol != query.symbol:
+        raw_dir = contract.get("direction") or contract.get("dir")
+        contract_direction = str(raw_dir or "").strip().upper()
+        contract_currency = str(contract.get("currency", "")).strip().upper()
+
+        raw_balance_id = (
+            contract.get("user_balance_id")
+            or contract.get("balance_id")
+            or contract.get("account_id")
+        )
+        if raw_balance_id is not None:
+            q_acc = str(query.account_id).strip()
+            c_acc = str(raw_balance_id).strip()
+            if q_acc.isdigit() and c_acc.isdigit() and q_acc != c_acc:
+                return OrderStatusResult(
+                    outcome=StatusQueryOutcome.INVALID_RESPONSE,
+                    evidence=None,
+                    response_message_id=str(uuid4()),
+                    correlation_id=query.correlation_id,
+                    causation_id=causation_id,
+                    reason_code="IQOPTION_ACCOUNT_MISMATCH",
+                )
+
+        if contract_symbol and contract_symbol != query.symbol.strip().upper():
             return OrderStatusResult(
-                outcome=StatusQueryOutcome.UNAVAILABLE,
+                outcome=StatusQueryOutcome.INVALID_RESPONSE,
                 evidence=None,
                 response_message_id=str(uuid4()),
                 correlation_id=query.correlation_id,
@@ -281,9 +345,12 @@ class IQOptionReconciliationHandler:
                 reason_code="IQOPTION_SYMBOL_MISMATCH",
             )
 
-        if contract_direction and contract_direction != query.direction.value:
+        if contract_direction and contract_direction not in {
+            query.direction.value.upper(),
+            query.direction.name.upper(),
+        }:
             return OrderStatusResult(
-                outcome=StatusQueryOutcome.UNAVAILABLE,
+                outcome=StatusQueryOutcome.INVALID_RESPONSE,
                 evidence=None,
                 response_message_id=str(uuid4()),
                 correlation_id=query.correlation_id,
@@ -293,7 +360,7 @@ class IQOptionReconciliationHandler:
 
         if contract_currency and contract_currency != query.amount.currency:
             return OrderStatusResult(
-                outcome=StatusQueryOutcome.UNAVAILABLE,
+                outcome=StatusQueryOutcome.INVALID_RESPONSE,
                 evidence=None,
                 response_message_id=str(uuid4()),
                 correlation_id=query.correlation_id,
@@ -333,7 +400,7 @@ class IQOptionReconciliationHandler:
             broker=Broker.IQ_OPTION,
             account_id=query.account_id,
             product=query.product,
-            symbol=query.symbol,
+            symbol=contract_symbol or query.symbol,
             direction=query.direction,
             amount=query.amount,
             # v2 identifies the source-specific parser that proves finality
